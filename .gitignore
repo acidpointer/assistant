@@ -1,0 +1,91 @@
+# Cargo output, including crates built independently of the workspace.
+target/
+.rustc_info.json
+
+# Native builds outside Cargo's OUT_DIR.
+/build/
+/build-*/
+/cmake-build-*/
+/crates/*/build/
+/crates/*/build-*/
+/crates/*/cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled Rust/native artifacts.
+*.rlib
+*.rmeta
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Local model weights and incomplete downloads; keep metadata/checksums visible.
+*.gguf
+*.gguf.part
+*.gguf.partial
+*.gguf.tmp
+*.safetensors
+*.safetensors.part
+*.safetensors.partial
+
+# Machine-local native build overrides; example templates remain versionable.
+llama-cpp.toml
+
+# Local credentials/environment; allow non-secret environment templates.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.*.example
+!.env.*.sample
+!.env.*.template
+/.aws/
+/.cargo/credentials
+/.cargo/credentials.toml
+/.secrets/
+.direnv/
+.cache/
+
+# Runtime logs, crash dumps, and profiling/coverage output.
+*.log
+/core
+core.[0-9]*
+*.dmp
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+lcov.info
+/coverage/
+
+# Editor caches/backups. Shared .vscode/ and agent configuration stay visible.
+.idea/
+.history/
+*.swp
+*.swo
+*~
+*.rs.bk
+
+# OS metadata.
+.DS_Store
+._*
+Thumbs.db
+Desktop.ini
+
+# Keep Cargo.lock: this workspace ships an application, so builds need its pin.

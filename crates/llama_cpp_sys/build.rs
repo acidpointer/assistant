@@ -1,0 +1,3356 @@
+//! Build the pinned native source in OUT_DIR, apply mandatory ordered patches,
+//! verify their composed result, generate FFI, and compile/link the C++ shims.
+//! The upstream submodule is read-only. Native ABI guards prevent stale libraries
+//! from silently omitting the fork's runtime safety and callback contracts.
+
+mod patch_verification;
+use patch_verification::patches_match_new_side;
+
+use cmake::Config;
+use glob::glob;
+use patch_apply::{Line, Patch};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::{env, fs};
+
+#[cfg(feature = "prebuilt")]
+mod prebuilt_download;
+
+macro_rules! debug_log {
+    ($($arg:tt)*) => {
+        if std::env::var("BUILD_DEBUG").is_ok() {
+            println!("cargo:warning=[DEBUG] {}", format!($($arg)*));
+        }
+    };
+}
+
+fn get_cargo_target_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let profile = std::env::var("PROFILE")?;
+
+    // Cargo includes the active target/profile directory in the build
+    // script's runtime-library search path. Prefer that authoritative path:
+    // with unstable `build.build-dir`, OUT_DIR intentionally lives somewhere
+    // else and cannot identify where Cargo will look for shared libraries
+    // while running tests and binaries.
+    let runtime_path_variables: &[&str] = if cfg!(target_os = "windows") {
+        &["PATH"]
+    } else if cfg!(target_os = "macos") {
+        &["DYLD_FALLBACK_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]
+    } else {
+        &["LD_LIBRARY_PATH"]
+    };
+    for variable in runtime_path_variables {
+        let Some(paths) = std::env::var_os(variable) else {
+            continue;
+        };
+        for path in std::env::split_paths(&paths) {
+            if path
+                .file_name()
+                .is_some_and(|name| name == std::ffi::OsStr::new(&profile))
+            {
+                return Ok(path);
+            }
+            if path.file_name().is_some_and(|name| name == "deps") {
+                if let Some(parent) = path.parent() {
+                    if parent
+                        .file_name()
+                        .is_some_and(|name| name == std::ffi::OsStr::new(&profile))
+                    {
+                        return Ok(parent.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+    let mut target_dir = None;
+    let mut sub_path = out_dir.as_path();
+    while let Some(parent) = sub_path.parent() {
+        if parent.ends_with(&profile) {
+            target_dir = Some(parent);
+            break;
+        }
+        sub_path = parent;
+    }
+    let target_dir = target_dir.ok_or("not found")?;
+    Ok(target_dir.to_path_buf())
+}
+
+/// Compute a short hash over the contents of all `*.patch` files in `patches_dir`.
+/// Returns an empty string when the directory does not exist or contains no patches.
+fn patches_hash(patches_dir: &Path) -> String {
+    if !patches_dir.is_dir() {
+        return String::new();
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
+        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
+        .unwrap_or_default();
+    entries.sort();
+    let mut hasher_val: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+    for path in &entries {
+        if path.extension().map(|e| e == "patch").unwrap_or(false) {
+            if let Ok(bytes) = std::fs::read(path) {
+                for &b in &bytes {
+                    hasher_val ^= b as u64;
+                    hasher_val = hasher_val.wrapping_mul(0x100000001b3);
+                }
+            }
+        }
+    }
+    format!("{:016x}", hasher_val)
+}
+
+/// Resolve the patch binary.
+///
+/// Search order:
+/// 1. Explicit env override (`LLAMA_PATCH`, then `PATCH`).
+/// 2. `patch` already available on PATH.
+/// 3. Windows-only fallback probes for Git-for-Windows installations,
+///    including deriving `..\\usr\\bin\\patch.exe` from `where git`.
+fn resolve_patch_cmd() -> PathBuf {
+    // 1) Explicit override for fully custom installations.
+    for var in ["LLAMA_PATCH", "PATCH"] {
+        if let Ok(raw) = env::var(var) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                let candidate = PathBuf::from(trimmed.trim_matches('"'));
+                if candidate.exists() {
+                    println!(
+                        "cargo:warning=Using patch binary from {var}: {}",
+                        candidate.display()
+                    );
+                    return candidate;
+                }
+                println!(
+                    "cargo:warning={var} was set to '{}' but that path does not exist",
+                    candidate.display()
+                );
+            }
+        }
+    }
+
+    // 2) Already on PATH.
+    if command_exists("patch") {
+        return PathBuf::from("patch");
+    }
+
+    // 3) Windows fallback search.
+    if cfg!(windows) {
+        let mut candidates: Vec<PathBuf> = Vec::new();
+        let mut push_unique = |p: PathBuf| {
+            if !candidates.iter().any(|c| c == &p) {
+                candidates.push(p);
+            }
+        };
+
+        // If git is on PATH (typically from Git\\cmd), infer sibling
+        // Git\\usr\\bin\\patch.exe from each discovered git.exe.
+        if let Ok(output) = Command::new("where").arg("git").output() {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let git = PathBuf::from(line.trim());
+                    if let Some(git_dir) = git.parent() {
+                        if let Some(git_root) = git_dir.parent() {
+                            push_unique(git_root.join("usr").join("bin").join("patch.exe"));
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(program_files) = env::var_os("ProgramFiles") {
+            push_unique(PathBuf::from(&program_files).join("Git\\usr\\bin\\patch.exe"));
+        }
+        if let Some(program_files_x86) = env::var_os("ProgramFiles(x86)") {
+            push_unique(PathBuf::from(&program_files_x86).join("Git\\usr\\bin\\patch.exe"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            push_unique(PathBuf::from(&local_app_data).join("Programs\\Git\\usr\\bin\\patch.exe"));
+        }
+        push_unique(PathBuf::from("C:\\Program Files\\Git\\usr\\bin\\patch.exe"));
+
+        if let Some(found) = candidates.iter().find(|p| p.exists()).cloned() {
+            println!("cargo:warning=Using patch binary at {}", found.display());
+            return found;
+        }
+
+        let searched = candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        panic!(
+            "could not locate `patch.exe` on PATH or common Git-for-Windows locations. \
+             Set LLAMA_PATCH (or PATCH) to the full path to patch.exe, or add Git\\usr\\bin to PATH. \
+             Searched: [{searched}]"
+        );
+    }
+
+    panic!(
+        "could not locate `patch` on PATH. Install patch, or set LLAMA_PATCH (or PATCH) to the full path to the patch binary"
+    )
+}
+
+fn find_sequence(lines: &[&str], pattern: &[&str], start_at: usize) -> Option<usize> {
+    if pattern.is_empty() {
+        return Some(start_at.min(lines.len()));
+    }
+    if pattern.len() > lines.len() {
+        return None;
+    }
+
+    (start_at..=lines.len() - pattern.len()).find(|&i| lines[i..i + pattern.len()] == *pattern)
+}
+
+fn hunk_side_pattern<'a>(hunk: &'a patch_apply::Hunk<'a>, new_side: bool) -> Vec<&'a str> {
+    let mut out = Vec::new();
+    for line in &hunk.lines {
+        match line {
+            Line::Context(s) => out.push(*s),
+            Line::Remove(s) if !new_side => out.push(*s),
+            Line::Add(s) if new_side => out.push(*s),
+            _ => {}
+        }
+    }
+    out
+}
+
+fn patch_matches_side(lines: &[&str], patch: &Patch<'_>, new_side: bool) -> bool {
+    let mut cursor = 0usize;
+    for hunk in &patch.hunks {
+        let pattern = hunk_side_pattern(hunk, new_side);
+        let Some(pos) = find_sequence(lines, &pattern, cursor) else {
+            return false;
+        };
+        let consumed = if new_side {
+            hunk.new_range.count as usize
+        } else {
+            hunk.old_range.count as usize
+        };
+        cursor = pos.saturating_add(consumed);
+    }
+    true
+}
+
+fn strip_patch_path(path: &str, strip_components: usize) -> Option<PathBuf> {
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= strip_components {
+        return None;
+    }
+
+    let rel = PathBuf::from(parts[strip_components..].join("/"));
+    if rel.is_absolute() {
+        return None;
+    }
+    if rel.components().any(|c| {
+        matches!(
+            c,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return None;
+    }
+    Some(rel)
+}
+
+fn patch_target_path(dst: &Path, patch: &Patch<'_>) -> Result<PathBuf, String> {
+    let raw = if patch.new.path.as_ref() != "/dev/null" {
+        patch.new.path.as_ref()
+    } else {
+        patch.old.path.as_ref()
+    };
+
+    let rel = strip_patch_path(raw, 1)
+        .ok_or_else(|| format!("unsupported patch path after -p1 stripping: '{raw}'"))?;
+    Ok(dst.join(rel))
+}
+
+fn patch_entries(patches_dir: &Path) -> Vec<PathBuf> {
+    if !patches_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
+        .expect("failed to read patches dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "patch")
+        })
+        .collect();
+    entries.sort();
+    entries
+}
+
+fn apply_patches_via_rust(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
+    for patch_path in entries {
+        println!(
+            "cargo:warning=Applying patch (rust): {}",
+            patch_path.display()
+        );
+
+        let patch_text = fs::read_to_string(patch_path)
+            .map_err(|e| format!("failed to read patch {}: {e}", patch_path.display()))?;
+        let patches = Patch::from_multiple(&patch_text)
+            .map_err(|e| format!("failed to parse patch {}: {e}", patch_path.display()))?;
+
+        for patch in patches {
+            let file_path = patch_target_path(dst, &patch)?;
+            let creates_file = patch.old.path.as_ref() == "/dev/null";
+            let deletes_file = patch.new.path.as_ref() == "/dev/null";
+
+            let current = match fs::read_to_string(&file_path) {
+                Ok(s) => s,
+                Err(_e) if creates_file => String::new(),
+                Err(e) => {
+                    return Err(format!(
+                        "failed to read target file {}: {e}",
+                        file_path.display()
+                    ));
+                }
+            };
+            let current_lines: Vec<&str> = current.lines().collect();
+
+            if patch_matches_side(&current_lines, &patch, true) {
+                println!(
+                    "cargo:warning=Patch already applied (rust): {}",
+                    file_path.display()
+                );
+                continue;
+            }
+
+            if patch_matches_side(&current_lines, &patch, false) {
+                let updated = patch_verification::apply_patch(&current, &patch)?;
+                if updated != current {
+                    if deletes_file {
+                        if let Err(e) = fs::remove_file(&file_path) {
+                            return Err(format!(
+                                "failed to delete patched file {}: {e}",
+                                file_path.display()
+                            ));
+                        }
+                    } else {
+                        if let Some(parent) = file_path.parent() {
+                            fs::create_dir_all(parent).map_err(|e| {
+                                format!(
+                                    "failed to create parent dir for {}: {e}",
+                                    file_path.display()
+                                )
+                            })?;
+                        }
+                        fs::write(&file_path, updated).map_err(|e| {
+                            format!("failed to write patched file {}: {e}", file_path.display())
+                        })?;
+                    }
+                }
+                continue;
+            }
+
+            return Err(format!(
+                "patch hunk mismatch for {} while applying {}",
+                file_path.display(),
+                patch_path.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn apply_patches_via_cli(entries: &[PathBuf], dst: &Path) -> Result<(), String> {
+    let patch_cmd = resolve_patch_cmd();
+    for patch in entries {
+        println!("cargo:warning=Applying patch (cli): {}", patch.display());
+        let status = Command::new(&patch_cmd)
+            .arg("-p1")
+            .arg("--forward")
+            .arg("--directory")
+            .arg(dst)
+            .arg("--input")
+            .arg(patch)
+            .status()
+            .map_err(|e| {
+                format!(
+                    "failed to run '{}' for {}: {e}",
+                    patch_cmd.display(),
+                    patch.display()
+                )
+            })?;
+        if !status.success() {
+            return Err(format!(
+                "patch command failed for {} with status {}",
+                patch.display(),
+                status
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Apply all `*.patch` files in `patches_dir` (sorted alphabetically) to `dst`.
+/// Uses the `patch -p1` command.
+/// Skips the patches directory entirely when it does not exist or is empty.
+fn apply_patches(patches_dir: &Path, dst: &Path) {
+    let entries = patch_entries(patches_dir);
+    if entries.is_empty() {
+        return;
+    }
+
+    let engine = env::var("LLAMA_PATCH_ENGINE")
+        .map(|v| v.to_ascii_lowercase())
+        .unwrap_or_else(|_| "rust".to_string());
+
+    let res = match engine.as_str() {
+        "cli" => apply_patches_via_cli(&entries, dst),
+        "rust" => apply_patches_via_rust(&entries, dst),
+        other => Err(format!(
+            "unsupported LLAMA_PATCH_ENGINE='{other}', expected 'rust' or 'cli'"
+        )),
+    };
+
+    if let Err(err) = res {
+        panic!(
+            "Patch application failed using engine '{engine}': {err}. \
+             The patch may need rebasing against the current llama.cpp submodule commit."
+        );
+    }
+}
+
+fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
+    if staged_dir.exists() {
+        std::fs::remove_dir_all(staged_dir).expect("failed to clear staged llama.cpp patches");
+    }
+    std::fs::create_dir_all(staged_dir).expect("failed to create staged llama.cpp patches");
+    let always_active = [
+        "0003-exact-speculative-state.patch",
+        "0004-exact-decode-lifecycle-hooks.patch",
+        "0005-fail-closed-eagle3-process.patch",
+        "0006-runtime-state-safety.patch",
+    ];
+    for name in always_active {
+        let source = patches_dir.join(name);
+        assert!(
+            source.is_file(),
+            "required llama.cpp patch is absent: {}",
+            source.display()
+        );
+        std::fs::copy(&source, staged_dir.join(name))
+            .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
+    }
+
+    // The `q1` feature used to stage `0001-q1-quantization.patch` here. Q1_0
+    // landed upstream (ftype 40, ggml type 41), the patch was deleted, and the
+    // `if source.exists()` guard quietly turned this into a no-op — so the
+    // feature looked alive while doing nothing. `q1` is now documented as a
+    // no-op in llama_cpp's manifest; there is nothing to stage.
+
+    true
+}
+
+/// Return a string that uniquely identifies the current state of the llama.cpp
+/// submodule so we know when a re-copy is needed.
+///
+/// Priority:
+/// 1. The commit hash from the submodule's git HEAD (most precise).
+/// 2. The mtime of `CMakeLists.txt` (fallback for non-git trees).
+fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
+    const PATCH_STAGING_VERSION: &str = "2";
+    let ph = patches_hash(patches_dir);
+    // In a git submodule the `.git` entry is a *file* whose content is:
+    //   gitdir: ../../.git/modules/llama_cpp_sys/llama.cpp
+    let git_file = src.join(".git");
+    if git_file.is_file() {
+        if let Ok(text) = std::fs::read_to_string(&git_file) {
+            if let Some(rel) = text.strip_prefix("gitdir:").map(str::trim) {
+                let head_path = git_file.parent().unwrap().join(rel).join("HEAD");
+                if let Ok(head) = std::fs::read_to_string(&head_path) {
+                    // HEAD is either a commit hash or "ref: refs/heads/…"
+                    let head = head.trim();
+                    if head.starts_with("ref:") {
+                        // Resolve the ref to the actual commit hash.
+                        let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
+                        let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
+                        if let Ok(hash) = std::fs::read_to_string(commit_path) {
+                            return format!("{}:{}:{PATCH_STAGING_VERSION}", hash.trim(), ph);
+                        }
+                    }
+                    return format!("{}:{}:{PATCH_STAGING_VERSION}", head, ph);
+                }
+            }
+        }
+    }
+    // Fallback: modification time of the top-level CMakeLists.txt.
+    let base = src
+        .join("CMakeLists.txt")
+        .metadata()
+        .and_then(|m| m.modified())
+        .map(|t| format!("{t:?}"))
+        .unwrap_or_else(|_| "unknown".to_owned());
+    // Mix in patch contents so that updating patches forces a re-copy+re-patch.
+    format!(
+        "{}:{}:{PATCH_STAGING_VERSION}",
+        base,
+        patches_hash(patches_dir)
+    )
+}
+
+/// Copy a directory tree. This runs on the *host*, so cfg!(unix/windows) is
+/// correct here. Always a real copy — hardlinks are unsafe because build-time
+/// patch application mutates files in the copied tree.
+///
+/// The copy lands in a temporary sibling and is renamed into place only once it
+/// has succeeded, so `dst` is either absent or complete — never a half-tree.
+/// That matters because the caller writes a version sentinel next to `dst` and
+/// skips the copy on later builds when it matches: a partial tree accepted once
+/// would be reused forever, and the symptom is a baffling CMake error about a
+/// missing `LICENSE` or `ggml-version.h.in` rather than anything about copying.
+///
+/// # Panics
+///
+/// Panics if the copy command cannot be run, exits non-zero, or produces a tree
+/// missing files known to be required.
+fn copy_folder(src: &Path, dst: &Path) {
+    let parent = dst
+        .parent()
+        .expect("destination for the llama.cpp copy has no parent directory");
+    std::fs::create_dir_all(parent).expect("Failed to create dst parent directory");
+
+    // Stage under a temporary name in the same directory, so the rename below
+    // is a cheap same-filesystem move.
+    let staging = parent.join(".llama.cpp.copy-tmp");
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).expect("failed to clear the stale copy staging dir");
+    }
+
+    let status = if cfg!(unix) {
+        std::process::Command::new("cp")
+            .arg("-rf")
+            .arg(src)
+            .arg(&staging)
+            .status()
+            .expect("Failed to execute cp command")
+    } else {
+        // robocopy reports success with exit codes 0-7; 8 and above are real
+        // failures. `.status()` alone would therefore flag ordinary copies as
+        // errors, hence the explicit check further down.
+        std::process::Command::new("robocopy.exe")
+            .arg("/e")
+            .arg("/nfl")
+            .arg("/ndl")
+            .arg("/njh")
+            .arg("/njs")
+            .arg(src)
+            .arg(&staging)
+            .status()
+            .expect("Failed to execute robocopy command")
+    };
+
+    let ok = if cfg!(windows) {
+        status.code().is_some_and(|c| c < 8)
+    } else {
+        status.success()
+    };
+    assert!(
+        ok,
+        "copying {} to {} failed ({status}). The source tree may have been \
+         changing underneath the copy — a concurrent `git checkout` of the \
+         llama.cpp submodule will do it.",
+        src.display(),
+        staging.display()
+    );
+
+    // A copy can exit zero and still be short if the source moved under it, so
+    // check for files CMake will demand before we commit to this tree.
+    //
+    // Only files whose absence is *fatal* to CMake belong here. `LICENSE` does
+    // not: `cmake/license.cmake` merely warns, and the packaged crate is a
+    // filtered copy that legitimately differs from the git checkout — requiring
+    // it would reject `cargo package` output.
+    for required in [
+        "CMakeLists.txt",
+        "ggml/src/ggml-version.h.in",
+        "src/llama-version.h.in",
+    ] {
+        assert!(
+            staging.join(required).exists(),
+            "the copy of llama.cpp is missing `{required}`, so it is incomplete. \
+             If {} is the vendored submodule, check it is fully checked out; if \
+             it is a `target/package/...` tree, the file is missing from the \
+             `include` list in llama_cpp_sys/Cargo.toml.",
+            src.display()
+        );
+    }
+
+    if dst.exists() {
+        std::fs::remove_dir_all(dst).expect("failed to remove the previous llama.cpp copy");
+    }
+    std::fs::rename(&staging, dst).expect("failed to move the llama.cpp copy into place");
+}
+
+/// Extract library names from the build output directory.
+///
+/// `target` is the Rust target triple of the *cross-compilation target* so
+/// that the correct file extensions are chosen even when cross-compiling.
+fn extract_lib_names(out_dir: &Path, build_shared_libs: bool, target: &str) -> Vec<String> {
+    // MSVC produces `.lib` for both static archives and import libraries.
+    // MinGW/GCC (windows-gnu / windows-gnullvm) produces `.a` for static
+    // archives and `.dll.a` for import libraries — both end in `.a`, so the
+    // single pattern covers both cases.
+    let lib_pattern = if target.contains("windows-msvc") {
+        "*.lib"
+    } else if target.contains("windows") {
+        // MinGW / GCC-based Windows toolchain (cross or native).
+        // Static libs: libfoo.a  |  Shared import libs: libfoo.dll.a
+        "*.a"
+    } else if target.contains("apple") {
+        if build_shared_libs {
+            "*.dylib"
+        } else {
+            "*.a"
+        }
+    } else if build_shared_libs {
+        "*.so"
+    } else {
+        "*.a"
+    };
+    let libs_dir = out_dir.join("lib*");
+    let pattern = libs_dir.join(lib_pattern);
+    debug_log!("Extract libs {}", pattern.display());
+
+    let mut lib_names: Vec<String> = Vec::new();
+
+    // Process the libraries based on the pattern
+    for entry in glob(pattern.to_str().unwrap()).unwrap() {
+        match entry {
+            Ok(path) => {
+                let stem = path.file_stem().unwrap();
+                let stem_str = stem.to_str().unwrap();
+
+                // For MinGW import libraries the file is named `libfoo.dll.a`.
+                // `file_stem()` strips the final `.a` extension, leaving
+                // `libfoo.dll`.  We additionally need to strip the trailing
+                // `.dll` so that the link name becomes `foo` rather than
+                // `foo.dll`.
+                let stem_str = if target.contains("windows")
+                    && !target.contains("msvc")
+                    && stem_str.ends_with(".dll")
+                {
+                    &stem_str[..stem_str.len() - 4]
+                } else {
+                    stem_str
+                };
+
+                // Remove the "lib" prefix if present (Unix/MinGW convention).
+                let lib_name = if stem_str.starts_with("lib") {
+                    stem_str.strip_prefix("lib").unwrap_or(stem_str)
+                } else {
+                    stem_str
+                };
+                lib_names.push(lib_name.to_string());
+            }
+            Err(e) => println!("cargo:warning=error={}", e),
+        }
+    }
+    lib_names
+}
+
+/// Make the built shared libraries loadable from the directory they sit in.
+///
+/// CMake stamps every dylib with an `@rpath/…` install name, and rustc records
+/// that name in whatever links against it. Cargo never adds an `LC_RPATH` to the
+/// binaries it builds, so a *directly executed* binary dies with:
+///
+/// ```text
+/// dyld: Library not loaded: @rpath/libggml-base.0.dylib
+///   Reason: no LC_RPATH's found
+/// ```
+///
+/// This is easy to miss because `cargo run` / `cargo test` set
+/// `DYLD_FALLBACK_LIBRARY_PATH` to the target directory, so the failure only
+/// shows up once someone runs the binary themselves.
+///
+/// Rewriting the install names (and the inter-library references) to
+/// `@loader_path/…` removes the need for an rpath at all: dyld resolves them
+/// relative to whichever binary or dylib did the loading, and the copy step
+/// below places every dylib next to the binaries.
+///
+/// Only meaningful on Apple targets. Windows resolves DLLs next to the `.exe`
+/// already; ELF needs `-Wl,-rpath,$ORIGIN` on the final executable, which a
+/// dependency's build script cannot inject — see `.cargo/config.toml`.
+fn make_shared_libs_loader_relative(lib_dirs: &[PathBuf], target: &str) {
+    if !target.contains("apple") {
+        return;
+    }
+
+    for dir in lib_dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Skip the symlinks in the versioned chain; retargeting the real
+            // file is enough, and install_name_tool cannot rewrite a symlink.
+            if !path.is_file() || path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+                continue;
+            }
+            if path.extension().is_none_or(|e| e != "dylib") {
+                continue;
+            }
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                continue;
+            };
+
+            // 1. The library's own identity, which is what dependents record.
+            run_install_name_tool(&["-id", &format!("@loader_path/{filename}")], &path);
+
+            // 2. Its references to sibling libraries.
+            for dep in otool_rpath_dependencies(&path) {
+                let Some(base) = dep.strip_prefix("@rpath/") else {
+                    continue;
+                };
+                run_install_name_tool(&["-change", &dep, &format!("@loader_path/{base}")], &path);
+            }
+        }
+    }
+}
+
+/// `@rpath/…` entries this Mach-O file depends on.
+fn otool_rpath_dependencies(path: &Path) -> Vec<String> {
+    let Ok(output) = std::process::Command::new("otool")
+        .arg("-L")
+        .arg(path)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .skip(1) // first line is the file being inspected
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|dep| dep.starts_with("@rpath/"))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn run_install_name_tool(args: &[&str], path: &Path) {
+    match std::process::Command::new("install_name_tool")
+        .args(args)
+        .arg(path)
+        .output()
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            // Non-fatal: a library that was already rewritten by an earlier
+            // build reports "no such dependency", and the build still links.
+            debug_log!(
+                "install_name_tool {:?} on {} failed: {}",
+                args,
+                path.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Err(error) => {
+            println!(
+                "cargo:warning=install_name_tool not runnable ({error}); \
+                 directly executed binaries may fail to find the llama.cpp dylibs"
+            );
+        }
+    }
+}
+
+/// Extract shared-library asset paths from the build output directory.
+///
+/// `target` is the Rust target triple of the *cross-compilation target*.
+fn extract_lib_assets(out_dir: &Path, target: &str) -> Vec<PathBuf> {
+    let shared_lib_pattern = if target.contains("windows") {
+        "*.dll"
+    } else if target.contains("apple") {
+        "*.dylib"
+    } else {
+        // Match versioned sonames too (e.g. `libggml-base.so.0`), not just the
+        // bare `.so` developer symlink. At runtime the dynamic loader requests
+        // the SONAME (`libggml-base.so.0`), so that file — not just
+        // `libggml-base.so` — must be placed next to the test/example
+        // binaries. Globbing only `*.so` copies the symlink but misses the
+        // versioned target, causing `cargo test` to fail at load time with
+        // "libggml-base.so.0: cannot open shared object file".
+        "*.so*"
+    };
+
+    let shared_libs_dir = if target.contains("windows") {
+        "bin"
+    } else {
+        "lib"
+    };
+    let libs_dir = out_dir.join(shared_libs_dir);
+    let pattern = libs_dir.join(shared_lib_pattern);
+    debug_log!("Extract lib assets {}", pattern.display());
+    let mut files = Vec::new();
+
+    for entry in glob(pattern.to_str().unwrap()).unwrap() {
+        match entry {
+            Ok(path) => {
+                files.push(path);
+            }
+            Err(e) => eprintln!("cargo:warning=error={}", e),
+        }
+    }
+
+    files
+}
+
+fn extract_prebuilt_lib_names(
+    prebuilt_root: &Path,
+    use_shared_libs: bool,
+    target: &str,
+) -> Vec<String> {
+    let lib_pattern = if target.contains("windows-msvc") {
+        "*.lib"
+    } else if target.contains("windows") {
+        "*.a"
+    } else if target.contains("apple") {
+        if use_shared_libs {
+            "*.dylib"
+        } else {
+            "*.a"
+        }
+    } else if use_shared_libs {
+        "*.so"
+    } else {
+        "*.a"
+    };
+
+    let mut lib_names = Vec::new();
+    for dir in [
+        prebuilt_root.to_path_buf(),
+        prebuilt_root.join("lib"),
+        prebuilt_root.join("lib64"),
+        prebuilt_root.join("bin"),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+        let pattern = dir.join(lib_pattern);
+        let pattern_s = match pattern.to_str() {
+            Some(v) => v,
+            None => continue,
+        };
+
+        for entry in glob(pattern_s).unwrap() {
+            match entry {
+                Ok(path) => {
+                    let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                        Some(v) => v,
+                        None => continue,
+                    };
+
+                    let stem = if target.contains("windows")
+                        && !target.contains("msvc")
+                        && stem.ends_with(".dll")
+                    {
+                        &stem[..stem.len() - 4]
+                    } else {
+                        stem
+                    };
+
+                    let lib_name = if let Some(stripped) = stem.strip_prefix("lib") {
+                        stripped
+                    } else {
+                        stem
+                    };
+
+                    if !lib_names.iter().any(|n| n == lib_name) {
+                        lib_names.push(lib_name.to_string());
+                    }
+                }
+                Err(e) => eprintln!("cargo:warning=error={}", e),
+            }
+        }
+    }
+
+    lib_names
+}
+
+fn extract_prebuilt_shared_assets(prebuilt_root: &Path, target: &str) -> Vec<PathBuf> {
+    let shared_pattern = if target.contains("windows") {
+        "*.dll"
+    } else if target.contains("apple") {
+        "*.dylib"
+    } else {
+        // Include versioned sonames (e.g. `libggml-base.so.0`) — the runtime
+        // loader requests the SONAME, not the bare `.so` symlink. See the note
+        // in `extract_lib_assets`.
+        "*.so*"
+    };
+
+    let mut files = Vec::new();
+    for dir in [
+        prebuilt_root.to_path_buf(),
+        prebuilt_root.join("lib"),
+        prebuilt_root.join("lib64"),
+        prebuilt_root.join("bin"),
+    ] {
+        if !dir.exists() {
+            continue;
+        }
+        let pattern = dir.join(shared_pattern);
+        let pattern_s = match pattern.to_str() {
+            Some(v) => v,
+            None => continue,
+        };
+        for entry in glob(pattern_s).unwrap() {
+            match entry {
+                Ok(path) => {
+                    if !files.iter().any(|p| p == &path) {
+                        files.push(path);
+                    }
+                }
+                Err(e) => eprintln!("cargo:warning=error={}", e),
+            }
+        }
+    }
+
+    files
+}
+
+/// Ask a clang binary for its library search path (macOS link helper).
+///
+/// `clang_binary` should be the bare name or full path of the clang binary to
+/// query — e.g. `"clang"` for native builds or `"aarch64-apple-darwin-clang"`
+/// for a cross-compiler.
+fn macos_link_search_path(clang_binary: &str) -> Option<String> {
+    let output = Command::new(clang_binary)
+        .arg("--print-search-dirs")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        println!(
+            "failed to run '{clang_binary} --print-search-dirs', continuing without a link search path"
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.contains("libraries: =") {
+            let path = line.split('=').nth(1)?;
+            return Some(format!("{}/lib/darwin", path));
+        }
+    }
+
+    println!("failed to determine link search path, continuing without it");
+    None
+}
+
+/// Map a Rust target triple to the CMake `CMAKE_SYSTEM_NAME` value.
+fn cmake_system_name(target: &str) -> &'static str {
+    if target.contains("-android") || target.contains("android-") {
+        "Android"
+    } else if is_emscripten_target(target) {
+        "Emscripten"
+    } else if target.contains("-apple-ios") {
+        "iOS"
+    } else if target.contains("-apple-") {
+        "Darwin"
+    } else if target.contains("-windows") {
+        "Windows"
+    } else if target.contains("-linux") {
+        "Linux"
+    } else {
+        // Generic UNIX-like fallback
+        "Linux"
+    }
+}
+
+/// Derive a MinGW cross-compiler binary name from a Rust `windows-gnu` target triple.
+///
+/// Rust uses `x86_64-pc-windows-gnu` / `x86_64-pc-windows-gnullvm` while the
+/// MinGW toolchain conventionally uses `x86_64-w64-mingw32`.  The `gnullvm`
+/// variant uses Clang instead of GCC.
+///
+/// Returns `None` for `windows-msvc` targets — MSVC cannot cross-compile from
+/// a non-Windows host and users must supply `CC`/`CXX` themselves.
+fn mingw_compiler(target: &str, cxx: bool) -> Option<String> {
+    if !target.contains("windows-gnu") {
+        return None;
+    }
+    let arch = if target.contains("x86_64") {
+        "x86_64"
+    } else if target.contains("i686") || target.contains("i586") {
+        "i686"
+    } else if target.contains("aarch64") {
+        "aarch64"
+    } else {
+        target.split('-').next()?
+    };
+    // `gnullvm` targets use LLVM/Clang; plain `gnu` targets use GCC.
+    let compiler = if target.contains("gnullvm") {
+        if cxx {
+            "clang++"
+        } else {
+            "clang"
+        }
+    } else {
+        if cxx {
+            "g++"
+        } else {
+            "gcc"
+        }
+    };
+    Some(format!("{}-w64-mingw32-{}", arch, compiler))
+}
+
+fn command_exists(cmd: &str) -> bool {
+    Command::new(cmd)
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Compile every C shim in this crate into one static library.
+///
+/// The shims wrap C++-only llama.cpp APIs behind `extern "C"`. They are built
+/// from source on both the CMake and prebuilt paths: prebuilt tarballs ship
+/// llama/ggml/common libs only, so the shims must be compiled against the
+/// vendored headers to match this crate's revision.
+///
+/// One library rather than four, because `shim_support` holds state — a single
+/// thread-local error buffer — that all of them share. Separate libraries would
+/// each get their own copy, and `llama_shim_last_error()` would report whatever
+/// the *linker* happened to pick.
+fn compile_shims(manifest_dir: &Path, llama_dst: &Path, target: &str) {
+    // `shim_support` must come first: it defines the storage the others
+    // reference.
+    const SHIM_DIRS: &[&str] = &[
+        "shim_support",
+        "ext_shim",
+        "mtp_shim",
+        "chat_shim",
+        "common_shim",
+    ];
+
+    let mut build = cc::Build::new();
+    if is_emscripten_target(target) {
+        // The `cc` crate would otherwise pick the host compiler; the shims have
+        // to be built by the same toolchain that built the archives they call
+        // into, or the objects are not even the same architecture.
+        build.compiler(emsdk_tool("em++"));
+        build.archiver(emsdk_tool("emar"));
+        // `cc` emits `-l stdc++` for an unrecognised C++ target. Emscripten
+        // supplies libc++ through the toolchain and has no libstdc++ at all, so
+        // the flag only makes the final link fail on a missing library.
+        build.cpp_link_stdlib(None);
+    }
+    build
+        .cpp(true)
+        .std("c++17")
+        .include(llama_dst.join("include"))
+        .include(llama_dst.join("ggml/include"))
+        .include(llama_dst.join("src"))
+        .include(llama_dst.join("common"))
+        .warnings(false);
+
+    let mut any = false;
+    for name in SHIM_DIRS {
+        let shim_dir = manifest_dir.join(name);
+        let src = shim_dir.join(format!("{name}.cpp"));
+        if !src.exists() {
+            continue;
+        }
+        build.file(&src).include(&shim_dir);
+        println!("cargo:rerun-if-changed={}", src.display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            shim_dir.join(format!("{name}.h")).display()
+        );
+        any = true;
+    }
+
+    if any {
+        build.compile("llama_shims");
+    }
+}
+
+fn apple_vulkan_available() -> bool {
+    let has_glslc = command_exists("glslc");
+
+    let sdk = match env::var("VULKAN_SDK") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => return false,
+    };
+
+    // LunarG macOS SDK layout:
+    //   $VULKAN_SDK/include/vulkan/vulkan.h
+    //   $VULKAN_SDK/lib/libvulkan*.dylib
+    let header_ok = sdk.join("include").join("vulkan").join("vulkan.h").exists();
+    let lib_dir = sdk.join("lib");
+    let lib_ok = lib_dir.join("libvulkan.dylib").exists()
+        || lib_dir.join("libvulkan.1.dylib").exists()
+        || lib_dir.join("libMoltenVK.dylib").exists();
+
+    has_glslc && header_ok && lib_ok
+}
+
+/// True for the Emscripten targets, the only way to reach a browser from this
+/// crate.
+///
+/// `wasm32-unknown-unknown` is deliberately *not* included: it has no libc,
+/// libc++, pthreads or filesystem, all four of which llama.cpp requires. A
+/// build for it would fail deep inside cmake with no useful message, so
+/// [`reject_unsupported_wasm_target`] refuses it up front instead.
+fn is_emscripten_target(target: &str) -> bool {
+    target.contains("emscripten")
+}
+
+/// Root of the Emscripten SDK, from `EMSDK`.
+///
+/// `emsdk_env.sh` exports this; it is the one variable every emsdk layout
+/// agrees on, which is why it is preferred over probing for `emcc` on `PATH`.
+fn emsdk_root() -> PathBuf {
+    let root = env::var("EMSDK").unwrap_or_else(|_| {
+        panic!(
+            "building for a wasm target needs the Emscripten SDK, but EMSDK is not set.\n\
+             Install it and source the environment:\n\
+            \x20   git clone https://github.com/emscripten-core/emsdk.git\n\
+            \x20   cd emsdk && ./emsdk install latest && ./emsdk activate latest\n\
+            \x20   source ./emsdk_env.sh"
+        )
+    });
+    let root = PathBuf::from(root);
+    if !root.join("upstream/emscripten").is_dir() {
+        panic!(
+            "EMSDK points at {}, which does not look like an emsdk checkout \
+             (no upstream/emscripten). Re-run `source ./emsdk_env.sh`.",
+            root.display()
+        );
+    }
+    root
+}
+
+/// Path to a tool inside the active Emscripten toolchain, e.g. `em++`.
+fn emsdk_tool(name: &str) -> PathBuf {
+    emsdk_root().join("upstream/emscripten").join(name)
+}
+
+/// Reject the wasm targets and feature combinations that cannot work, with a
+/// message that says what to do instead.
+///
+/// Every one of these otherwise fails somewhere inside cmake, bindgen or the
+/// linker, where the real cause is unrecoverable from the output.
+fn reject_unsupported_wasm_target(target: &str) {
+    if !target.starts_with("wasm") {
+        return;
+    }
+
+    if !is_emscripten_target(target) {
+        panic!(
+            "{target} is not supported. llama.cpp needs libc, libc++, pthreads \
+             and a filesystem, none of which this target provides.\n\
+             Use --target wasm32-unknown-emscripten instead."
+        );
+    }
+
+    // Each of these needs something a browser tab does not have. Driving them
+    // off one table keeps `cfg!` out of a bare `assert!`, which clippy reads as
+    // a constant assertion.
+    const fn na(
+        enabled: bool,
+        feature: &'static str,
+        why: &'static str,
+    ) -> Option<(&'static str, &'static str)> {
+        if enabled {
+            Some((feature, why))
+        } else {
+            None
+        }
+    }
+
+    let unsupported = [
+        na(
+            cfg!(feature = "metal"),
+            "metal",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "cuda"),
+            "cuda",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "hip"),
+            "hip",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "vulkan"),
+            "vulkan",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "opencl"),
+            "opencl",
+            "there is no such GPU backend in a browser; use `webgpu`",
+        ),
+        na(
+            cfg!(feature = "blas"),
+            "blas",
+            "no BLAS library is available; the CPU backend uses wasm SIMD instead",
+        ),
+        na(
+            cfg!(feature = "openmp"),
+            "openmp",
+            "Emscripten has no OpenMP runtime; llama.cpp uses pthreads there",
+        ),
+        na(
+            cfg!(feature = "dynamic-link"),
+            "dynamic-link",
+            "Emscripten builds static archives only, and there is no dynamic loader",
+        ),
+        na(
+            cfg!(feature = "rpc"),
+            "rpc",
+            "it needs raw sockets, which a browser tab cannot open",
+        ),
+        na(
+            cfg!(feature = "prebuilt"),
+            "prebuilt",
+            "no wasm artifacts are published; build from source",
+        ),
+    ];
+
+    let offenders: Vec<String> = unsupported
+        .iter()
+        .flatten()
+        .map(|(feature, why)| format!("  - `{feature}`: {why}"))
+        .collect();
+
+    assert!(
+        offenders.is_empty(),
+        "these features cannot target {target}:\n{}\n\
+         Build with --no-default-features and add back only what applies.",
+        offenders.join("\n")
+    );
+}
+
+/// The triple to hand libclang for bindgen, which is not always the Rust one.
+///
+/// bindgen drops almost every function declaration when libclang is pointed at
+/// a wasm triple — it still emits the constants, typedefs and structs, with
+/// correct wasm32 layout, so the failure is silent and the crate only breaks
+/// later with hundreds of unresolved imports. Reproducible with a four-line C
+/// header and `-xc`, on both Apple and LLVM 22 libclang, so it is neither this
+/// crate's headers nor a missing sysroot.
+///
+/// `armv7-unknown-linux-gnueabihf` is used to parse instead. It is the one
+/// common triple that agrees with wasm32 on the whole ABI that matters here:
+/// 32-bit pointers, 32-bit `long`, and — unlike `i686`, which gets this wrong
+/// — 8-byte alignment for `double`. Diffing every layout assertion bindgen
+/// produces for the two triples over this crate's `wrapper.h` leaves 12
+/// differences out of 1709, all of them libc++ internals and `__int128`
+/// (`max_align_t`, `std::__locale_guard`, `std::chrono` specializations) that
+/// llama.cpp's C API never exposes.
+fn bindgen_clang_target(target: &str) -> String {
+    if is_emscripten_target(target) {
+        return "armv7-unknown-linux-gnueabihf".to_owned();
+    }
+    target.to_owned()
+}
+
+/// The include directories `em++` itself searches, in order.
+///
+/// bindgen drives libclang directly, so none of emcc's implicit flags apply and
+/// the headers have to be passed explicitly. Hardcoding them is not an option:
+/// the list contains the clang resource directory (`upstream/lib/clang/<ver>/
+/// include`), whose version changes with every emsdk release, and the `compat`
+/// and `fakesdl` shim directories that libc++ relies on — `<xlocale.h>` is only
+/// reachable through `compat`. So ask the compiler.
+fn emscripten_include_dirs() -> Vec<PathBuf> {
+    let emxx = emsdk_tool("em++");
+    let output = std::process::Command::new(&emxx)
+        .args(["-v", "-E", "-x", "c++", "/dev/null", "-o", "/dev/null"])
+        .output();
+
+    let mut dirs = Vec::new();
+    if let Ok(output) = output {
+        // The list arrives on stderr between two marker lines.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut in_list = false;
+        for line in stderr.lines() {
+            if line.starts_with("#include <...> search starts here") {
+                in_list = true;
+                continue;
+            }
+            if line.starts_with("End of search list") {
+                break;
+            }
+            if in_list {
+                let path = PathBuf::from(line.trim());
+                if path.is_dir() {
+                    dirs.push(path);
+                }
+            }
+        }
+    }
+
+    if dirs.is_empty() {
+        // Fall back to the documented layout, minus the versioned clang dir we
+        // cannot guess. Enough for the llama.cpp headers in practice.
+        println!(
+            "cargo:warning=could not read the include path from {}; \
+             falling back to the default emsdk layout",
+            emxx.display()
+        );
+        let sysroot = emsdk_root().join("upstream/emscripten/cache/sysroot");
+        for sub in [
+            "include/fakesdl",
+            "include/compat",
+            "include/c++/v1",
+            "include",
+        ] {
+            let path = sysroot.join(sub);
+            if path.is_dir() {
+                dirs.push(path);
+            }
+        }
+    }
+
+    debug_log!("Emscripten include dirs: {dirs:?}");
+    dirs
+}
+
+/// Configure cmake to cross-compile to wasm through the Emscripten SDK.
+fn configure_emscripten(config: &mut cmake::Config, target: &str) {
+    let emsdk = emsdk_root();
+    let toolchain = emsdk.join("upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake");
+    assert!(
+        toolchain.is_file(),
+        "Emscripten toolchain file missing at {}",
+        toolchain.display()
+    );
+    debug_log!("Emscripten toolchain: {}", toolchain.display());
+    config.define("CMAKE_TOOLCHAIN_FILE", &toolchain);
+
+    // Emscripten.cmake sets CMAKE_SYSTEM_PROCESSOR from this, *after* the cache
+    // is initialised — so a plain -DCMAKE_SYSTEM_PROCESSOR is overwritten and
+    // ends up as "x86". ggml's CPU backend then tests
+    // `CMAKE_SYSTEM_PROCESSOR MATCHES "wasm"`, which never matches, and falls
+    // back to GGML_CPU_GENERIC — silently dropping its own hand-written wasm
+    // SIMD kernels (ggml-cpu/arch/wasm/quants.c). Setting the variable the
+    // toolchain file actually reads is what keeps them in the build.
+    config.define(
+        "EMSCRIPTEN_SYSTEM_PROCESSOR",
+        if target.starts_with("wasm64") {
+            "wasm64"
+        } else {
+            "wasm32"
+        },
+    );
+
+    // llama.cpp defaults LLAMA_WASM_MEM64=ON, which compiles the C++ side as
+    // wasm64. Rust has no stable wasm64 target, so the two would disagree on
+    // pointer width and could not be linked. This caps weights + KV cache +
+    // runtime at the wasm32 address space.
+    if !target.starts_with("wasm64") {
+        config.define("LLAMA_WASM_MEM64", "OFF");
+    }
+
+    // Emscripten forces static libraries, and these three need an OS that a
+    // browser does not provide: an OpenMP runtime, a TLS stack, and process
+    // spawning. Upstream already defaults LLAMA_SUBPROCESS off here; set it
+    // explicitly so a stale cache cannot reintroduce it.
+    config.define("BUILD_SHARED_LIBS", "OFF");
+    config.define("GGML_OPENMP", "OFF");
+    config.define("LLAMA_OPENSSL", "OFF");
+    config.define("LLAMA_SUBPROCESS", "OFF");
+
+    // `-march=native` is meaningless for wasm and makes clang error out.
+    config.define("GGML_NATIVE", "OFF");
+
+    // Grow the heap on demand rather than reserving a fixed block up front: a
+    // model load is the single largest allocation and its size is not known
+    // until the GGUF header is read.
+    config.define("CMAKE_EXE_LINKER_FLAGS", "-sALLOW_MEMORY_GROWTH=1");
+}
+
+/// Map a Rust target triple to the CMake `CMAKE_SYSTEM_PROCESSOR` value.
+fn cmake_system_processor(target: &str) -> String {
+    let arch = target.split('-').next().unwrap_or("unknown");
+    match arch {
+        "x86_64" => "x86_64".to_owned(),
+        "i686" | "i386" => "x86".to_owned(),
+        "aarch64" | "arm64" => "aarch64".to_owned(),
+        "armv7" | "armv7s" | "armv7k" => "armv7-a".to_owned(),
+        "arm" => "arm".to_owned(),
+        "riscv64gc" | "riscv64" => "riscv64".to_owned(),
+        "powerpc64le" => "ppc64le".to_owned(),
+        "powerpc64" => "ppc64".to_owned(),
+        "s390x" => "s390x".to_owned(),
+        "wasm32" => "wasm32".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// Find a direct child directory of `parent` whose name matches `name`
+/// case-insensitively.  Returns the actual path on disk.
+fn find_child_dir_ci(parent: &Path, name: &str) -> Option<PathBuf> {
+    let lower = name.to_ascii_lowercase();
+    std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                    .unwrap_or(false)
+        })
+}
+
+/// Find a file inside `dir` whose name matches `name` case-insensitively.
+fn find_file_ci(dir: &Path, name: &str) -> Option<PathBuf> {
+    let lower = name.to_ascii_lowercase();
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| {
+            p.is_file()
+                && p.file_name()
+                    .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                    .unwrap_or(false)
+        })
+}
+
+/// Search for `glslc` (or `glslc.exe`) inside the Vulkan SDK.
+///
+/// Search order:
+/// 1. `<sdk>/Bin/glslc.exe` or `<sdk>/bin/glslc` (case-insensitive dir match).
+/// 2. Recursively walk `<sdk>` looking for the binary (covers non-standard
+///    layouts where `glslc` lives under e.g. `x86_64-windows-msvc/bin/`).
+/// 3. Check if `glslc` is already on `PATH`.
+fn find_glslc(sdk: &Path) -> Option<PathBuf> {
+    let exe_name = if cfg!(windows) { "glslc.exe" } else { "glslc" };
+
+    // 1. Standard location: <sdk>/Bin/ or <sdk>/bin/
+    if let Some(bin_dir) = find_child_dir_ci(sdk, "bin") {
+        if let Some(found) = find_file_ci(&bin_dir, exe_name) {
+            return Some(found);
+        }
+    }
+
+    // 2. Recursive search (bounded to 3 levels to avoid slow scans).
+    if let Some(found) = find_file_recursive(sdk, exe_name, 3) {
+        return Some(found);
+    }
+
+    // 3. Fall back to PATH.
+    if let Ok(output) = std::process::Command::new("where").arg(exe_name).output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    // Also try Unix-style `which` (e.g. Git-for-Windows, MSYS2).
+    if let Ok(output) = std::process::Command::new("which").arg(exe_name).output() {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let p = PathBuf::from(line.trim());
+                if p.exists() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Recursively search for a file by name (case-insensitive) up to `max_depth`
+/// directory levels.
+fn find_file_recursive(dir: &Path, name: &str, max_depth: u32) -> Option<PathBuf> {
+    if max_depth == 0 {
+        return None;
+    }
+    let lower = name.to_ascii_lowercase();
+    let entries: Vec<_> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .collect();
+
+    // Check files first at this level.
+    for p in &entries {
+        if p.is_file()
+            && p.file_name()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase() == lower)
+                .unwrap_or(false)
+        {
+            return Some(p.clone());
+        }
+    }
+    // Then recurse into subdirectories.
+    for p in &entries {
+        if p.is_dir() {
+            if let Some(found) = find_file_recursive(p, name, max_depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Try to locate the Vulkan SDK on Windows automatically.
+///
+/// Search order:
+/// 1. `VULKAN_SDK` environment variable (explicit user override).
+/// 2. Windows registry (`HKLM\SOFTWARE\LunarG\VulkanSDK` → latest version key).
+/// 3. Default install directory `C:\VulkanSDK\<latest version>`.
+///
+/// A candidate directory is accepted only when it contains `Lib\vulkan-1.lib`.
+fn find_vulkan_sdk_windows() -> Option<PathBuf> {
+    // Helper: validate that the directory actually contains the Vulkan library.
+    let is_valid = |p: &Path| -> bool { p.join("Lib").join("vulkan-1.lib").exists() };
+
+    // 1. Explicit environment variable.
+    if let Ok(sdk) = env::var("VULKAN_SDK") {
+        let p = PathBuf::from(&sdk);
+        if is_valid(&p) {
+            return Some(p);
+        }
+        // The env var is set but doesn't look right — keep trying the
+        // automatic paths so a stale/wrong VULKAN_SDK doesn't block the
+        // build when the SDK is actually installed elsewhere.
+        debug_log!(
+            "VULKAN_SDK env var is set to '{}' but Lib/vulkan-1.lib was not found there; \
+             trying automatic detection",
+            sdk
+        );
+    }
+
+    // 2. Windows registry (LunarG installer writes version keys here).
+    #[cfg(windows)]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        // The LunarG installer writes per-version keys under:
+        //   HKLM\SOFTWARE\LunarG\VulkanSDK\<version>  (InstallDir = …)
+        if let Ok(hklm) =
+            RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey("SOFTWARE\\LunarG\\VulkanSDK")
+        {
+            // Enumerate version sub-keys and pick the latest valid one.
+            let mut candidates: Vec<(String, PathBuf)> = Vec::new();
+            for name in hklm.enum_keys().filter_map(Result::ok) {
+                if let Ok(ver_key) = hklm.open_subkey(&name) {
+                    if let Ok(install_dir) = ver_key.get_value::<String, _>("InstallDir") {
+                        let p = PathBuf::from(&install_dir);
+                        if is_valid(&p) {
+                            candidates.push((name, p));
+                        }
+                    }
+                }
+            }
+            // Sort descending by version string so the latest wins.
+            candidates.sort_by(|a, b| b.0.cmp(&a.0));
+            if let Some((_, p)) = candidates.into_iter().next() {
+                return Some(p);
+            }
+        }
+    }
+
+    // 3. Scan the default install directory C:\VulkanSDK\<version>.
+    let vulkan_base = PathBuf::from("C:\\VulkanSDK");
+    if vulkan_base.is_dir() {
+        let mut versions: Vec<PathBuf> = std::fs::read_dir(&vulkan_base)
+            .ok()
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir() && is_valid(p))
+            .collect();
+        // Sort descending by directory name so the latest version wins.
+        versions.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+        if let Some(p) = versions.into_iter().next() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+/// Find the GCC library directory containing libgomp.a.
+/// Tries `gcc --print-file-name=libgomp.a` first, then common versioned paths.
+fn find_libgomp_lib_dir() -> Option<String> {
+    // Ask GCC directly where it keeps its static libs.
+    if let Ok(out) = Command::new("gcc")
+        .arg("--print-file-name=libgomp.a")
+        .output()
+    {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if let Some(parent) = std::path::Path::new(&path).parent() {
+                if parent != std::path::Path::new("") {
+                    return Some(parent.to_string_lossy().into_owned());
+                }
+            }
+        }
+    }
+    // Fallback: probe common Debian/Ubuntu GCC paths.
+    for version in ["16", "15", "14", "13", "12", "11"] {
+        let p = format!("/usr/lib/gcc/x86_64-linux-gnu/{}", version);
+        if std::path::Path::new(&p).join("libgomp.a").exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn resolve_prebuilt_directory(target: &str, use_shared_libs: bool) -> Option<PathBuf> {
+    if let Ok(raw) = env::var("LLAMA_PREBUILT_DIR") {
+        if !raw.is_empty() {
+            return Some(PathBuf::from(raw));
+        }
+    }
+
+    #[cfg(feature = "prebuilt")]
+    {
+        prebuilt_download::ensure_prebuilt(target, use_shared_libs)
+    }
+
+    #[cfg(not(feature = "prebuilt"))]
+    {
+        let _ = (target, use_shared_libs);
+        None
+    }
+}
+
+/// `LLAMA_*` environment variables this build script consumes itself, which
+/// must therefore *not* be forwarded to CMake as options.
+///
+/// Some name a tool or path (`LLAMA_PATCH`), some are this crate's own knobs
+/// with no CMake equivalent (`LLAMA_NO_SCCACHE`), and some are translated into
+/// a differently-named define (`LLAMA_BUILD_SHARED_LIBS` becomes
+/// `BUILD_SHARED_LIBS`, `LLAMA_LIB_PROFILE` becomes `CMAKE_BUILD_TYPE`).
+/// Passing them through as `-DLLAMA_<NAME>` would at best be noise and at worst
+/// set an unrelated upstream option.
+const LLAMA_ENV_NOT_CMAKE_OPTIONS: &[&str] = &[
+    "LLAMA_BUILD_SHARED_LIBS",
+    "LLAMA_LIB_PROFILE",
+    "LLAMA_NO_SCCACHE",
+    "LLAMA_PATCH",
+    "LLAMA_PATCH_ENGINE",
+    "LLAMA_PREBUILT_DIR",
+    "LLAMA_PREBUILT_OFF",
+    "LLAMA_PREBUILT_REPO",
+    "LLAMA_PREBUILT_SHARED",
+    "LLAMA_PREBUILT_TAG",
+    "LLAMA_PREBUILT_URL",
+    "LLAMA_STATIC_CRT",
+    // Read by the test suites and examples, not the build. Developers commonly
+    // have it exported, and `-DLLAMA_TEST_MODEL=...` would be pure noise.
+    "LLAMA_TEST_MODEL",
+    // `LLAMA_CONNECT=ON` makes cmake download a prebuilt `llama-connect`
+    // binary from a GitHub release *during the build*
+    // (llama.cpp tools/connect/CMakeLists.txt -> scripts/connect-download.cmake).
+    // Forwarding it would mean an environment variable could introduce a
+    // network fetch of a third-party executable into someone's build, which is
+    // not a decision an env var should make. `scripts/` is not packaged either,
+    // so it could not work from a published crate regardless. Enable it by
+    // editing the build script if you really want it.
+    "LLAMA_CONNECT",
+];
+
+/// Normalise a configured value into something CMake understands.
+///
+/// A value that looks boolean (`0`/`1`, `off`/`on`, `false`/`true`, `no`/`yes`,
+/// any case) becomes CMake's `OFF`/`ON`. Anything else is passed verbatim, so
+/// string, path and numeric options work too.
+fn normalise_cmake_value(value: &str) -> String {
+    match value.to_ascii_lowercase().as_str() {
+        "0" | "off" | "false" | "no" => "OFF".to_string(),
+        "1" | "on" | "true" | "yes" => "ON".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Read a `[cmake]`-shaped table into `out`, lowest precedence first.
+///
+/// The shape is the same wherever it appears:
+///
+/// ```toml
+/// [cmake]
+/// LLAMA_OPENSSL = "OFF"
+///
+/// [cmake.target."aarch64-apple-darwin"]
+/// LLAMA_METAL_EMBED_LIBRARY = "ON"
+/// ```
+///
+/// Only `LLAMA_*` keys are accepted, for the reason given on
+/// [`llama_cmake_options`]. Anything else warns and is skipped rather than
+/// being passed to CMake, where a typo would be silently ignored.
+fn collect_cmake_table(
+    table: &dyn toml_edit::TableLike,
+    target: &str,
+    origin: &str,
+    out: &mut BTreeMap<String, String>,
+) {
+    let mut take = |table: &dyn toml_edit::TableLike, scope: &str| {
+        for (key, item) in table.iter() {
+            // `target` is the nested per-triple scope, not an option.
+            if key == "target" {
+                continue;
+            }
+            if !key.starts_with("LLAMA_") {
+                println!(
+                    "cargo:warning={origin}{scope}: ignoring `{key}` — only LLAMA_* CMake options \
+                     are configurable here (backends are selected with this crate's features)"
+                );
+                continue;
+            }
+            let value = match item {
+                toml_edit::Item::Value(toml_edit::Value::String(s)) => s.value().clone(),
+                toml_edit::Item::Value(toml_edit::Value::Boolean(b)) => b.value().to_string(),
+                toml_edit::Item::Value(toml_edit::Value::Integer(i)) => i.value().to_string(),
+                _ => {
+                    println!(
+                        "cargo:warning={origin}{scope}: ignoring `{key}` — expected a string, \
+                         boolean or integer"
+                    );
+                    continue;
+                }
+            };
+            out.insert(key.to_string(), normalise_cmake_value(&value));
+        }
+    };
+
+    take(table, "");
+
+    // Per-target overrides land on top of the shared ones.
+    if let Some(targets) = table.get("target").and_then(toml_edit::Item::as_table_like) {
+        if let Some(for_target) = targets.get(target).and_then(toml_edit::Item::as_table_like) {
+            take(for_target, &format!(" [target.\"{target}\"]"));
+        }
+    }
+}
+
+/// Parse a TOML document, warning and yielding `None` if it does not parse.
+///
+/// A malformed config is reported rather than ignored, but it does not fail the
+/// build: the file may well belong to something else entirely.
+fn parse_toml(path: &Path) -> Option<toml_edit::DocumentMut> {
+    let text = fs::read_to_string(path).ok()?;
+    match text.parse::<toml_edit::DocumentMut>() {
+        Ok(doc) => Some(doc),
+        Err(e) => {
+            println!("cargo:warning=ignoring {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Directories to search for a config file, nearest first.
+///
+/// Cargo tells a build script where *its own* manifest is, never where the
+/// consuming project is, so both plausible anchors are walked:
+///
+/// - `CARGO_MANIFEST_DIR`, which finds the project when this crate is a path
+///   dependency (including this repository's own workspace);
+/// - `OUT_DIR`, which lives under the project's `target/` directory, so its
+///   ancestors reach the project root when this crate comes from the registry.
+///
+/// Neither works with a `CARGO_TARGET_DIR` outside the project *and* a registry
+/// dependency; `LLAMA_CONFIG` is the escape hatch for that, and an environment
+/// variable always works regardless.
+fn config_search_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    for anchor in ["CARGO_MANIFEST_DIR", "OUT_DIR"] {
+        let Ok(start) = env::var(anchor) else {
+            continue;
+        };
+        for dir in Path::new(&start).ancestors() {
+            if !dirs.iter().any(|seen| seen == dir) {
+                dirs.push(dir.to_path_buf());
+            }
+        }
+    }
+    dirs
+}
+
+/// The `LLAMA_*` CMake options to pass, gathered from every configuration
+/// source in precedence order.
+///
+/// llama.cpp has dozens of `LLAMA_*` CMake options and gains more every
+/// release. Mirroring each one as a Cargo feature does not scale and would not
+/// help anyway, since a feature cannot carry a value. So they are configured as
+/// data, from three places — lowest precedence first:
+///
+/// 1. **`llama-cpp.toml`**, found by walking up from this crate or from
+///    `OUT_DIR` (see [`config_search_dirs`]), or named outright by
+///    `LLAMA_CONFIG`. Good for a machine-local or gitignored override.
+/// 2. **`[package.metadata.llama_cpp_sys.cmake]`** (or
+///    `[workspace.metadata.…]`) in the consuming project's manifest. Good for
+///    a setting that belongs to the project and should be checked in.
+/// 3. **A `LLAMA_*` environment variable**, which always wins, so CI and
+///    one-off builds can override anything.
+///
+/// Only `LLAMA_*` is configurable, never `GGML_*`: the backend options
+/// (`GGML_METAL`, `GGML_CUDA`, …) are driven by this crate's Cargo features,
+/// which also decide what the Rust side links against. Enabling a backend
+/// behind the feature system's back would configure a library that the link
+/// step then does not expect.
+fn llama_cmake_options(target: &str) -> BTreeMap<String, String> {
+    // BTreeMap so the CMake command line is deterministic for a given input and
+    // the configure step stays cacheable.
+    let mut options = BTreeMap::new();
+
+    // ── 1. llama-cpp.toml ───────────────────────────────────────────────────
+    println!("cargo:rerun-if-env-changed=LLAMA_CONFIG");
+    let explicit = env::var_os("LLAMA_CONFIG").map(PathBuf::from);
+    let config_file = explicit.clone().or_else(|| {
+        config_search_dirs()
+            .into_iter()
+            .map(|dir| dir.join("llama-cpp.toml"))
+            .find(|candidate| candidate.is_file())
+    });
+    if let Some(path) = config_file {
+        if path.is_file() {
+            println!("cargo:rerun-if-changed={}", path.display());
+            if let Some(doc) = parse_toml(&path) {
+                if let Some(table) = doc.get("cmake").and_then(toml_edit::Item::as_table_like) {
+                    collect_cmake_table(table, target, &path.display().to_string(), &mut options);
+                }
+            }
+        } else if explicit.is_some() {
+            println!(
+                "cargo:warning=LLAMA_CONFIG points at {}, which is not a file",
+                path.display()
+            );
+        }
+    }
+
+    // ── 2. [package.metadata.llama_cpp_sys.cmake] ─────────────────────────
+    // A workspace root is often a virtual manifest with no [package], so accept
+    // the same table under [workspace.metadata] too.
+    for dir in config_search_dirs() {
+        let manifest = dir.join("Cargo.toml");
+        if !manifest.is_file() {
+            continue;
+        }
+        let Some(doc) = parse_toml(&manifest) else {
+            continue;
+        };
+        let mut found = false;
+        for root in ["package", "workspace"] {
+            let table = doc
+                .get(root)
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("metadata"))
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("llama_cpp_sys"))
+                .and_then(toml_edit::Item::as_table_like)
+                .and_then(|t| t.get("cmake"))
+                .and_then(toml_edit::Item::as_table_like);
+            if let Some(table) = table {
+                println!("cargo:rerun-if-changed={}", manifest.display());
+                collect_cmake_table(
+                    table,
+                    target,
+                    &format!("{} [{root}.metadata]", manifest.display()),
+                    &mut options,
+                );
+                found = true;
+            }
+        }
+        // Nearest manifest carrying the table wins; stop before reaching an
+        // outer project that happens to configure this crate too.
+        if found {
+            break;
+        }
+    }
+
+    // ── 3. LLAMA_* environment variables ────────────────────────────────────
+    for (key, value) in env::vars() {
+        if !key.starts_with("LLAMA_") || LLAMA_ENV_NOT_CMAKE_OPTIONS.contains(&key.as_str()) {
+            continue;
+        }
+        println!("cargo:rerun-if-env-changed={key}");
+        options.insert(key, normalise_cmake_value(&value));
+    }
+
+    options
+}
+
+/// Apply the configured `LLAMA_*` options to the CMake invocation.
+///
+/// See [`llama_cmake_options`] for where they come from.
+///
+/// Note on rebuilds: a `rerun-if-env-changed` is emitted for each variable that
+/// is *set*, so changing or clearing one triggers a reconfigure, and the config
+/// files are tracked with `rerun-if-changed`. Setting a `LLAMA_*` variable that
+/// was previously absent cannot be detected — Cargo has to be told the name in
+/// advance — so after exporting a new one for the first time, run
+/// `cargo clean -p llama_cpp_sys`. Configuring it in a file instead avoids
+/// that entirely.
+fn forward_llama_cmake_options(config: &mut cmake::Config, target: &str) {
+    for (key, value) in llama_cmake_options(target) {
+        debug_log!("Passing {key}={value} to CMake");
+        println!("cargo:warning=Passing {key}={value} to CMake");
+        config.define(&key, &value);
+    }
+}
+
+fn main() {
+    let start_time = std::time::Instant::now();
+
+    let target = env::var("TARGET").unwrap();
+    let host = env::var("HOST").unwrap();
+    let is_cross = host != target;
+
+    // Fail fast and explain, rather than deep inside cmake or the linker.
+    reject_unsupported_wasm_target(&target);
+    let is_emscripten = is_emscripten_target(&target);
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    let target_dir = get_cargo_target_dir().unwrap();
+    let llama_dst = out_dir.join("llama.cpp");
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Failed to get CARGO_MANIFEST_DIR");
+    let llama_src = Path::new(&manifest_dir).join("llama.cpp");
+    // Default to static libraries, build shared only when explicitly requested
+    let build_shared_libs = cfg!(feature = "dynamic-link");
+
+    let build_shared_libs = std::env::var("LLAMA_BUILD_SHARED_LIBS")
+        .map(|v| v == "1")
+        .unwrap_or(build_shared_libs);
+    let profile = env::var("LLAMA_LIB_PROFILE").unwrap_or("Release".to_string());
+    let static_crt = env::var("LLAMA_STATIC_CRT")
+        .map(|v| v == "1")
+        .unwrap_or(false);
+    let crt_static = env::var("CARGO_CFG_TARGET_FEATURE")
+        .map(|f| f.contains("crt-static"))
+        .unwrap_or(false);
+
+    // ── Windows MAX_PATH workaround ──────────────────────────────────────────
+    // Cargo's OUT_DIR already contains a long hashed path segment.  The Vulkan
+    // backend adds a deeply-nested ExternalProject sub-build
+    // (ggml/src/ggml-vulkan/vulkan-shaders-gen-prefix/src/vulkan-shaders-gen-build/
+    //  CMakeFiles/3.x.x/VCTargetsPath/x64/Debug/VCTargetsPath.tlog/…)
+    // that pushes the total path well beyond Windows' MAX_PATH of 260 chars,
+    // causing MSBuild error MSB3491.
+    //
+    // Fix: on Windows, redirect cmake's build+install tree to a short path
+    // under %LOCALAPPDATA% that is derived from a stable hash of OUT_DIR so
+    // different crate versions / OUT_DIRs get their own isolated build trees.
+    let cmake_out_dir: PathBuf = if target.contains("windows") {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        out_dir.to_string_lossy().as_ref().hash(&mut hasher);
+        // Use 8 hex digits (32-bit) — enough collision-resistance for local builds.
+        let hash = hasher.finish() as u32;
+        // Prefer %LOCALAPPDATA% (~26 chars on a default Windows install) over
+        // %TEMP% because TEMP sometimes points to a longer UNC path.
+        let base = std::env::var("LOCALAPPDATA")
+            .or_else(|_| std::env::var("TEMP"))
+            .or_else(|_| std::env::var("TMP"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("C:\\Temp"));
+        // Final cmake_out_dir ≈ base(~26) + \llcb\(6) + 8hex(8) = ~40 chars.
+        // The deepest vulkan sub-path adds ~167 chars → total ~207 < 260. ✓
+        let short_dir = base.join("llcb").join(format!("{:08x}", hash));
+        std::fs::create_dir_all(&short_dir)
+            .expect("Failed to create short cmake output dir (Windows MAX_PATH workaround)");
+        short_dir
+    } else {
+        out_dir.clone()
+    };
+
+    // Keep native artifacts in Cargo's per-configuration OUT_DIR. Sharing a
+    // CMake tree across different OUT_DIR source copies makes CMake invalidate
+    // the tree on every switch between check, build, and test, and can reuse
+    // artifacts with incompatible compiler/profile/environment settings.
+
+    debug_log!("HOST: {}", host);
+    debug_log!("TARGET: {}", target);
+    debug_log!("CROSS_COMPILING: {}", is_cross);
+    debug_log!("CARGO_MANIFEST_DIR: {}", manifest_dir);
+    debug_log!("TARGET_DIR: {}", target_dir.display());
+    debug_log!("OUT_DIR: {}", out_dir.display());
+    debug_log!("LD_LIBRARY_PATH: {:?}", env::var_os("LD_LIBRARY_PATH"));
+    debug_log!("BUILD_SHARED: {}", build_shared_libs);
+
+    // ── Source copy with version tracking ────────────────────────────────────
+    // The copy only ran when the OUT_DIR was fresh, so updating the submodule
+    // (which adds/removes files like ggml-cpu/) would silently use stale data.
+    // We now store the current submodule HEAD (plus a hash of any local patches)
+    // in a sentinel file and re-copy+re-patch whenever either changes.
+    let patches_dir = Path::new(&manifest_dir).join("patches");
+    let sentinel = out_dir.join(".llama-src-version");
+    let current_version = llama_src_version(&llama_src, &patches_dir);
+    let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
+    let staged_dir = out_dir.join("patches-active");
+    let staged_any = stage_active_patches(&patches_dir, &staged_dir);
+    let patches_applied = !staged_any
+        || patches_match_new_side(&staged_dir, &llama_src, &llama_dst).unwrap_or_else(|error| {
+            debug_log!(
+                "Failed to verify the staged patch postcondition for {}: {}",
+                llama_dst.display(),
+                error
+            );
+            false
+        });
+    let needs_copy =
+        !llama_dst.exists() || stored_version.trim() != current_version.trim() || !patches_applied;
+    if needs_copy {
+        if llama_dst.exists() {
+            debug_log!(
+                "Source version or patch postcondition changed — removing stale OUT_DIR copy"
+            );
+            std::fs::remove_dir_all(&llama_dst).ok();
+        }
+        debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
+        copy_folder(&llama_src, &llama_dst);
+
+        if staged_any {
+            apply_patches(&staged_dir, &llama_dst);
+            if !patches_match_new_side(&staged_dir, &llama_src, &llama_dst)
+                .unwrap_or_else(|error| panic!("failed to verify applied patches: {error}"))
+            {
+                panic!(
+                    "llama.cpp patch application completed without satisfying the staged postcondition"
+                );
+            }
+        }
+        std::fs::write(&sentinel, &current_version)
+            .expect("failed to write source version sentinel");
+    }
+    // Tell cargo to rerun when the submodule HEAD changes.
+    // In a git submodule, llama.cpp/.git is a file pointing at the real HEAD.
+    let submodule_git = llama_src.join(".git");
+    if submodule_git.is_file() {
+        // .git file contains "gitdir: ../../.git/modules/llama_cpp_sys/llama.cpp"
+        if let Ok(contents) = std::fs::read_to_string(&submodule_git) {
+            if let Some(gitdir) = contents.strip_prefix("gitdir:").map(|s| s.trim()) {
+                let head = submodule_git.parent().unwrap().join(gitdir).join("HEAD");
+                if head.exists() {
+                    println!("cargo:rerun-if-changed={}", head.display());
+                }
+            }
+        }
+    }
+    // Rerun when any patch file is added, removed, or modified.
+    if patches_dir.is_dir() {
+        println!("cargo:rerun-if-changed={}", patches_dir.display());
+    }
+    // Honor explicit native limits, then Cargo's job budget (`cargo -j N`).
+    let parallel = env::var("CMAKE_BUILD_PARALLEL_LEVEL")
+        .or_else(|_| env::var("NUM_JOBS"))
+        .unwrap_or_else(|_| "1".to_owned());
+
+    // Point CC/CXX at the MPI wrappers when building with MPI on macOS.
+    // Check the *target* OS, not the host, so that cross-compilation from a
+    // macOS host to a non-Apple target does not accidentally set these.
+    if cfg!(feature = "mpi") && target.contains("apple") {
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("CC", "/opt/homebrew/bin/mpicc") };
+        // TODO: Audit that the environment access only happens in single-threaded code.
+        unsafe { env::set_var("CXX", "/opt/homebrew/bin/mpicxx") };
+    }
+
+    // ── Bindgen ──────────────────────────────────────────────────────────────
+    let mut builder = bindgen::Builder::default()
+        .header("wrapper.h")
+        .generate_comments(true)
+        // https://github.com/rust-lang/rust-bindgen/issues/1834
+        // "fatal error: 'string' file not found" on macOS
+        .clang_arg("-xc++")
+        .clang_arg("-std=c++17")
+        // When cross-compiling, tell libclang/bindgen the target triple so
+        // that layout, pointer sizes, and type widths are computed for the
+        // *target* architecture rather than the host.
+        .clang_arg(format!("--target={}", bindgen_clang_target(&target)))
+        // .raw_line("#![feature(unsafe_extern_blocks)]") // https://github.com/rust-lang/rust/issues/123743
+        .clang_arg(format!("-I{}", llama_dst.join("include").display()))
+        .clang_arg(format!("-I{}", llama_dst.join("ggml/include").display()))
+        .clang_arg(format!("-I{}", llama_dst.join("src").display()))
+        .clang_arg(format!("-I{}", llama_dst.join("common").display()))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("mtp_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("ext_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("chat_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("common_shim").display()
+        ))
+        .clang_arg(format!(
+            "-I{}",
+            Path::new(&manifest_dir).join("shim_support").display()
+        ))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
+        .derive_partialeq(true)
+        // Do not derive PartialEq on types that contain function-pointer fields.
+        // Deriving PartialEq on those triggers the
+        // `unpredictable_function_pointer_comparisons` lint on newer rustc
+        // because function addresses are not stable across codegen units.
+        // macOS FILE internals (function pointers _close/_read/_seek/_write)
+        .no_partialeq("__sFILE")
+        .no_partialeq("ggml_cplan")
+        .no_partialeq("ggml_type_traits")
+        .no_partialeq("ggml_type_traits_cpu")
+        .no_partialeq("ggml_context")
+        .no_partialeq("ggml_opt_params")
+        .no_partialeq("llama_model_params")
+        .no_partialeq("llama_context_params")
+        .no_partialeq("llama_sampler_i")
+        .no_partialeq("llama_opt_params")
+        .allowlist_function("ggml_.*")
+        .allowlist_type("ggml_.*")
+        // `#define GGML_MROPE_SECTIONS 4` — the number of positions an
+        // embedding entry carries on an M-RoPE model. `llama_batch_ext_set_pos`
+        // reads that many `llama_pos` from the caller's pointer, so the safe
+        // wrapper needs the constant to size the slice correctly rather than
+        // hardcoding 4.
+        .allowlist_item("GGML_MROPE_SECTIONS")
+        .allowlist_function("llama_.*")
+        .allowlist_function("llama_lora_.*")
+        .allowlist_type("llama_.*")
+        .allowlist_function("mtp_session_.*")
+        .allowlist_type("mtp_session")
+        .allowlist_type("mtp_session_config")
+        .allowlist_type("mtp_state_status")
+        .allowlist_function("llama_memory_buffers_collect")
+        // `llama_memory_get_buffers` returns `std::vector<ggml_backend_buffer_t>`
+        // by value. bindgen cannot represent that and silently emits
+        // `-> u8`, so the generated binding has the wrong ABI and calling it is
+        // undefined behaviour. Block it and use the `llama_memory_buffers_collect`
+        // shim above instead.
+        .blocklist_function("llama_memory_get_buffers")
+        .allowlist_function("llama_memory_breakdown_collect")
+        .allowlist_type("llama_memory_breakdown_entry")
+        .allowlist_function("llama_quant_.*_guarded")
+        .allowlist_function("common_device_memory_collect")
+        .allowlist_type("common_device_memory_flat_entry")
+        // Speculative strategy selector for the shim (MTP vs EAGLE3). The
+        // `mtp_session_config.spec_type` field is a plain int, so the enum is
+        // not reachable transitively — allowlist it explicitly so its
+        // constants are emitted.
+        .allowlist_type("mtp_spec_type")
+        .allowlist_item("MTP_SPEC_TYPE_.*")
+        .allowlist_item("MTP_STATE_STATUS_.*")
+        .opaque_type("mtp_session")
+        // chat_shim: C wrappers over common/chat.h and json-schema-to-grammar.
+        // The `chat_shim_templates` handle stays opaque — it owns a
+        // `common_chat_templates_ptr`, which bindgen cannot represent.
+        .allowlist_function("chat_shim_.*")
+        .allowlist_type("chat_shim_.*")
+        .allowlist_item("CHAT_SHIM_.*")
+        .opaque_type("chat_shim_templates")
+        .allowlist_function("common_json_schema_to_grammar_c")
+        // common_shim: the non-chat half of common/. The handles stay opaque —
+        // they own C++ containers bindgen cannot represent.
+        .allowlist_function("llama_shim_last_error")
+        .allowlist_type("llama_shim_status")
+        .allowlist_item("LLAMA_SHIM_.*")
+        .allowlist_function("common_shim_.*")
+        .allowlist_type("common_shim_.*")
+        .allowlist_item("COMMON_SHIM_.*")
+        .opaque_type("common_shim_sampler")
+        .opaque_type("common_shim_sampler_params")
+        .opaque_type("common_shim_ngram_cache")
+        .opaque_type("common_shim_ngram_map")
+        .allowlist_function("common_token_to_piece")
+        .allowlist_function("common_tokenize")
+        .allowlist_function("common_fit_params")
+        .allowlist_function("common_fit_print")
+        .allowlist_function("common_memory_breakdown_print")
+        .allowlist_type("common_params_fit_status")
+        // .allowlist_item("common_.*")
+        // .allowlist_function("common_tokenize")
+        // .allowlist_function("common_detokenize")
+        // .allowlist_type("common_.*")
+        // .allowlist_item("common_params")
+        // .allowlist_item("common_sampler_type")
+        // .allowlist_item("common_sampler_params")
+        .allowlist_item("LLAMA_.*")
+        // .opaque_type("common_lora_adapter_info")
+        .opaque_type("llama_grammar")
+        .opaque_type("llama_grammar_parser")
+        .opaque_type("llama_sampler_chain")
+        // .opaque_type("llama_context_deleter")
+        // .blocklist_type("llama_model_deleter")
+        .opaque_type("std::.*");
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("chat_shim").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("common_shim").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        Path::new(&manifest_dir).join("shim_support").display()
+    );
+
+    // libclang does not know where Emscripten keeps its headers, so without
+    // these it cannot find <string> / <stdint.h> and every parse fails.
+    // `-nostdinc`/`-nostdinc++` stop it from also reaching for the *host*
+    // headers, which would otherwise mix two libc++ versions.
+    if is_emscripten {
+        let sysroot = emsdk_root().join("upstream/emscripten/cache/sysroot");
+        builder = builder.clang_arg(format!("--sysroot={}", sysroot.display()));
+        for dir in emscripten_include_dirs() {
+            // Skip the clang resource directory: those are builtin headers
+            // (stdbool.h, stddef.h, …) tied to emsdk's clang version, and
+            // bindgen runs a *different* libclang. Mixing the two produces
+            // declarations libclang quietly discards. Its own builtins are
+            // already on the path.
+            if dir.components().any(|c| c.as_os_str() == "clang") {
+                continue;
+            }
+            builder = builder.clang_arg(format!("-I{}", dir.display()));
+        }
+    }
+
+    // Add RPC support if feature is enabled
+    if cfg!(feature = "rpc") {
+        builder = builder
+            .clang_arg("-DRPC_SUPPORT")
+            .allowlist_function("ggml_backend_rpc_.*")
+            .allowlist_type("ggml_backend_rpc_.*")
+            // `GGML_RPC_MAX_SERVERS` bounds the device list accepted by
+            // `ggml_backend_rpc_start_server`; callers need it to validate.
+            .allowlist_item("GGML_RPC_.*");
+    }
+
+    // Add mtmd (multimodal) support if feature is enabled
+    if cfg!(feature = "mtmd") {
+        builder = builder
+            .clang_arg("-DMTMD_SUPPORT")
+            .clang_arg(format!("-I{}", llama_dst.join("tools/mtmd").display()))
+            .allowlist_function("mtmd_.*")
+            .allowlist_type("mtmd_.*")
+            .allowlist_item("MTMD_.*")
+            // `namespace mtmd_helper` in mtmd-helper.h holds C++-only RAII
+            // wrappers (unique_ptr deleters, the `gen_audio` handle wrapper).
+            // Without cxx namespaces bindgen flattens them into the same
+            // `mtmd_helper_*` names as the C API — `mtmd_helper::gen_audio`
+            // collides with the opaque C `struct mtmd_helper_gen_audio` — and
+            // they are unusable from Rust anyway.
+            .blocklist_type("mtmd_helper::.*")
+            .blocklist_item("mtmd_helper::.*")
+            .no_partialeq("mtmd_context_params");
+    }
+
+    let bindings = builder
+        // .layout_tests(false)
+        // .derive_default(true)
+        // .enable_cxx_namespaces()
+        .use_core()
+        .prepend_enum_name(false)
+        .generate()
+        .expect("Failed to generate bindings");
+
+    // Write the generated bindings to an output file
+    let bindings_path = out_dir.join("bindings.rs");
+    bindings
+        .write_to_file(bindings_path.clone())
+        .expect("Failed to write bindings");
+
+    // temporary fix for https://github.com/rust-lang/rust/issues/123743 in
+    // cargo +nightly build
+    let contents = std::fs::read_to_string(bindings_path.clone()).unwrap();
+    let contents = contents.replace("unsafe extern \"C\" {", " extern \"C\" {");
+    fs::write(bindings_path, contents).unwrap();
+
+    println!("cargo:rerun-if-changed=wrapper.h");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_DIR");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_SHARED");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_TAG");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_REPO");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_URL");
+    println!("cargo:rerun-if-env-changed=LLAMA_PREBUILT_OFF");
+    println!("cargo:rerun-if-env-changed=LLAMA_PATCH_ENGINE");
+    println!("cargo:rerun-if-env-changed=LLAMA_PATCH");
+    println!("cargo:rerun-if-env-changed=PATCH");
+    // `LLAMA_*` CMake options are forwarded generically and emit their own
+    // rerun-if-env-changed lines; see `forward_llama_cmake_options`.
+    println!("cargo:rerun-if-env-changed=LLAMA_OPENSSL");
+
+    // Rerun if prebuilt feature is toggled
+    #[cfg(feature = "prebuilt")]
+    println!("cargo:rustc-cfg=llama_prebuilt_enabled");
+
+    debug_log!("Bindings Created");
+
+    // Print build progress information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!(
+            "cargo:warning=[BUILD] Build configuration completed in {:?}",
+            start_time.elapsed()
+        );
+    }
+
+    // ── Optional prebuilt path (skip CMake compile) ─────────────────────────
+    //
+    // When LLAMA_PREBUILT_DIR points to a directory containing precompiled
+    // llama/ggml libraries, use those directly and skip the full CMake build.
+    // Expected layout is flexible; files may be in <dir>, <dir>/lib,
+    // <dir>/lib64, or <dir>/bin.
+
+    // A prebuilt archive is safe only when it contains the same patched
+    // native implementation as the headers and shim compiled in this build.
+    // Existing 0.4.2 archives do not carry a patch identity, so fail closed
+    // for explicit paths and make the convenience feature use the verified
+    // source build while exact patches are active.
+    let prebuilt_dir = if staged_any {
+        if let Ok(path) = env::var("LLAMA_PREBUILT_DIR") {
+            panic!(
+                "LLAMA_PREBUILT_DIR='{path}' cannot be verified against the active llama.cpp patches; use the source build"
+            );
+        }
+        if cfg!(feature = "prebuilt") {
+            println!(
+                "cargo:warning=The active llama.cpp patches have no prebuilt identity envelope; falling back to the verified source build"
+            );
+        }
+        None
+    } else {
+        resolve_prebuilt_directory(&target, build_shared_libs)
+    };
+
+    // Try prebuilt path (explicit LLAMA_PREBUILT_DIR or `prebuilt` feature download).
+    if let Some(prebuilt_dir) = prebuilt_dir {
+        if prebuilt_dir.exists() {
+            let use_shared_libs = env::var("LLAMA_PREBUILT_SHARED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+                .unwrap_or(build_shared_libs);
+
+            println!(
+                "cargo:warning=Using prebuilt llama libs from {}",
+                prebuilt_dir.display()
+            );
+
+            for p in [
+                prebuilt_dir.clone(),
+                prebuilt_dir.join("lib"),
+                prebuilt_dir.join("lib64"),
+                prebuilt_dir.join("bin"),
+            ] {
+                if p.exists() {
+                    println!("cargo:rustc-link-search={}", p.display());
+                }
+            }
+
+            let llama_libs_kind = if use_shared_libs { "dylib" } else { "static" };
+            let llama_libs = extract_prebuilt_lib_names(&prebuilt_dir, use_shared_libs, &target);
+            if llama_libs.is_empty() {
+                panic!(
+                    "LLAMA_PREBUILT_DIR was set to '{}' but no linkable libraries were found",
+                    prebuilt_dir.display()
+                );
+            }
+
+            for lib in llama_libs {
+                println!("cargo:rustc-link-lib={llama_libs_kind}={lib}");
+            }
+
+            // Platform runtime links (same as normal CMake path).
+            if cfg!(feature = "openmp") && (target.contains("gnu") || target.contains("musl")) {
+                println!("cargo:rustc-link-lib=gomp");
+            }
+            if target.contains("apple") {
+                println!("cargo:rustc-link-lib=framework=Foundation");
+                if cfg!(feature = "metal") {
+                    println!("cargo:rustc-link-lib=framework=Metal");
+                    println!("cargo:rustc-link-lib=framework=MetalKit");
+                }
+                println!("cargo:rustc-link-lib=framework=Accelerate");
+                println!("cargo:rustc-link-lib=c++");
+            }
+            if target.contains("linux") {
+                println!("cargo:rustc-link-lib=dylib=stdc++");
+            }
+            if is_emscripten_target(&target) {
+                println!("cargo:rustc-link-lib=c++");
+                println!("cargo:rustc-link-lib=c++abi");
+            }
+            if target.contains("windows") && !target.contains("msvc") {
+                println!("cargo:rustc-link-lib=static=stdc++");
+                println!("cargo:rustc-link-lib=static=winpthread");
+            }
+            if target.contains("windows") {
+                println!("cargo:rustc-link-lib=advapi32");
+            }
+            if target.contains("apple") {
+                let clang_bin = env::var("CC").unwrap_or_else(|_| "clang".to_owned());
+                if let Some(path) = macos_link_search_path(&clang_bin) {
+                    println!("cargo:rustc-link-lib=clang_rt.osx");
+                    println!("cargo:rustc-link-search={}", path);
+                }
+            }
+
+            // Copy dynamic runtime assets next to test/example/app outputs.
+            if use_shared_libs {
+                // Prebuilt archives carry the same `@rpath/…` install names the
+                // CMake build produces, so they need the same rewrite — see
+                // `make_shared_libs_loader_relative`.
+                make_shared_libs_loader_relative(
+                    &[
+                        prebuilt_dir.clone(),
+                        prebuilt_dir.join("lib"),
+                        prebuilt_dir.join("lib64"),
+                        prebuilt_dir.join("bin"),
+                    ],
+                    &target,
+                );
+
+                let libs_assets = extract_prebuilt_shared_assets(&prebuilt_dir, &target);
+                for asset in libs_assets {
+                    let filename = asset
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .expect("invalid prebuilt asset file name");
+
+                    // Follow symlinks so the destination is a real file under
+                    // the (possibly versioned) name the loader will request.
+                    let src = std::fs::canonicalize(&asset).unwrap_or_else(|_| asset.clone());
+
+                    for dst in [
+                        target_dir.join(filename),
+                        target_dir.join("examples").join(filename),
+                        target_dir.join("deps").join(filename),
+                    ] {
+                        if let Some(parent) = dst.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if !dst.exists() {
+                            let _ = std::fs::hard_link(&src, &dst)
+                                .or_else(|_| std::fs::copy(&src, &dst).map(|_| ()));
+                        }
+                    }
+                }
+            }
+
+            compile_shims(Path::new(&manifest_dir), &llama_dst, &target);
+            return;
+        }
+
+        if env::var("LLAMA_PREBUILT_DIR").is_ok() {
+            panic!(
+                "LLAMA_PREBUILT_DIR was set to '{}' but that path does not exist",
+                prebuilt_dir.display()
+            );
+        }
+
+        println!(
+            "cargo:warning=Prebuilt path '{}' is missing; falling back to local compile",
+            prebuilt_dir.display()
+        );
+    }
+
+    // Print build start information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!("cargo:warning=[BUILD] Starting CMake build...");
+    }
+
+    // ── CMake build ──────────────────────────────────────────────────────────
+
+    let mut config = Config::new(&llama_dst);
+
+    // Prefer Ninja generator if available for faster builds
+    if command_exists("ninja") {
+        debug_log!("Ninja detected, using Ninja generator for CMake");
+        config.generator("Ninja");
+    }
+    config.build_arg(format!("-j{parallel}"));
+
+    // Homebrew OpenMP support for macOS (auto-detect prefix for CI and local)
+    if target.contains("apple") && cfg!(feature = "openmp") {
+        use std::path::Path;
+        let omp_prefix = if Path::new("/opt/homebrew/opt/libomp").exists() {
+            "/opt/homebrew/opt/libomp"
+        } else if Path::new("/usr/local/opt/libomp").exists() {
+            "/usr/local/opt/libomp"
+        } else {
+            println!("cargo:warning=libomp not found in Homebrew default locations. Please install libomp via Homebrew.");
+            ""
+        };
+        if !omp_prefix.is_empty() {
+            println!("cargo:rustc-link-search=native={}/lib", omp_prefix);
+            println!("cargo:rustc-link-lib=dylib=omp");
+            config.cflag(format!("-I{}/include", omp_prefix));
+            config.cxxflag(format!("-I{}/include", omp_prefix));
+            config.env("LDFLAGS", format!("-L{}/lib", omp_prefix));
+            config.env("DYLD_LIBRARY_PATH", format!("{}/lib", omp_prefix));
+        }
+    }
+
+    // ── sccache launcher ────────────────────────────────────────────────────
+    // When sccache is on PATH (or SCCACHE_PATH is set) and the caller has not
+    // explicitly disabled it (LLAMA_NO_SCCACHE=1), wrap every C/C++ compiler
+    // call with sccache.  This makes feature-flag toggles essentially free
+    // after the first build: toggling --features q1 only recompiles the ~5
+    // files changed by the patch; the other 459 are cache hits.
+    if env::var("LLAMA_NO_SCCACHE").as_deref() != Ok("1") {
+        let sccache = env::var("SCCACHE_PATH")
+            .ok()
+            .map(PathBuf::from)
+            .filter(|p| p.exists())
+            .or_else(|| {
+                let exe = if cfg!(windows) {
+                    "sccache.exe"
+                } else {
+                    "sccache"
+                };
+                env::var_os("PATH").and_then(|paths| {
+                    std::env::split_paths(&paths)
+                        .map(|d| d.join(exe))
+                        .find(|p| p.exists())
+                })
+            });
+        if let Some(sc) = sccache {
+            debug_log!("sccache found at {}", sc.display());
+            config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
+            config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
+        }
+    }
+
+    // Enable mold linker for faster linking on Linux
+    if target.contains("linux") && command_exists("mold") {
+        debug_log!("Using mold linker for faster linking");
+        config.define("CMAKE_EXE_LINKER_FLAGS", "-fuse-ld=mold");
+        config.define("CMAKE_SHARED_LINKER_FLAGS", "-fuse-ld=mold");
+        config.define("CMAKE_MODULE_LINKER_FLAGS", "-fuse-ld=mold");
+    }
+
+    // Would require extra source files to pointlessly
+    // be included in what's uploaded to and downloaded from
+    // crates.io, so deactivating these instead
+    config.define("LLAMA_BUILD_TESTS", "OFF");
+    config.define("LLAMA_BUILD_EXAMPLES", "OFF");
+    config.define("LLAMA_BUILD_SERVER", "OFF");
+    // The OUT_DIR copy is a top-level CMake project (LLAMA_STANDALONE=ON), so
+    // LLAMA_BUILD_APP defaults ON upstream; we only need the library.
+    config.define("LLAMA_BUILD_APP", "OFF");
+
+    // Pass through any other `LLAMA_*` option the project configured — in
+    // `llama-cpp.toml`, in `[package.metadata.llama_cpp_sys.cmake]`, or in the
+    // environment — so upstream's own options are reachable without this crate
+    // growing a feature per option. `LLAMA_OPENSSL=OFF` is the motivating case:
+    // upstream defaults it ON, so any OpenSSL CMake can find gets linked into
+    // common, a second TLS stack that applications downloading models
+    // themselves never use but must still ship and patch. `LLAMA_CURL=OFF` and
+    // friends work the same way. See `llama_cmake_options`.
+    forward_llama_cmake_options(&mut config, &target);
+
+    // Disable expensive CMake tests and checks for faster builds
+    config.define("CMAKE_SKIP_INSTALL_RPATH", "ON");
+    config.define("CMAKE_SKIP_RPATH", "ON");
+
+    // Enable faster compilation by reducing debug info in release builds
+    if profile != "Debug" {
+        config.define("CMAKE_C_FLAGS_RELEASE", "-O3 -DNDEBUG");
+        config.define("CMAKE_CXX_FLAGS_RELEASE", "-O3 -DNDEBUG");
+    }
+
+    // Enable faster CMake configuration by disabling expensive checks
+    // that aren't needed for production builds
+    if profile != "Debug" {
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Doxygen", "ON");
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Python", "ON");
+        config.define("CMAKE_DISABLE_FIND_PACKAGE_Git", "ON");
+    }
+
+    // The speculative-session shim calls llama.cpp's `common_speculative_*`
+    // implementation, which lives in llama-common. Build that library for
+    // every source configuration so downstream binaries cannot compile the
+    // shim and then fail to link its implementation. Tools (including mtmd)
+    // remain opt-in.
+    config.define("LLAMA_BUILD_COMMON", "ON");
+    if cfg!(feature = "mtmd") {
+        config.define("LLAMA_BUILD_TOOLS", "ON");
+    } else {
+        config.define("LLAMA_BUILD_TOOLS", "OFF");
+    }
+
+    config.define(
+        "BUILD_SHARED_LIBS",
+        if build_shared_libs { "ON" } else { "OFF" },
+    );
+
+    // ── Cross-compilation CMake configuration ────────────────────────────────
+    // When building for a different target than the host, tell CMake the
+    // target system so that it does not auto-detect the host as the target.
+    // Android is handled separately below via its NDK toolchain file.
+    if is_cross && !target.contains("android") && !is_emscripten {
+        let system_name = cmake_system_name(&target);
+        let system_processor = cmake_system_processor(&target);
+        debug_log!("Cross-compiling: CMAKE_SYSTEM_NAME={system_name} CMAKE_SYSTEM_PROCESSOR={system_processor}");
+        config.define("CMAKE_SYSTEM_NAME", system_name);
+        config.define("CMAKE_SYSTEM_PROCESSOR", &system_processor);
+
+        // CMake only sets CMAKE_CROSSCOMPILING=TRUE automatically when
+        // CMAKE_SYSTEM_NAME differs from the host OS name.  For same-OS
+        // cross-arch builds (e.g. x86_64-linux → aarch64-linux) the OS
+        // names are identical, so CMAKE_CROSSCOMPILING stays FALSE and
+        // ggml's guard (`if (CMAKE_CROSSCOMPILING)` in ggml/CMakeLists.txt)
+        // never fires — leaving GGML_NATIVE_DEFAULT=ON and causing
+        // `-march=native` (tuned for the build host) to be baked into the
+        // target binary, which crashes with SIGILL on the target.
+        // Force the flag explicitly so ggml always sees it.
+        config.define("CMAKE_CROSSCOMPILING", "TRUE");
+
+        if target.contains("apple") {
+            // ── Apple cross-arch (e.g. x86_64-apple-darwin → aarch64-apple-darwin) ──
+            //
+            // Apple's Clang is already a universal cross-compiler; switching
+            // to a different compiler binary is neither needed nor possible
+            // (there is no `aarch64-apple-darwin-gcc` in Xcode).  The right
+            // CMake knob for same-SDK Apple cross-arch builds is
+            // CMAKE_OSX_ARCHITECTURES, which makes Clang add the `-arch`
+            // flag automatically.
+            let osx_arch = if target.contains("aarch64") || target.contains("arm64") {
+                "arm64"
+            } else if target.contains("x86_64") {
+                "x86_64"
+            } else if target.contains("i686") {
+                "i386"
+            } else {
+                // Fallback: strip the vendor/OS suffix and use the raw arch.
+                target.split('-').next().unwrap_or("arm64")
+            };
+            config.define("CMAKE_OSX_ARCHITECTURES", osx_arch);
+            debug_log!("Apple cross-arch: CMAKE_OSX_ARCHITECTURES={osx_arch}");
+
+            // Propagate an explicit SDK path when the caller provides one.
+            if let Ok(sdk) = env::var("CMAKE_OSX_SYSROOT") {
+                config.define("CMAKE_OSX_SYSROOT", &sdk);
+            }
+            // Honour an explicit compiler override (e.g. osxcross), but do
+            // NOT guess a compiler name: the system Clang is always correct
+            // for same-SDK cross-arch and osxcross users set CC themselves.
+            if let Ok(cc) = env::var("CC") {
+                config.define("CMAKE_C_COMPILER", &cc);
+            }
+            if let Ok(cxx) = env::var("CXX") {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            }
+        } else {
+            // ── Non-Apple cross-compilation ───────────────────────────────────────
+            //
+            // Honour CC / CXX set by the caller (e.g. cargo cross, zig cc, …).
+            // If they are not set:
+            //  • Windows GNU targets  → derive the MinGW triple name
+            //    (e.g. x86_64-pc-windows-gnu → x86_64-w64-mingw32-gcc)
+            //  • Windows MSVC targets → no safe default; MSVC cannot
+            //    cross-compile from a non-Windows host, so the user must
+            //    supply CC/CXX (e.g. clang-cl via a sysroot).
+            //  • Everything else      → {target-triple}-gcc / g++
+            if let Ok(cc) = env::var("CC") {
+                config.define("CMAKE_C_COMPILER", &cc);
+            } else if let Some(cc) = mingw_compiler(&target, false) {
+                config.define("CMAKE_C_COMPILER", &cc);
+            } else if !target.contains("windows-msvc") {
+                config.define("CMAKE_C_COMPILER", format!("{}-gcc", target));
+            }
+
+            if let Ok(cxx) = env::var("CXX") {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            } else if let Some(cxx) = mingw_compiler(&target, true) {
+                config.define("CMAKE_CXX_COMPILER", &cxx);
+            } else if !target.contains("windows-msvc") {
+                config.define("CMAKE_CXX_COMPILER", format!("{}-g++", target));
+            }
+
+            // Propagate a sysroot when provided (e.g. via --sysroot or
+            // CARGO_TARGET_<TRIPLE>_RUSTFLAGS / CMAKE_SYSROOT env var).
+            if let Ok(sysroot) = env::var("CMAKE_SYSROOT") {
+                config.define("CMAKE_SYSROOT", &sysroot);
+            }
+        }
+    }
+
+    // ── Apple: always pin CMAKE_OSX_ARCHITECTURES ─────────────────────────
+    // When a build orchestrator (e.g. Tauri / Electron) spawns cargo with an
+    // explicit `--target aarch64-apple-darwin` on an Apple-Silicon Mac, the
+    // host and target triples are identical so `is_cross` is false.  However,
+    // the orchestrator's own process may run under Rosetta (x86_64 Node.js)
+    // or inject environment variables (ARCHFLAGS, CFLAGS with `-arch x86_64`,
+    // etc.) that leak into the cmake build.  Without an explicit architecture
+    // pin, cmake would honour those leaked flags and silently produce x86_64
+    // object code.  Rust then links that x86_64 code into the arm64 binary,
+    // and the first x86 instruction executed at runtime triggers SIGILL.
+    //
+    // Setting CMAKE_OSX_ARCHITECTURES unconditionally for all Apple targets
+    // — even non-cross builds — ensures cmake always produces code for the
+    // correct architecture regardless of inherited environment pollution.
+    if target.contains("apple") && !is_cross {
+        let osx_arch = if target.contains("aarch64") || target.contains("arm64") {
+            "arm64"
+        } else if target.contains("x86_64") {
+            "x86_64"
+        } else {
+            target.split('-').next().unwrap_or("arm64")
+        };
+        config.define("CMAKE_OSX_ARCHITECTURES", osx_arch);
+        debug_log!("Apple native: CMAKE_OSX_ARCHITECTURES={osx_arch}");
+    }
+
+    // ── GGML_NATIVE ──────────────────────────────────────────────────────────
+    // GGML_NATIVE=ON tells ggml to detect and use the *build host's* CPU
+    // features (e.g. -march=native, check_cxx_source_runs for ARM NEON/SVE,
+    // FindSIMD.cmake for MSVC).  That is wrong for cross-compilation: the
+    // probed features belong to the build host, not the target, so the
+    // resulting binary would crash with SIGILL on a different microarch.
+    //
+    // Override the cmake default explicitly so a stale CMakeCache.txt can
+    // never re-enable it after the user switches from a native to a cross
+    // build in the same OUT_DIR.
+    let want_native = cfg!(feature = "native") && !is_cross;
+    if is_cross {
+        // Belt-and-suspenders: even though CMAKE_CROSSCOMPILING=TRUE above
+        // already causes ggml to default GGML_NATIVE to OFF, we pin it here
+        // too so the cmake crate's cache-skip path cannot resurrect a
+        // previously cached ON value.
+        config.define("GGML_NATIVE", "OFF");
+    } else if want_native {
+        // The `native` Cargo feature explicitly opts in to host-CPU
+        // optimisation for non-cross builds.
+        config.define("GGML_NATIVE", "ON");
+    } else {
+        // Default native builds to OFF so that the resulting library is
+        // portable across machines of the same architecture (matching the
+        // behaviour users expect from a Rust crate).
+        config.define("GGML_NATIVE", "OFF");
+    }
+
+    // ── ARM portable baseline ────────────────────────────────────────────────
+    // When GGML_NATIVE=OFF and no explicit GGML_CPU_ARM_ARCH is set, ggml's
+    // cmake does not emit any -march/-mcpu flag.  On Alpine/Debian GCC that
+    // is fine because GCC is configured with --with-arch=armv8-a.  But on
+    // Apple Clang the arm64-apple-macosx target triple *implicitly* defines
+    // __ARM_FEATURE_DOTPROD / __ARM_FEATURE_MATMUL_INT8 (because every
+    // M-series chip has them), so cmake's check_cxx_source_compiles sees
+    // those macros as defined and compiles dotprod/i8mm intrinsics into the
+    // ggml-cpu library — which then crashes with SIGILL on any aarch64 chip
+    // that lacks those extensions (Cortex-A53, older Graviton, etc.).
+    //
+    // Pinning GGML_CPU_ARM_ARCH=armv8-a passes -march=armv8-a to the
+    // compiler, which overrides the target-triple default and prevents any
+    // higher-arch macros from being defined.  Users who want native
+    // performance on their own machine should add --features native, which
+    // takes the GGML_NATIVE=ON path above and skips this block entirely.
+    let is_arm_target = target.starts_with("aarch64") || target.starts_with("arm");
+    if is_arm_target && !want_native && !target.contains("android") {
+        // Don't override if the caller already set a custom arch via env var
+        // (e.g. GGML_CPU_ARM_ARCH=armv8.2-a+dotprod for a specific fleet).
+        if env::var("GGML_CPU_ARM_ARCH").is_err() {
+            config.define("GGML_CPU_ARM_ARCH", "armv8-a");
+        }
+    }
+
+    // ── x86 portable baseline ─────────────────────────────────────────────
+    // When GGML_NATIVE=OFF on a *native* (non-cross) build, cmake computes
+    // GGML_NATIVE_DEFAULT=ON (because CMAKE_CROSSCOMPILING is FALSE).  The
+    // INS_ENB variable then becomes ON:
+    //
+    //   if (GGML_NATIVE OR NOT GGML_NATIVE_DEFAULT)
+    //       set(INS_ENB OFF)
+    //   else()
+    //       set(INS_ENB ON)          # ← this path
+    //   endif()
+    //
+    // This causes GGML_AVX, GGML_AVX2, GGML_FMA, GGML_F16C, GGML_BMI2,
+    // and GGML_SSE42 to all default to ON.  The resulting library is compiled
+    // with -mavx2 -mfma etc. and crashes with SIGILL ("illegal hardware
+    // instruction") on any CPU that lacks those extensions — e.g. older
+    // Pentium/Celeron, Atom, first-gen Xeon, or VMs that mask AVX.
+    //
+    // For a distributable Rust crate the default must be portable: only
+    // assume SSE4.2 (baseline for all x86_64 CPUs since Nehalem, 2008).
+    // Users who want full host-CPU optimisation should use --features native.
+    let is_x86_target =
+        target.starts_with("x86_64") || target.starts_with("i686") || target.starts_with("i586");
+    if is_x86_target && !want_native {
+        // SSE4.2 is the effective baseline for x86_64; leave it ON.
+        config.define("GGML_SSE42", "ON");
+        // Everything above SSE4.2 is not universally available — disable.
+        config.define("GGML_AVX", "OFF");
+        config.define("GGML_AVX2", "OFF");
+        config.define("GGML_AVX_VNNI", "OFF");
+        config.define("GGML_FMA", "OFF");
+        config.define("GGML_F16C", "OFF");
+        config.define("GGML_BMI2", "OFF");
+        config.define("GGML_AVX512", "OFF");
+        config.define("GGML_AVX512_VBMI", "OFF");
+        config.define("GGML_AVX512_VNNI", "OFF");
+        config.define("GGML_AVX512_BF16", "OFF");
+        config.define("GGML_AMX_TILE", "OFF");
+        config.define("GGML_AMX_INT8", "OFF");
+        config.define("GGML_AMX_BF16", "OFF");
+    }
+
+    // Disable OpenMP on 32-bit ARM Windows (compiler support is absent).
+    // Use the TARGET env var, not cfg!(), so the check works when
+    // cross-compiling from a non-Windows host.
+    if target.contains("windows") && target.starts_with("arm") && !target.starts_with("aarch64") {
+        config.define("GGML_OPENMP", "OFF");
+    }
+
+    // static_crt (MSVC /MT vs /MD) is meaningless for MinGW; only set it for
+    // MSVC targets to avoid confusing CMake on windows-gnu cross builds.
+    if target.contains("windows-msvc") {
+        config.static_crt(static_crt);
+    }
+
+    if target.contains("android") && target.contains("aarch64") {
+        // build flags for android taken from this doc
+        // https://github.com/ggerganov/llama.cpp/blob/master/docs/android.md
+        let android_ndk = env::var("ANDROID_NDK")
+            .expect("Please install Android NDK and ensure that ANDROID_NDK env variable is set");
+        config.define(
+            "CMAKE_TOOLCHAIN_FILE",
+            format!("{android_ndk}/build/cmake/android.toolchain.cmake"),
+        );
+        config.define("ANDROID_ABI", "arm64-v8a");
+        config.define("ANDROID_PLATFORM", "android-28");
+        config.define("CMAKE_SYSTEM_PROCESSOR", "arm64");
+        config.define("CMAKE_C_FLAGS", "-march=armv8.7a");
+        config.define("CMAKE_CXX_FLAGS", "-march=armv8.7a");
+        config.define("GGML_OPENMP", "OFF");
+        config.define("GGML_LLAMAFILE", "OFF");
+    }
+
+    if is_emscripten {
+        configure_emscripten(&mut config, &target);
+    }
+
+    let mut enable_metal = cfg!(feature = "metal");
+
+    if cfg!(feature = "vulkan") {
+        // On macOS, allow `--features vulkan` to gracefully fall back to
+        // Metal when Vulkan SDK tooling is not available.
+        if target.contains("apple") && !apple_vulkan_available() {
+            println!(
+                "cargo:warning=Vulkan SDK not found or incomplete on macOS (need VULKAN_SDK, Vulkan headers/library, and glslc). Falling back to Metal backend."
+            );
+            config.define("GGML_VULKAN", "OFF");
+            enable_metal = true;
+        } else {
+            config.define("GGML_VULKAN", "ON");
+        }
+
+        if target.contains("windows") {
+            let vulkan_path = find_vulkan_sdk_windows()
+                .expect("Could not find Vulkan SDK. Please install it from https://vulkan.lunarg.com/sdk/home and either set the VULKAN_SDK environment variable or install to the default C:\\VulkanSDK\\ location.");
+            debug_log!("Vulkan SDK: {}", vulkan_path.display());
+            let vulkan_lib_path =
+                find_child_dir_ci(&vulkan_path, "lib").unwrap_or_else(|| vulkan_path.join("Lib"));
+            println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
+            println!("cargo:rustc-link-lib=vulkan-1");
+            // Ensure CMake can also find the SDK.
+            // Set both the CMake variable and the environment variable –
+            // FindVulkan.cmake reads the *environment* variable VULKAN_SDK,
+            // not the CMake cache variable.
+            config.define("VULKAN_SDK", vulkan_path.to_str().unwrap());
+            unsafe { env::set_var("VULKAN_SDK", &vulkan_path) };
+
+            // Explicitly point CMake at the Vulkan components so that
+            // FindVulkan.cmake succeeds even when the SDK's Bin directory
+            // (containing glslc) is not on PATH.
+            //
+            // We search for each component with case-insensitive directory
+            // matching so the build works regardless of the SDK layout
+            // (e.g. "Include" vs "include", "Lib" vs "lib").
+            if let Some(inc) = find_child_dir_ci(&vulkan_path, "include") {
+                config.define("Vulkan_INCLUDE_DIR", inc.to_str().unwrap());
+            }
+            if let Some(lib) = find_file_ci(&vulkan_lib_path, "vulkan-1.lib") {
+                config.define("Vulkan_LIBRARY", lib.to_str().unwrap());
+            }
+            if let Some(glslc) = find_glslc(&vulkan_path) {
+                config.define("Vulkan_GLSLC_EXECUTABLE", glslc.to_str().unwrap());
+            }
+            // ggml-vulkan uses find_package(SPIRV-Headers CONFIG). The LunarG
+            // SDK ships SPIRV-HeadersConfig.cmake under SPIRV-Headers/; point
+            // CMake at it explicitly (same as macOS ci/run.sh) so source builds
+            // work without a system spirv-headers package.
+            let spirv_headers_dir = vulkan_path.join("SPIRV-Headers");
+            if spirv_headers_dir.join("SPIRV-HeadersConfig.cmake").exists() {
+                config.define("SPIRV-Headers_DIR", spirv_headers_dir.to_str().unwrap());
+            }
+            config.define("CMAKE_PREFIX_PATH", vulkan_path.to_str().unwrap());
+        }
+
+        if target.contains("linux") {
+            println!("cargo:rustc-link-lib=vulkan");
+        }
+    }
+
+    if enable_metal {
+        config.define("GGML_METAL", "ON");
+    } else {
+        config.define("GGML_METAL", "OFF");
+    }
+
+    if cfg!(feature = "webgpu") {
+        config.define("GGML_WEBGPU", "ON");
+    } else {
+        config.define("GGML_WEBGPU", "OFF");
+    }
+
+    if cfg!(feature = "blas") {
+        config.define("GGML_BLAS", "ON");
+    } else {
+        config.define("GGML_BLAS", "OFF");
+    }
+
+    if cfg!(feature = "opencl") {
+        config.define("GGML_OPENCL", "ON");
+    } else {
+        config.define("GGML_OPENCL", "OFF");
+    }
+
+    if cfg!(feature = "hip") {
+        config.define("GGML_HIP", "ON");
+    } else {
+        config.define("GGML_HIP", "OFF");
+    }
+
+    if cfg!(feature = "cuda") && !cfg!(target_os = "macos") {
+        config.define("GGML_CUDA", "ON");
+    }
+
+    if cfg!(feature = "openmp") {
+        config.define("GGML_OPENMP", "ON");
+    } else {
+        config.define("GGML_OPENMP", "OFF");
+    }
+
+    if cfg!(feature = "mpi") {
+        config.define("LLAMA_MPI", "ON");
+    }
+
+    if cfg!(feature = "rpc") {
+        config.define("GGML_RPC", "ON");
+    }
+
+    // General
+    config
+        .out_dir(&cmake_out_dir)
+        .profile(&profile)
+        .very_verbose(std::env::var("CMAKE_VERBOSE").is_ok()) // Not verbose by default
+        .always_configure(false);
+
+    // The cmake crate skips re-configuration when CMakeCache.txt already exists
+    // (always_configure = false).  Detect and clear any stale cache that
+    // would cause the wrong cmake settings to be used:
+    //
+    //  1. CMakeCache.txt exists but no Makefile / build.ninja: the previous
+    //     configure run was interrupted.  cmake --build would fail with "No
+    //     such file or directory".
+    //
+    //  2. CMakeCache.txt contains an option that conflicts with this build.rs:
+    //     this happens when build.rs changes without a crate-version bump, so
+    //     Cargo reuses the output directory and the cmake crate skips
+    //     configuration entirely.
+    {
+        let cmake_build_dir = cmake_out_dir.join("build");
+        let cache = cmake_build_dir.join("CMakeCache.txt");
+        if cache.exists() {
+            let has_makefile = cmake_build_dir.join("Makefile").exists();
+            let has_ninja = cmake_build_dir.join("build.ninja").exists();
+            if !has_makefile && !has_ninja {
+                debug_log!(
+                    "CMakeCache.txt exists but no Makefile/build.ninja found — \
+                     removing cache to force reconfiguration"
+                );
+                std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
+            } else {
+                // Check whether the cached GGML_NATIVE value matches what we
+                // are about to configure.  A mismatch means a previous build
+                // used a different build.rs (or a different `native` feature
+                // state) and the cmake crate's cache-skip path will silently
+                // use the wrong value.
+                let desired_native_str = if want_native { "ON" } else { "OFF" };
+                let cache_contents = std::fs::read_to_string(&cache).unwrap_or_default();
+
+                // 2a. GGML_NATIVE mismatch.
+                let cached_native_on = cache_contents.contains("GGML_NATIVE:BOOL=ON");
+                let cached_native_off = cache_contents.contains("GGML_NATIVE:BOOL=OFF");
+                let native_mismatch =
+                    (want_native && cached_native_off) || (!want_native && cached_native_on);
+
+                // 2b. llama-common supplies the implementation behind the
+                //     always-built speculative-session shim.
+                let common_mismatch = !cache_contents.contains("LLAMA_BUILD_COMMON:BOOL=ON");
+
+                // 2c. GGML_CPU_ARM_ARCH in cache doesn't match what we intend
+                //     to set (ARM non-native non-android builds).  Without an
+                //     explicit -march flag, Apple Clang silently enables
+                //     dotprod/i8mm for arm64-apple-macosx targets, producing
+                //     a binary that crashes with SIGILL on older ARMv8 chips.
+                //
+                //     The cache entry looks like "GGML_CPU_ARM_ARCH:STRING="
+                //     (empty) when cmake used its default.  We want "armv8-a".
+                let is_arm_target_local =
+                    target.starts_with("aarch64") || target.starts_with("arm");
+                let we_set_arm_arch = is_arm_target_local
+                    && !want_native
+                    && !target.contains("android")
+                    && env::var("GGML_CPU_ARM_ARCH").is_err();
+                // Extract the cached GGML_CPU_ARM_ARCH value.  The line is
+                // "GGML_CPU_ARM_ARCH:STRING=<value>" so we look for that prefix.
+                let cached_arm_arch = cache_contents
+                    .lines()
+                    .find(|l| l.starts_with("GGML_CPU_ARM_ARCH:"))
+                    .and_then(|l| l.split_once('=').map(|x| x.1))
+                    .unwrap_or("");
+                let arm_arch_mismatch = we_set_arm_arch && cached_arm_arch != "armv8-a";
+
+                // 2d. x86 ISA options: when !want_native on x86, we now
+                //     force AVX/AVX2/FMA/F16C/BMI2 to OFF.  A stale cache
+                //     from a previous build (or from before this fix) may
+                //     still have them ON, causing SIGILL on older CPUs.
+                let is_x86_target_local = target.starts_with("x86_64")
+                    || target.starts_with("i686")
+                    || target.starts_with("i586");
+                let x86_isa_mismatch = is_x86_target_local && !want_native && {
+                    // Check if any of the ISA options we now force OFF are
+                    // still cached as ON.
+                    let stale_options = [
+                        "GGML_AVX:BOOL=ON",
+                        "GGML_AVX2:BOOL=ON",
+                        "GGML_FMA:BOOL=ON",
+                        "GGML_F16C:BOOL=ON",
+                        "GGML_BMI2:BOOL=ON",
+                    ];
+                    stale_options.iter().any(|opt| cache_contents.contains(opt))
+                };
+
+                // 2e. GGML_METAL mismatch: on macOS, llama.cpp defaults
+                //     GGML_METAL to ON, so a stale cache from a previous
+                //     `--features metal` build (or from the cmake default)
+                //     would keep Metal enabled even when the feature is off.
+                let metal_mismatch = {
+                    let cached_metal_on = cache_contents.contains("GGML_METAL:BOOL=ON");
+                    let cached_metal_off = cache_contents.contains("GGML_METAL:BOOL=OFF");
+                    (enable_metal && cached_metal_off) || (!enable_metal && cached_metal_on)
+                };
+
+                // 2f. GGML_WEBGPU mismatch: stale cache may keep WebGPU ON/OFF
+                //     after feature toggles.
+                let webgpu_mismatch = {
+                    let cached_webgpu_on = cache_contents.contains("GGML_WEBGPU:BOOL=ON");
+                    let cached_webgpu_off = cache_contents.contains("GGML_WEBGPU:BOOL=OFF");
+                    (cfg!(feature = "webgpu") && cached_webgpu_off)
+                        || (!cfg!(feature = "webgpu") && cached_webgpu_on)
+                };
+
+                // 2g. CMAKE_OSX_ARCHITECTURES mismatch: a stale cache from
+                //     a previous build (or from an environment-polluted cmake
+                //     run) may have the wrong architecture, producing x86_64
+                //     object code in an arm64 binary (or vice versa).
+                let osx_arch_mismatch = target.contains("apple") && {
+                    let want_arch = if target.contains("aarch64") || target.contains("arm64") {
+                        "arm64"
+                    } else if target.contains("x86_64") {
+                        "x86_64"
+                    } else {
+                        ""
+                    };
+                    if !want_arch.is_empty() {
+                        cache_contents
+                            .lines()
+                            .find(|l| l.starts_with("CMAKE_OSX_ARCHITECTURES:"))
+                            .and_then(|l| l.split_once('=').map(|x| x.1))
+                            .map(|cached| cached != want_arch)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
+                };
+
+                let mismatch = native_mismatch
+                    || common_mismatch
+                    || arm_arch_mismatch
+                    || x86_isa_mismatch
+                    || metal_mismatch
+                    || webgpu_mismatch
+                    || osx_arch_mismatch;
+                if mismatch {
+                    debug_log!(
+                        "CMakeCache.txt is stale (GGML_NATIVE: cache={} want={}; \
+                         LLAMA_BUILD_COMMON mismatch={}; \
+                         GGML_CPU_ARM_ARCH: cache={:?} want={}) — removing cache \
+                         to force reconfiguration",
+                        if cached_native_on {
+                            "ON"
+                        } else if cached_native_off {
+                            "OFF"
+                        } else {
+                            "?"
+                        },
+                        desired_native_str,
+                        common_mismatch,
+                        cached_arm_arch,
+                        if we_set_arm_arch {
+                            "armv8-a"
+                        } else {
+                            "(not set)"
+                        },
+                    );
+                    std::fs::remove_file(&cache).expect("failed to remove stale CMakeCache.txt");
+                }
+            }
+        }
+    }
+
+    let build_dir = config.build();
+
+    // ── Link search paths ────────────────────────────────────────────────────
+    println!(
+        "cargo:rustc-link-search={}",
+        cmake_out_dir.join("lib").display()
+    );
+    println!(
+        "cargo:rustc-link-search={}",
+        cmake_out_dir.join("lib64").display()
+    );
+    println!("cargo:rustc-link-search={}", build_dir.display());
+
+    // ── Link libraries ───────────────────────────────────────────────────────
+    let llama_libs_kind = if build_shared_libs { "dylib" } else { "static" };
+    let llama_libs = extract_lib_names(&cmake_out_dir, build_shared_libs, &target);
+    assert_ne!(llama_libs.len(), 0);
+
+    for lib in &llama_libs {
+        debug_log!(
+            "LINK {}",
+            format!("cargo:rustc-link-lib={}={}", llama_libs_kind, lib)
+        );
+        println!("cargo:rustc-link-lib={llama_libs_kind}={lib}");
+    }
+
+    // llama-common-base contains build-info symbols (llama_build_number,
+    // llama_commit, etc.) required by llama-common.  CMake builds it but
+    // does not install it (no install(TARGETS ...) directive), so it lives
+    // only in the build tree.  Add the search path and link it explicitly.
+    if !build_shared_libs {
+        let common_build_dir = cmake_out_dir.join("build").join("common");
+        if common_build_dir.exists() && !llama_libs.iter().any(|l| l == "llama-common-base") {
+            println!(
+                "cargo:rustc-link-search=native={}",
+                common_build_dir.display()
+            );
+            println!("cargo:rustc-link-lib=static=llama-common-base");
+        }
+    }
+
+    compile_shims(Path::new(&manifest_dir), &llama_dst, &target);
+
+    // OpenMP: link gomp when the cmake build enabled it (GGML_OPENMP_ENABLED=ON).
+    // This can happen even without the "openmp" feature because cmake's FindOpenMP
+    // is invoked unconditionally on some platforms (e.g. ARM) when the
+    // ggml-cpu CMakeLists includes OpenMP support at the variant level.
+    let cmake_cache_path = cmake_out_dir.join("build").join("CMakeCache.txt");
+    let openmp_enabled_in_cmake = std::fs::read_to_string(&cmake_cache_path)
+        .map(|contents| contents.contains("GGML_OPENMP_ENABLED:INTERNAL=ON"))
+        .unwrap_or(false);
+
+    if (cfg!(feature = "openmp") || openmp_enabled_in_cmake)
+        && (target.contains("gnu") || target.contains("musl"))
+    {
+        if crt_static && target.contains("linux") {
+            // Add GCC lib dir so the linker can find libgomp.a
+            if let Some(gcc_lib) = find_libgomp_lib_dir() {
+                println!("cargo:rustc-link-search=native={}", gcc_lib);
+            }
+            println!("cargo:rustc-link-lib=static=gomp");
+        } else {
+            println!("cargo:rustc-link-lib=gomp");
+        }
+    }
+
+    // Removed: Rust already links the appropriate CRT. Explicitly linking
+    // msvcrtd causes CRT mismatch when another crate (e.g. whisper-rs) links
+    // the release CRT — both msvcrt and msvcrtd get loaded into the same
+    // process, corrupting the file descriptor table and causing
+    // `_osfile(fh) & FOPEN` assertion failures in read.cpp.
+
+    // macOS frameworks and libc++
+    if target.contains("apple") {
+        println!("cargo:rustc-link-lib=framework=Foundation");
+        if enable_metal {
+            println!("cargo:rustc-link-lib=framework=Metal");
+            println!("cargo:rustc-link-lib=framework=MetalKit");
+        }
+        println!("cargo:rustc-link-lib=framework=Accelerate");
+        println!("cargo:rustc-link-lib=c++");
+    }
+
+    // Linux libstdc++
+    if target.contains("linux") {
+        if crt_static {
+            println!("cargo:rustc-link-lib=static=stdc++");
+        } else {
+            println!("cargo:rustc-link-lib=dylib=stdc++");
+        }
+    }
+
+    // rustc links Emscripten targets through `emcc`, the C driver. `em++` would
+    // add the C++ runtime on its own; `emcc` does not, so without these every
+    // `operator new` / `std::__2::*` reference in ggml and llama comes out
+    // undefined at `wasm-ld` time.
+    if is_emscripten_target(&target) {
+        println!("cargo:rustc-link-lib=c++");
+        println!("cargo:rustc-link-lib=c++abi");
+    }
+
+    // Windows MinGW (GCC-based, not MSVC): link the C++ and threading runtimes.
+    // MSVC handles its own C++ runtime via the CRT; MinGW needs explicit flags
+    // because Rust's linker driver does not add them automatically.
+    // `winpthread` provides POSIX threading support on Windows with MinGW.
+    if target.contains("windows") && !target.contains("msvc") {
+        println!("cargo:rustc-link-lib=static=stdc++");
+        println!("cargo:rustc-link-lib=static=winpthread");
+    }
+
+    // ggml-cpu.cpp uses Windows Registry APIs (RegOpenKeyExA, RegQueryValueExA,
+    // RegCloseKey) to detect CPU features. These live in advapi32.lib which is
+    // not linked by default by Rust's linker driver on Windows.
+    if target.contains("windows") {
+        println!("cargo:rustc-link-lib=advapi32");
+    }
+
+    // On (older) macOS / Apple targets we may need to link against the clang
+    // runtime, which is hidden in a non-default path.
+    // More details at https://github.com/alexcrichton/curl-rust/issues/279.
+    if target.contains("apple") {
+        // For same-SDK Apple cross-arch builds (e.g. x86_64-apple-darwin →
+        // aarch64-apple-darwin) the host's plain `clang` is still the right
+        // binary to ask: both arches share the same Xcode SDK and therefore
+        // the same library search directories.
+        //
+        // For osxcross (Linux → macOS) the user sets CC, so we honour that;
+        // we do NOT guess a `{target}-clang` name because it is not a stable
+        // convention and the SDK paths it would report are likely wrong anyway.
+        let clang_bin = env::var("CC").unwrap_or_else(|_| "clang".to_owned());
+        if let Some(path) = macos_link_search_path(&clang_bin) {
+            println!("cargo:rustc-link-lib=clang_rt.osx");
+            println!("cargo:rustc-link-search={}", path);
+        }
+    }
+
+    // ── Copy shared-library assets to the Cargo target directory ─────────────
+    if build_shared_libs {
+        // Must run before the dependent binary is linked: rustc records the
+        // dylib's install name at link time, so the rewrite has to land on the
+        // libraries in the link-search directories first.
+        make_shared_libs_loader_relative(
+            &[
+                cmake_out_dir.join("lib"),
+                cmake_out_dir.join("lib64"),
+                build_dir.clone(),
+            ],
+            &target,
+        );
+
+        let libs_assets = extract_lib_assets(&cmake_out_dir, &target);
+        for asset in libs_assets {
+            let asset_clone = asset.clone();
+            let filename = asset_clone.file_name().unwrap();
+            let filename = filename.to_str().unwrap();
+
+            // Follow symlinks to the real library file. On Linux the SONAME
+            // entry (e.g. `libggml-base.so.0`) and the dev entry
+            // (`libggml-base.so`) are usually symlinks pointing at the real
+            // versioned file. We want the destination to be a real file / hard
+            // link carrying the exact (possibly versioned) name, so the loader
+            // can resolve it without the rest of the symlink chain being
+            // present.
+            let asset = std::fs::canonicalize(&asset).unwrap_or(asset);
+
+            // Helper: remove stale destination before hard-linking.
+            // On Linux, cmake creates versioned symlink chains (e.g. libllama.so -> libllama.so.0).
+            // When the library version changes between builds, these become broken symlinks.
+            // Path::exists() returns false for broken symlinks, but hard_link() still fails
+            // with EEXIST because the directory entry is occupied. Using symlink_metadata()
+            // detects both regular files and symlinks (broken or valid).
+            let force_hard_link = |src: &Path, dst: &Path| {
+                if let Some(parent) = dst.parent() {
+                    std::fs::create_dir_all(parent).unwrap_or_else(|error| {
+                        panic!(
+                            "Failed to create shared-library destination {}: {error}",
+                            parent.display()
+                        )
+                    });
+                }
+                if dst.symlink_metadata().is_ok() {
+                    let _ = std::fs::remove_file(dst);
+                }
+                // Try hard link first, fall back to copy if it fails (e.g., cross-device)
+                if let Err(e) = std::fs::hard_link(src, dst) {
+                    debug_log!(
+                        "Hard link failed ({:?}), falling back to copy: {} -> {}",
+                        e,
+                        src.display(),
+                        dst.display()
+                    );
+                    if let Err(copy_err) = std::fs::copy(src, dst) {
+                        panic!("Failed to copy file after hard link failed: {:?}. Original hard link error: {:?}", copy_err, e);
+                    }
+                }
+            };
+
+            let dst = target_dir.join(filename);
+            debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
+            force_hard_link(&asset, &dst);
+
+            // Copy DLLs to examples as well
+            if target_dir.join("examples").exists() {
+                let dst = target_dir.join("examples").join(filename);
+                debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
+                force_hard_link(&asset, &dst);
+            }
+
+            // Copy DLLs to target/profile/deps as well for tests
+            let dst = target_dir.join("deps").join(filename);
+            debug_log!("HARD LINK {} TO {}", asset.display(), dst.display());
+            force_hard_link(&asset, &dst);
+        }
+    }
+
+    // Print build completion information
+    if std::env::var("BUILD_DEBUG").is_ok() {
+        println!(
+            "cargo:warning=[BUILD] Build completed successfully in {:?}",
+            start_time.elapsed()
+        );
+        println!("cargo:warning=[BUILD] Libraries built: {:?}", llama_libs);
+    }
+}

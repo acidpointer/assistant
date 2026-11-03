@@ -1,0 +1,304 @@
+# Binding fork maintenance
+
+Status: current. Read this before changing anything under `crates/llama_cpp/` or
+`crates/llama_cpp_sys/`.
+
+The binding layer is a maintained fork, not an upstream mirror. It must stay
+safe, buildable, and compatible with the pinned llama.cpp revision. Application
+logic belongs elsewhere; see `../AGENTS.md` §2.
+
+## 1. Scope and provenance
+
+- Rust crates are ported from
+  [eugenehp/llama-cpp-rs](https://github.com/eugenehp/llama-cpp-rs) revision
+  `1d62841020af8a309ab749b64ac3688919f383df` (0.9.0).
+- The native source is `crates/llama_cpp_sys/llama.cpp`, pinned to
+  `a34de8618b25dfc32ee43749db47d767a9f0a25d` (`b12015`, upstream HEAD on
+  2026-10-30), including LFM3 architecture support.
+- The submodule is kept pristine. Local native changes are patches and shims
+  applied by the build script to a copy of the source.
+- Licenses are retained per crate. Do not remove or replace them.
+
+## 2. Layout
+
+| Path | Purpose |
+| --- | --- |
+| `crates/llama_cpp_sys/llama.cpp/` | Pinned upstream source. Treat as read-only. |
+| `crates/llama_cpp_sys/patches/` | Build-time patches applied to an OUT_DIR copy. |
+| `crates/llama_cpp_sys/chat_shim/` | C ABI over `common/chat.h` and JSON-schema-to-grammar. |
+| `crates/llama_cpp_sys/common_shim/` | C ABI over common sampler, n-gram, and related helpers. |
+| `crates/llama_cpp_sys/ext_shim/` | C ABI for C++-only helpers: memory breakdown, fit, vector-returning APIs. |
+| `crates/llama_cpp_sys/mtp_shim/` | C ABI over `common/speculative.cpp` for MTP support. |
+| `crates/llama_cpp_sys/shim_support/` | Shared status enum, thread-local error buffer, helper macros. |
+| `crates/llama_cpp_sys/build.rs` | Copies source, applies patches, drives CMake, runs bindgen, builds shims. |
+| `crates/llama_cpp_sys/wrapper.h` | Bindgen entry point. |
+| `crates/llama_cpp/src/` | Safe Rust wrappers. |
+| `crates/llama_cpp/tests/` | Behavior, ABI, and model-gated integration tests. |
+
+## 3. Build pipeline
+
+At a high level:
+
+1. Read the submodule revision and a hash of the active patch set.
+2. Copy `llama.cpp` into the cargo `OUT_DIR`.
+3. Apply `patches/*.patch` to that copy, never to the submodule.
+4. Configure and build llama/ggml with CMake.
+5. Generate FFI with bindgen against the patched headers.
+6. Compile the C++ shims and link the static libraries.
+7. Expose the generated symbols through `llama_cpp_sys` and safe wrappers.
+
+The build script stores a sentinel for the source revision plus patch hash and
+re-copies when either changes. `patch_verification.rs` also reconstructs every
+touched file from pristine source with the complete ordered patch set, then
+compares it with the build copy. This verifies overlapping patches as one
+composed result and rejects partial applications and unrelated edits. If you edit `build.rs`, test both a warm build and
+a clean build; cache assumptions are easy to break.
+
+### Existing debt
+
+`build.rs` still contains `expect`/`panic` paths from the ported build script.
+They are known debt. New code must not add more; prefer returning a diagnostic
+`Result` from helper functions and exiting nonzero with a clear message. Do not
+expand a panic path just because it is nearby.
+
+## 4. Patches
+
+Patches are minimal, ordered, and applied with `-p1`. Each must explain why it
+exists and which upstream API or behavior forced it.
+
+| Patch | Purpose |
+| --- | --- |
+| `0003-exact-speculative-state.patch` | Makes speculative state restore report success/failure instead of silently doing nothing, and makes EAGLE-3 boundary state handling exact and fail-closed. |
+| `0004-exact-decode-lifecycle-hooks.patch` | Adds decode begin/end callbacks plus an ABI guard symbol, so safe callback owners (tensor transactions) can rely on exact lifecycle ordering and fail at link time against an unpatched library. |
+| `0005-fail-closed-eagle3-process.patch` | Replaces process-aborting `GGML_ABORT`/`GGML_ASSERT` paths in EAGLE-3 with recoverable errors for bad model pairs. |
+| `0006-runtime-state-safety.patch` | Appends a context-local attention-rotation opt-out with an ABI guard; synchronizes native logger pairs and confines fitting log scopes to their thread. |
+
+Rules:
+
+- Do not add a patch if a shim can solve the problem without touching upstream
+  behavior.
+- Keep hunks narrow. Do not reformat or opportunistically refactor upstream
+  code in a patch.
+- Prefer fail-closed behavior: report an error rather than continuing with
+  partially valid state.
+- Appending fields to `llama_context_params` is deliberate ABI work; document
+  offset/ABI consequences in the patch header.
+- If a patch changes public native signatures, update the safe wrapper, the
+  shim, tests, and `README.md` in the same change.
+- Re-run the relevant tests after any patch edit; a stale OUT_DIR copy can hide
+  a broken patch until a clean build.
+
+## 5. Shims
+
+Shims exist because bindgen cannot express some C++ types (vectors, strings,
+exceptions) or because a narrow, checked ABI is safer than exposing raw C++.
+
+Requirements:
+
+- Expose a narrow C ABI with explicit ownership and buffer lengths.
+- Never let a C++ exception cross the FFI boundary. Catch at the boundary and
+  convert to the shared status code plus error text.
+- Use the shared thread-local error buffer from `shim_support/`. Do not invent a
+  second error channel.
+- For variable-length output, use the size-query/fill two-call pattern already
+  used by `chat_shim` and related modules.
+- Do not return pointers to temporaries or containers that die at function exit.
+- Do not store a borrowed Rust pointer beyond the documented call.
+- Fail closed on invalid enum values, malformed JSON, interior NULs, and
+  out-of-range lengths.
+- Keep shim structs layout-stable. If a field is appended, document it and bump
+  an ABI guard when the Rust side depends on it.
+- Prefer `std::string_view`/`const char* + length` over implicit NUL-terminated
+  assumptions at the ABI.
+
+The Rust side must validate shim output: offsets, lengths, UTF-8, enum
+discriminants, and null handles. A shim returning success is not proof that the
+payload is safe.
+
+## 6. Safe wrapper rules
+
+- Every `unsafe` block needs a `SAFETY:` comment that explains the exact native
+  invariant it relies on.
+- Every `Send`/`Sync` impl needs a proof comment and, where possible, a
+  compile-time assertion or test. Native thread-safety is not implied by a
+  handle being a pointer.
+- Preserve drop order: contexts before models, models before the backend, and
+  callback state after native `llama_free`. See
+  `../crates/llama_cpp/TENSOR_TRANSACTIONS_SAFETY.md`.
+- Do not expose raw pointers in public APIs unless there is no safe alternative;
+  if you must, document lifetime and ownership precisely.
+- A wrapper may add validation, but must not silently coerce invalid values into
+  valid ones. Return a typed error.
+- If upstream returns a non-zero status, map it to a specific error variant
+  where possible; keep an `Unknown(code)` fallback for new codes.
+- Keep feature gates consistent with Cargo features and CMake options. A Rust
+  feature that does not actually reach the native build is a bug.
+
+### Native log callback
+
+`llama_cpp::logging` is the managed primitive; it is intentionally not a
+logging framework:
+
+- `logging::set_log_callback` installs a static C trampoline and stores the
+  supplied callback in process-global state.
+- Registration is persistent. Calling the setter again replaces the active
+  callback. The module does not keep a stack and does not restore the callback
+  that was active before the first Rust registration.
+- The callback receives a borrowed `&str` plus a `LogLevel`. It may run on any
+  native thread, so it must be `Send + Sync`.
+- Panics are caught at the FFI boundary; recursive logging from inside the
+  callback is dropped.
+- The mandatory native patch synchronizes global callback/user-data pairs.
+  Emission snapshots the pair, unlocks, and then calls it; first installation
+  and replacement are safe during inference.
+- Fitting helpers use scoped thread-local callbacks. Stack-local fit state is
+  never published to logging threads. Raw callbacks still require their owners
+  to retain user data until every in-flight invocation finishes.
+- Closure captures are destroyed outside the Rust state lock. The complete
+  trampoline, including in-flight capture destruction, contains unwinding.
+  Panic payloads are intentionally forgotten to prevent a second destructor
+  panic from crossing the C ABI.
+- The deprecated `LlamaBackend::void_logs` compatibility path installs a no-op
+  callback through the same setter.
+
+Do not add filtering, formatting, buffering, or `tracing` dependencies to this
+module. Bridging records into `tracing` belongs to the application.
+
+Coverage is deliberately narrow: this callback covers llama/ggml core logs. The
+`common/` logger (`runtime::log`) and the clip/mtmd logger (`mtmd_log_set`) are
+separate native sinks and are not captured by `set_log_callback`.
+
+### Ownership, allocation, and API compatibility (2026-11-03)
+
+- `LlamaBackend` has private construction and cloneable retained leases. The
+  initialization gate remains closed until final native shutdown completes.
+  Loaded, raw, and synthetic models retain the lease and release it after
+  `llama_model_free`; dropping the public handle cannot shut down a live model.
+  `init_numa` initializes the backend before NUMA, rejects the `COUNT` sentinel,
+  and reports a missing CPU backend instead of entering an asserting native API.
+- `LlamaVocab<'model>`, `GgmlTensor<'ctx>`, and `GgmlGraph<'ctx>` borrow their
+  native storage owners. ggml dependencies must belong to the same arena;
+  copying shape/type into another arena does not retain a dependency.
+- `LlamaBatch::new` and `get_one` now return `Result<_, BatchInitError>`.
+  Token batches use stable Rust-owned arrays rather than unchecked native
+  `malloc` results. Each add validates token and sequence-row capacities before
+  writing. Never free these owned arrays with `llama_batch_free`.
+- ggml constructors and metadata operations are fallible (`GgmlError`). Names
+  are owned snapshots; renaming an aliased handle cannot invalidate a borrowed
+  Rust string. Native type indices, dimensions, offsets and pool headroom are
+  checked before allocation. `GgmlAllocr` borrows its backend.
+- Raw ggml allocation and execution (`alloc_ctx_tensors`, `alloc_graph`,
+  `graph_compute`) are explicitly unsafe: external tensor-buffer lifetime and
+  initialization cannot be proven from a graph metadata handle. Keep every
+  referenced allocator and buffer alive through all later uses of its addresses.
+  Returning a graph/tensor metadata handle does not transfer buffer ownership.
+- `QuantModelDesc::build`, unsafe `load_from_file_ptr`, and unsafe
+  `init_from_user` now take a backend reference to retain initialization.
+- `set_attn_rot_disabled` stores an atomic Rust default for subsequent contexts;
+  it no longer writes the process environment. A context-local flag and an
+  externally configured `LLAMA_ATTN_ROT_DISABLE` remain independent opt-outs.
+  Native scoped state is used only during synchronous memory construction,
+  including nested KV-cache constructors. Recheck this assumption on upstream
+  updates; a shared KV cache continues to inherit its source's rotation layout.
+
+The new context field is appended after the decode hooks. All earlier field
+offsets are preserved, but struct size changes. Rust references
+`llama_cpp_rs_runtime_safety_abi_v1` so a stale library cannot silently omit this
+contract. No source inside the pinned submodule is edited. Regression coverage
+includes compile-fail lifetime examples, invalid batch dimensions/memberships,
+backend epochs/model retention, native logging races and reentrant capture
+cleanup, context rotation isolation, and composed patch verification.
+
+## 7. Features and linking
+
+- `llama_cpp` defaults to `openmp`, `mtmd`, `ggml`, and `rpc`.
+- `assistant` selects `default-features = false`; only the backend it needs
+  should be enabled.
+- Backends: `vulkan`, `cuda`, `metal`, `blas`, `opencl`, `hip`, `webgpu`.
+- `dynamic-link` builds shared libraries; static linking is the workspace
+  default. Dynamic linking needs a runtime library search path.
+- `prebuilt` is not currently usable because the required patches must be
+  applied to source. Do not present it as a supported shortcut.
+- `q1` is a compatibility no-op; Q1_0 is upstream and unconditional.
+
+When adding or changing a feature, verify:
+
+1. `cargo check -p llama_cpp --no-default-features`
+2. `cargo check -p llama_cpp` (default features)
+3. the backend-specific combination you touched
+4. that the CMake option is actually forwarded
+
+## 8. Upstream update procedure
+
+An update is deliberate and reviewable:
+
+1. Fetch and check out the target revision in the submodule:
+   ```sh
+   git -C crates/llama_cpp_sys/llama.cpp fetch origin master
+   git -C crates/llama_cpp_sys/llama.cpp checkout --detach <revision>
+   ```
+2. Run `cargo test -p llama_cpp` from a clean build. Note that a patch may fail
+   to apply; do not "fix" it by editing the submodule.
+3. Rebase or rewrite patches against the new source. Keep each patch's intent
+   and header comment.
+4. Adapt shims and safe wrappers to upstream API changes.
+5. Run the binding test suite and at least one real generation smoke test.
+6. Update the revision in `README.md` and any docs that quote it.
+7. Stage the submodule gitlink and report breaking API changes to the human.
+
+Do not update the native revision opportunistically while fixing an unrelated
+bug. Keep the two changes separate so failures are attributable.
+
+## 9. Testing
+
+Baseline:
+
+```sh
+cargo test -p llama_cpp --lib
+cargo test -p llama_cpp --test test_chat
+cargo test -p llama_cpp --test test_context_params
+cargo test -p llama_cpp --test test_sampler
+cargo test -p llama_cpp --test test_batch_ext
+```
+
+Model-gated tests use `target/test-models/stories260K.gguf` or
+`LLAMA_TEST_MODEL`. They must skip cleanly when the model is absent; do not
+download models from tests.
+
+Before changing a shim or patch, identify the narrowest test that exercises the
+affected API. If none exists, add one before changing behavior. For lifetime or
+callback changes, add a compile-time assertion or a deterministic test rather
+than relying on a manual smoke test.
+
+## 10. Common failure modes
+
+- **Stale OUT_DIR copy.** A patch edit appears to have no effect. Clean the
+  package build output or bump the patch hash path.
+- **Patch context drift.** Upstream changed nearby code. Rebase the patch; never
+  edit the submodule to make it apply.
+- **ABI mismatch.** A prebuilt or previously built library lacks a guard symbol.
+  Check the ABI guard and rebuild.
+- **Exception across FFI.** Undefined behavior. Catch in the shim and return a
+  status.
+- **Dangling error string.** The thread-local buffer is valid only until the
+  next shim call on that thread; copy immediately.
+- **Wrong drop order.** Context or callback state outlives native storage. Check
+  `Drop` implementations and the tensor transaction contract.
+- **Feature not forwarded.** A Rust feature compiles but the native code was
+  built without the corresponding CMake option. Inspect `build.rs` and the
+  build log.
+- **Weakened safety check.** A test starts passing for the wrong reason. Revert
+  and fix the root cause.
+
+## 11. Reporting binding changes
+
+When handing work back, state:
+
+- what changed and why
+- the pinned revision and whether it moved
+- patches added/edited and their upstream dependency
+- shims touched and ABI impact
+- tests run, including which were skipped and why
+- any known compatibility or safety caveat
+
+Keep this report short and factual. The human reviews the diff, not a narrative.

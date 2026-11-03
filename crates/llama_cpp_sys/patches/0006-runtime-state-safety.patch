@@ -1,0 +1,327 @@
+Subject: Enforce context-local rotation and synchronized native logging
+
+Pinned API: llama.cpp a34de861 (b12015), after 0004 decode lifecycle hooks.
+Context creation must not mutate the process environment or shared model state.
+Append an explicit context preference and apply it only during synchronous
+memory construction, including nested KV caches, using scoped thread-local state.
+Existing environment and model opt-outs remain honored.
+
+llama/ggml logger pairs were unsynchronized, and common/fit published pointers
+to stack-local logger scopes process-wide. Move the shared pair behind its own
+mutex, snapshot before callbacks, and make fit overrides thread-local. Raw logger
+users still retain user_data through in-flight calls. No lock spans a callback.
+
+ABI: append one bool to the context params after the mandatory decode hooks;
+all earlier field offsets are unchanged. runtime_safety_abi_v1 is required by the
+Rust backend and context wrappers so stale/unpatched libraries fail to link.
+The new ggml log functions are additive C ABI entries used by core and fit.
+
+diff --git a/include/llama.h b/include/llama.h
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -376,6 +376,7 @@
+     // this symbol so an unpatched or ABI-mismatched prebuilt libllama fails at
+     // link time instead of silently disabling the decode hooks.
+     LLAMA_API int llama_cpp_rs_decode_hooks_abi_v1(void);
++    LLAMA_API int llama_cpp_rs_runtime_safety_abi_v1(void);
+ 
+     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
+     //       https://github.com/ggml-org/llama.cpp/pull/7544
+@@ -447,6 +448,10 @@
+         // prebuilt libllama built without this patch.
+         llama_decode_begin_callback cb_decode_begin;
+         llama_decode_end_callback   cb_decode_end;
++
++        // Binding extension: disable attention rotation for this context only.
++        // Appended after the decode hooks; requires runtime_safety_abi_v1.
++        bool attn_rot_disabled;
+     };
+ 
+     struct llama_model_tensor_override {
+@@ -1693,7 +1698,7 @@
+ 
+     // Set callback for all future logging events.
+     // If this is not called, or NULL is supplied, everything is output on stderr.
+-    // The logger state is global so these functions are NOT thread safe.
++    // Callback/user-data pairs are synchronized; raw user_data must outlive in-flight calls.
+     LLAMA_API void llama_log_get(ggml_log_callback * log_callback, void ** user_data);
+     LLAMA_API void llama_log_set(ggml_log_callback   log_callback, void *  user_data);
+ 
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -494,6 +494,10 @@
+             /*.no_alloc  =*/ model.no_alloc(),
+         };
+ 
++        // Memory construction (including nested cache constructors) is
++        // synchronous. A scoped thread-local preference avoids mutating either
++        // the process environment or the model shared by other contexts.
++        const llama_cpp_rs_attn_rot_scope rotation_scope(params.attn_rot_disabled);
+         memory.reset(model.create_memory(params_mem, cparams));
+     }
+ 
+@@ -4085,6 +4089,7 @@
+         /*.ctx_other                   =*/ nullptr,
+         /*.cb_decode_begin             =*/ nullptr,
+         /*.cb_decode_end               =*/ nullptr,
++        /*.attn_rot_disabled           =*/ false,
+     };
+ 
+     return result;
+@@ -4691,6 +4696,10 @@
+     }
+ 
+     return ret;
++}
++
++int llama_cpp_rs_runtime_safety_abi_v1(void) {
++    return 1;
+ }
+ 
+ int llama_cpp_rs_decode_hooks_abi_v1(void) {
+diff --git a/src/llama-impl.h b/src/llama-impl.h
+--- a/src/llama-impl.h
++++ b/src/llama-impl.h
+@@ -1,4 +1,20 @@
+ #pragma once
++
++// Binding extension: a scoped preference for synchronous context-memory
++// construction. Nested construction restores its caller's preference.
++bool llama_cpp_rs_attn_rot_disabled();
++bool llama_cpp_rs_exchange_attn_rot_disabled(bool disabled);
++struct llama_cpp_rs_attn_rot_scope {
++    explicit llama_cpp_rs_attn_rot_scope(bool disabled)
++        : previous(llama_cpp_rs_exchange_attn_rot_disabled(disabled)) {}
++    ~llama_cpp_rs_attn_rot_scope() {
++        llama_cpp_rs_exchange_attn_rot_disabled(previous);
++    }
++    llama_cpp_rs_attn_rot_scope(const llama_cpp_rs_attn_rot_scope &) = delete;
++    llama_cpp_rs_attn_rot_scope & operator=(const llama_cpp_rs_attn_rot_scope &) = delete;
++private:
++    bool previous;
++};
+ 
+ #include "ggml.h" // for ggml_log_level
+ 
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -297,14 +297,14 @@
+         n_rot_k = other->n_rot_k;
+         n_rot_v = other->n_rot_v;
+     } else {
+-        // two knobs turn the same thing off: the environment variable, for the whole process, and
+-        //   the model setting, for the contexts of one model - see llama_model_set_attn_rot
++        // Environment, model, and scoped context preferences can opt out.
++        // Context construction never mutates the environment or shared model.
+         const char * env_rot_disable = getenv("LLAMA_ATTN_ROT_DISABLE");
+ 
+-        const bool attn_rot_disable = !model.attn_rot || (env_rot_disable != nullptr && atoi(env_rot_disable) != 0);
++        const bool attn_rot_disable = !model.attn_rot || llama_cpp_rs_attn_rot_disabled() || (env_rot_disable != nullptr && atoi(env_rot_disable) != 0);
+         if (attn_rot_disable) {
+             LLAMA_LOG_INFO("%s: attention rotation force disabled (%s)\n", __func__,
+-                    model.attn_rot ? "LLAMA_ATTN_ROT_DISABLE" : "llama_model_set_attn_rot");
++                    llama_cpp_rs_attn_rot_disabled() ? "context params" : (model.attn_rot ? "LLAMA_ATTN_ROT_DISABLE" : "llama_model_set_attn_rot"));
+         }
+ 
+         bool attn_rot_k =
+diff --git a/src/llama-impl.cpp b/src/llama-impl.cpp
+--- a/src/llama-impl.cpp
++++ b/src/llama-impl.cpp
+@@ -12,12 +12,17 @@
+ #include <cstring>
+ #include <vector>
+ 
+-struct llama_logger_state {
+-    ggml_log_callback log_callback = llama_log_callback_default;
+-    void * log_callback_user_data = nullptr;
+-};
+-
+-static llama_logger_state g_logger_state;
++static thread_local bool llama_cpp_rs_rotation_disabled = false;
++
++bool llama_cpp_rs_attn_rot_disabled() {
++    return llama_cpp_rs_rotation_disabled;
++}
++
++bool llama_cpp_rs_exchange_attn_rot_disabled(bool disabled) {
++    const bool previous = llama_cpp_rs_rotation_disabled;
++    llama_cpp_rs_rotation_disabled = disabled;
++    return previous;
++}
+ 
+ void llama_prefetch_rows(const ggml_tensor * tensor, const int32_t * rows, size_t n_rows) {
+     if (!tensor || !tensor->data || !tensor->buffer || !ggml_backend_buffer_is_host(tensor->buffer) || n_rows == 0) {
+@@ -53,8 +58,6 @@
+ 
+ void llama_log_set(ggml_log_callback log_callback, void * user_data) {
+     ggml_log_set(log_callback, user_data);
+-    g_logger_state.log_callback = log_callback ? log_callback : llama_log_callback_default;
+-    g_logger_state.log_callback_user_data = user_data;
+ }
+ 
+ static void llama_log_internal_v(ggml_log_level level, const char * format, va_list args) {
+@@ -63,12 +66,12 @@
+     char buffer[128];
+     int len = vsnprintf(buffer, 128, format, args);
+     if (len < 128) {
+-        g_logger_state.log_callback(level, buffer, g_logger_state.log_callback_user_data);
++        ggml_log_dispatch(level, buffer);
+     } else {
+         char * buffer2 = new char[len + 1];
+         vsnprintf(buffer2, len + 1, format, args_copy);
+         buffer2[len] = 0;
+-        g_logger_state.log_callback(level, buffer2, g_logger_state.log_callback_user_data);
++        ggml_log_dispatch(level, buffer2);
+         delete[] buffer2;
+     }
+     va_end(args_copy);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -278,12 +278,6 @@
+ // logging
+ //
+ 
+-struct ggml_logger_state {
+-    ggml_log_callback log_callback;
+-    void * log_callback_user_data;
+-};
+-static struct ggml_logger_state g_logger_state = {ggml_log_callback_default, NULL};
+-
+ static void ggml_log_internal_v(enum ggml_log_level level, const char * format, va_list args) {
+     if (format == NULL) {
+         return;
+@@ -293,12 +287,12 @@
+     char buffer[128];
+     int len = vsnprintf(buffer, 128, format, args);
+     if (len < 128) {
+-        g_logger_state.log_callback(level, buffer, g_logger_state.log_callback_user_data);
++        ggml_log_dispatch(level, buffer);
+     } else {
+         char * buffer2 = (char *) calloc(len + 1, sizeof(char));
+         vsnprintf(buffer2, len + 1, format, args_copy);
+         buffer2[len] = 0;
+-        g_logger_state.log_callback(level, buffer2, g_logger_state.log_callback_user_data);
++        ggml_log_dispatch(level, buffer2);
+         free(buffer2);
+     }
+     va_end(args_copy);
+@@ -8239,15 +8233,7 @@
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+ 
+-void ggml_log_get(ggml_log_callback * log_callback, void ** user_data) {
+-    *log_callback = g_logger_state.log_callback;
+-    *user_data    = g_logger_state.log_callback_user_data;
+-}
+-
+-void ggml_log_set(ggml_log_callback log_callback, void * user_data) {
+-    g_logger_state.log_callback = log_callback ? log_callback : ggml_log_callback_default;
+-    g_logger_state.log_callback_user_data = user_data;
+-}
++
+ 
+ void ggml_threadpool_params_init(struct ggml_threadpool_params * p, int n_threads) {
+     p->n_threads  = n_threads;
+diff --git a/ggml/src/ggml-threading.cpp b/ggml/src/ggml-threading.cpp
+--- a/ggml/src/ggml-threading.cpp
++++ b/ggml/src/ggml-threading.cpp
+@@ -1,4 +1,5 @@
+ #include "ggml-threading.h"
++#include "ggml-impl.h"
+ #include <mutex>
+ 
+ std::mutex ggml_critical_section_mutex;
+@@ -10,3 +11,43 @@
+ void ggml_critical_section_end(void) {
+     ggml_critical_section_mutex.unlock();
+ }
++
++// Keep this lock separate from the context initialization lock: ggml can log
++// while initializing. Never invoke a callback while holding either logger lock.
++namespace {
++struct logger_state {
++    ggml_log_callback callback;
++    void * user_data;
++};
++std::mutex logger_mutex;
++logger_state global_logger = {ggml_log_callback_default, nullptr};
++thread_local logger_state thread_logger = {nullptr, nullptr};
++}
++
++void ggml_log_get(ggml_log_callback * callback, void ** user_data) {
++    const std::lock_guard<std::mutex> lock(logger_mutex);
++    *callback = global_logger.callback;
++    *user_data = global_logger.user_data;
++}
++
++void ggml_log_set(ggml_log_callback callback, void * user_data) {
++    const std::lock_guard<std::mutex> lock(logger_mutex);
++    global_logger = {callback ? callback : ggml_log_callback_default, user_data};
++}
++
++void ggml_log_get_thread(ggml_log_callback * callback, void ** user_data) {
++    *callback = thread_logger.callback;
++    *user_data = thread_logger.user_data;
++}
++
++void ggml_log_set_thread(ggml_log_callback callback, void * user_data) {
++    thread_logger = {callback, user_data};
++}
++
++void ggml_log_dispatch(enum ggml_log_level level, const char * text) {
++    logger_state logger = thread_logger;
++    if (!logger.callback) {
++        ggml_log_get(&logger.callback, &logger.user_data);
++    }
++    logger.callback(level, text, logger.user_data);
++}
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -2961,7 +2961,14 @@
+ 
+     // Set callback for all future logging events.
+     // If this is not called, or NULL is supplied, everything is output on stderr.
++    // Callback/user-data pairs are synchronized; callbacks run without a lock.
++    // Raw users still own the lifetime of user_data through in-flight calls.
+     GGML_API void ggml_log_get(ggml_log_callback * log_callback, void ** user_data);
++    // Thread-local overrides are used by common/fit instead of publishing
++    // pointers to stack storage process-wide. NULL removes the override.
++    GGML_API void ggml_log_get_thread(ggml_log_callback * callback, void ** user_data);
++    GGML_API void ggml_log_set_thread(ggml_log_callback callback, void * user_data);
++    GGML_API void ggml_log_dispatch(enum ggml_log_level level, const char * text);
+     GGML_API void ggml_log_set(ggml_log_callback   log_callback, void *  user_data);
+ 
+     GGML_API struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor);
+diff --git a/common/fit.cpp b/common/fit.cpp
+--- a/common/fit.cpp
++++ b/common/fit.cpp
+@@ -32,16 +32,21 @@
+ // RAII: send llama logs below min_level to the debug log
+ struct common_fit_log_scope {
+     common_fit_log_scope(ggml_log_level min_level) : min_level(min_level) {
+-        llama_log_get(&original_logger.callback, &original_logger.user_data);
+-        llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
++        ggml_log_get_thread(&original_logger.callback, &original_logger.user_data);
++        ggml_log_set_thread([](ggml_log_level level, const char * text, void * user_data) {
+             const common_fit_log_scope * self = (const common_fit_log_scope *) user_data;
+             const ggml_log_level level_eff = level >= self->min_level ? level : GGML_LOG_LEVEL_DEBUG;
+-            self->original_logger.callback(level_eff, text, self->original_logger.user_data);
++            ggml_log_callback callback = self->original_logger.callback;
++            void * callback_data = self->original_logger.user_data;
++            if (!callback) {
++                ggml_log_get(&callback, &callback_data);
++            }
++            callback(level_eff, text, callback_data);
+         }, this);
+     }
+ 
+     ~common_fit_log_scope() {
+-        llama_log_set(original_logger.callback, original_logger.user_data);
++        ggml_log_set_thread(original_logger.callback, original_logger.user_data);
+     }
+ 
+     common_fit_log_scope(const common_fit_log_scope &) = delete;
