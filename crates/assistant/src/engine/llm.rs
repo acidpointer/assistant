@@ -1,3 +1,5 @@
+use super::ModelEngine;
+
 use super::*;
 use llama_cpp::{context, prelude::*};
 use std::{
@@ -8,7 +10,7 @@ use std::{
 use tracing;
 
 #[derive(Debug)]
-pub struct LLMModel {
+pub struct LLMModel<'a> {
     /// Path to LLM .gguf file
     model_path: PathBuf,
 
@@ -30,33 +32,32 @@ pub struct LLMModel {
     /// Token limit per context
     token_limit: usize,
 
-    backend: LlamaBackend,
+    engine: &'a ModelEngine,
     model: LlamaModel,
 
     model_params: LlamaModelParams,
 }
 
-impl LLMModel {
+impl<'a> LLMModel<'a> {
     pub fn init(
         model_path: PathBuf,
+        engine: &'a ModelEngine,
         gpu_layers: u32,
         token_limit: usize,
         threads: i32,
         context_size: NonZeroU32,
         reasoning: bool,
         n_batch: NonZeroU32,
-        verbose_logs: bool,
-    ) -> super::LLMResult<Self> {
-        let backend = LlamaBackend::init()?;
-
+    ) -> EngineResult<Self> {
         let model_params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-        let model = LlamaModel::load_from_file(&backend, model_path.clone(), &model_params)?;
+        let model =
+            LlamaModel::load_from_file(engine.backend_ref(), model_path.clone(), &model_params)?;
 
         Self::configure_logging();
         Ok(Self {
             model,
             model_params,
-            backend,
+            engine,
             threads,
             model_path,
             context_size,
@@ -88,8 +89,8 @@ impl LLMModel {
     pub fn with_backend_model<R, F: FnOnce(&LlamaBackend, &LlamaModel) -> R>(
         &self,
         cl: F,
-    ) -> super::LLMResult<R> {
-        let res = cl(&self.backend, &self.model);
+    ) -> super::EngineResult<R> {
+        let res = cl(&self.engine.backend_ref(), &self.model);
 
         Ok(res)
     }
@@ -101,7 +102,7 @@ impl LLMModel {
 
     #[inline]
     pub fn backend_ref(&self) -> &LlamaBackend {
-        &self.backend
+        &self.engine.backend_ref()
     }
 
     #[inline]
@@ -109,14 +110,16 @@ impl LLMModel {
         self.token_limit
     }
 
-    pub fn new_context(&self) -> super::LLMResult<LLMContext<'_>> {
+    pub fn new_context(&self) -> super::EngineResult<LLMContext<'_>> {
         let ctx_params = LlamaContextParams::default()
             .with_n_ctx(Some(self.context_size))
             .with_n_batch(self.n_batch.into())
             .with_n_threads(self.threads)
             .with_n_threads_batch(self.threads);
 
-        let ctx = self.model.new_context(&self.backend, ctx_params)?;
+        let ctx = self
+            .model
+            .new_context(&self.engine.backend_ref(), ctx_params)?;
 
         Ok(super::LLMContext::new(ctx, self))
     }

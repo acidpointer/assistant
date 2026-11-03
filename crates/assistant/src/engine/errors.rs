@@ -3,7 +3,7 @@ use llama_cpp::{context, llama_batch::BatchInitError, prelude::*};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub(crate) enum LLMError {
+pub(crate) enum EngineError {
     #[error("llama.cpp error: {0}")]
     LlamaCppError(#[from] LLamaCppError),
 
@@ -28,8 +28,11 @@ pub(crate) enum LLMError {
     #[error("llama.cpp batch init error: {0}")]
     BatchInitError(#[from] BatchInitError),
 
-    #[error("LLMModel already initialized")]
-    LLMAlreadyInitializedError,
+    #[error("Engine already initialized")]
+    EngineAlreadyInitializedError,
+
+    #[error("Engine not initialized")]
+    EngineNotInitializedError,
 
     #[error("The prompt produced no tokens")]
     NoTokensError,
