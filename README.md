@@ -4,7 +4,7 @@ Rust workspace with local llama.cpp bindings and a tool-using assistant.
 
 | Crate | Purpose |
 | --- | --- |
-| `assistant` | Annotated inference example with local tool calls and a final answer |
+| `assistant` | Persistent runtime, high-level chat API, typed tools and CLI |
 | `llama_cpp` | Safe Rust API, ported from eugenehp/llama-cpp-rs |
 | `llama_cpp_sys` | Generated FFI, native build, and C++ shims |
 
@@ -22,78 +22,55 @@ install Vulkan headers, the Vulkan loader, a GPU driver, and `glslc` as well.
 On Arch Linux, these are provided by `base-devel cmake ninja clang vulkan-headers
 vulkan-icd-loader shaderc` and your GPU's Vulkan driver package.
 
-From the workspace root, using the existing model filename:
+Choose a local GGUF explicitly; model paths are never committed:
 
 ```sh
-cargo run --release -- --prompt "What time is it?" --trace
+cargo run --release -- --model /path/to/model.gguf --prompt "What time is it?" --trace
 ```
 
-Or choose another model and token budget:
+Without `--prompt`, the CLI reads interactions from stdin until EOF, sharing one
+conversation and resident model. `--daemon` starts the runtime and waits for
+Ctrl-C; external transports are future work.
 
 ```sh
-cargo run --release -- --model /path/to/model.gguf --ctx-size 4096 --max-tokens 512
+cargo run --release -- --model /path/to/model.gguf
+cargo run --release -- --model /path/to/model.gguf --daemon
+cargo run --release --no-default-features -- --model /path/to/model.gguf --gpu-layers 0 --prompt "Hello!"
 ```
 
-For a CPU-only build without the Vulkan SDK:
+Other GPU backends use `--no-default-features --features cuda` or
+`--no-default-features --features metal` and their platform toolkits. Disabling
+default features now actually disables Vulkan. `--thinking` enables supported
+template reasoning; `--raw` bypasses chat/tools for diagnostic completion.
+`--ctx-size`, `--batch-size`, `--max-tokens` and `--threads` control native budgets.
+`--timeout-seconds` sets the per-interaction deadline (default 120 seconds).
 
-```sh
-cargo run --release --no-default-features -- --gpu-layers 0 --prompt "Hello!"
-```
+## Library and extensions
 
-Other GPU backends can be selected with `--no-default-features --features cuda`
-or `--no-default-features --features metal`. Each needs its platform toolkit.
-Use `--help` for all options. `--thinking` enables reasoning in supported chat
-templates; `--raw` bypasses chat formatting and tools for completion models.
+[The API guide](docs/llm-api.md) describes `Chat::generate`, request overrides,
+streaming, cancellation, typed tools, plugins, ordered hooks and middleware.
+[The architecture](docs/architecture.md) explains ownership and working context.
+The binary is a thin adapter over this library. `src/example.rs` is a retained
+historical walkthrough and is not compiled.
 
-## Learn how tools work
+The CLI opts into two example tools:
 
-[crates/assistant/src/main.rs](crates/assistant/src/main.rs) is the complete
-"learn in ~20 minutes" walkthrough. It explains model/context lifetimes,
-tokenization, batches, logits, sampling, grammar constraints, chat templates,
-tool-call parsing, argument validation, execution, and conversation history.
-All application/tool code is in that file; there is no agent framework.
+| Tool | Implementation |
+| --- | --- |
+| `current_time` | Fixed system `date` command with no model-supplied arguments |
+| `calculate` | Checked signed 64-bit arithmetic, including integer division |
 
-The two built-in tools are:
+The model requests registered functions and structured arguments. Rust validates
+and executes them, appends correlated results and continues until a final answer
+or a configured bound. `--trace` prints exact tool requests/results to stderr;
+user-visible text streams to stdout. Prompt bodies and raw protocol are not logged.
+`--no-tools` disables capabilities. `--require-tool` requires a first-turn call.
 
-| Tool | Implementation | Example question |
-| --- | --- | --- |
-| `current_time` | Runs the system `date` command with no arguments | What time is it? |
-| `calculate` | Checked signed 64-bit addition, subtraction, and multiplication in Rust | What is 123 multiplied by 456? |
-
-```sh
-cargo run -- --prompt "What time is it?" --trace
-cargo run -- --prompt "What is 123 multiplied by 456?" --trace
-cargo run -- --prompt "What time is it, and what is 19 times 23?" --trace
-cargo run -- --prompt "What time is it?" --require-tool --trace
-cargo run -- --prompt "Explain what a token is." --no-tools
-```
-
-The model chooses a function and arguments; Rust validates and executes it,
-appends a `role: tool` result linked to the assistant request, and runs the
-model again. It repeats until there is a final answer. Tool requests and exact
-results appear on stderr. `--trace` also shows prompts, raw model protocol text,
-and normalized assistant messages. The parsed final answer goes to stdout;
-raw completion mode streams text instead. `--verbose` enables native logs.
-
-Tool schemas become llama.cpp grammar constraints, and typed Rust arguments
-validate requests again before execution. The host accepts only the listed
-functions. Grammar constrains format; it does not prove the model interpreted
-the question correctly. `--require-tool` forces a call on the first turn and
-is useful for studying the difference between automatic and required choice.
-
-To add your own tool, follow `calculate`: add its definition in
-`tool_definitions()`, define a typed argument struct, implement a Rust function,
-and register its exact name in `execute_tool()`. Add an argument-validation test
-and a model conversation test. The model never supplies executable shell text.
-
-Each model turn gets its own `--max-tokens` budget (default 512).
-`--max-tool-calls` bounds executed calls, including failures (default 4).
-The complete history plus new output must fit `--ctx-size` (default 4096).
-For clarity the example clears the KV cache and prefills the full history each
-turn; the model weights stay loaded. Long prompts use batches of up to 512
-tokens. A truncated tool-enabled turn is rejected without executing its calls;
-increase the output/context budget when needed. Model files and build artifacts
-are ignored by Git.
+The runtime stays resident between interactions and blocks while idle. Recent
+history is bounded; oldest complete exchanges are evicted to fit message, byte
+and native token budgets. It does not summarize or persist memory. Weights and
+allocated KV caches still occupy memory while idle. External transports,
+semantic/graph memory and voice remain separate future features.
 
 ## Checks
 

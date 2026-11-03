@@ -302,3 +302,22 @@ When handing work back, state:
 - any known compatibility or safety caveat
 
 Keep this report short and factual. The human reviews the diff, not a narrative.
+
+## Guarded sampler construction (2026-11-03)
+
+The assistant foundation uses additive `LlamaSampler::try_greedy`,
+`LlamaSampler::try_chain` and `ChatParams::try_grammar_sampler` methods. Existing
+constructors remain available. `try_grammar` and `try_grammar_lazy_patterns` now
+also route native construction through guarded C++ shims, containing allocation
+and regex exceptions. `SamplerInitError` gains a `Native(String)` variant, so
+exhaustive matches must handle it. No native struct layout or submodule revision
+changes accompany these APIs.
+
+The new shim chain-add entry point transfers child ownership only on success.
+At pinned b12015, native add is a `vector::push_back` of a trivial entry; an
+allocation exception preserves the vector and caller ownership. Rust forgets a
+child only after successful transfer; earlier children are released by the chain
+on a later failure. Review that native operation's exception guarantee when
+updating the upstream pin. All guarded failures use the shared thread-local error
+channel. Fallible render grammar construction preserves lazy triggers and
+propagates generation-prefix tokenization/acceptance errors.

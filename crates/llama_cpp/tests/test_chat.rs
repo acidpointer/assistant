@@ -581,3 +581,32 @@ fn tokenize_prompt_neutralizes_injected_markup() {
         );
     }
 }
+
+#[test]
+fn fallible_render_grammar_preserves_lazy_triggers_and_reports_invalid_grammar() {
+    let _guard = support::model::llama_guard();
+    let Some((model, _)) = load_model() else {
+        return;
+    };
+    let templates = ChatTemplates::from_model(&model, Some(HERMES_TOOL_TEMPLATE))
+        .expect("recognized tool template");
+    let mut rendered = templates
+        .apply(
+            &ChatApplyParams::new(r#"[{"role":"user","content":"Weather?"}]"#)
+                .with_tools(WEATHER_TOOL)
+                .with_tool_choice(ToolChoice::Auto),
+        )
+        .expect("render tool grammar");
+    assert!(!rendered.grammar.is_empty(), "exercise grammar constructor");
+    assert!(rendered
+        .try_grammar_sampler(&model)
+        .expect("guarded lazy grammar")
+        .is_some());
+    rendered.grammar = "this is not a GBNF rule".into();
+    assert!(rendered.try_grammar_sampler(&model).is_err());
+    rendered.grammar.clear();
+    assert!(rendered
+        .try_grammar_sampler(&model)
+        .expect("unconstrained render")
+        .is_none());
+}

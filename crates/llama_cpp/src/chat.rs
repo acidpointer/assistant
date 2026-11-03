@@ -814,6 +814,50 @@ impl ChatParams {
         out
     }
 
+    /// Build the matching grammar, propagating construction and prefix errors.
+    ///
+    /// Preserves lazy activation and the generation-prefix handling of
+    /// [`Self::grammar_sampler`], without its panic or silent conversion paths.
+    /// # Errors
+    /// Returns [`ChatError`] on sampler creation, tokenization, or acceptance
+    /// failure. An empty grammar returns `Ok(None)`.
+    pub fn try_grammar_sampler(
+        &self,
+        model: &LlamaModel,
+    ) -> Result<Option<crate::sampling::LlamaSampler>, ChatError> {
+        use crate::sampling::LlamaSampler;
+        if self.grammar.is_empty() {
+            return Ok(None);
+        }
+        let (patterns, tokens) = self.sampler_triggers();
+        let lazy = self.grammar_lazy && !(patterns.is_empty() && tokens.is_empty());
+        let mut sampler = if lazy {
+            let refs: Vec<&str> = patterns.iter().map(String::as_str).collect();
+            LlamaSampler::try_grammar_lazy_patterns(model, &self.grammar, "root", &refs, &tokens)
+        } else {
+            LlamaSampler::try_grammar(model, &self.grammar, "root")
+        }
+        .map_err(|error| ChatError::Init(error.to_string()))?;
+        if !lazy && !self.generation_prompt.is_empty() {
+            let prefix = model
+                .str_to_token(&self.generation_prompt, crate::model::AddBos::Never)
+                .map_err(|error| ChatError::Failed(error.to_string()))?;
+            let starts_with_space = self.generation_prompt.starts_with(char::is_whitespace);
+            for (index, token) in prefix.into_iter().enumerate() {
+                if index == 0 && !starts_with_space {
+                    let piece = model
+                        .token_to_str(token, crate::model::Special::Tokenize)
+                        .map_err(|error| ChatError::Failed(error.to_string()))?;
+                    if piece.starts_with(char::is_whitespace) {
+                        continue;
+                    }
+                }
+                sampler.try_accept(token)?;
+            }
+        }
+        Ok(Some(sampler))
+    }
+
     /// Parse model output back into an OpenAI-shaped message JSON object with
     /// `role`, `content`, `reasoning_content` and `tool_calls`.
     ///

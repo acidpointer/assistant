@@ -38,9 +38,9 @@ fn generates_after_a_prompt_larger_than_one_batch() {
         .expect("prompt token count")
         .split_whitespace()
         .next()
-        .unwrap()
+        .expect("token count field")
         .parse()
-        .unwrap();
+        .expect("integer token count");
     assert!(prompt_tokens > 512, "test must exercise multiple batches");
     assert!(logs.contains("Generated 4 tokens"), "{logs}");
     let text = String::from_utf8(output.stdout).expect("valid streamed UTF-8");
@@ -73,7 +73,15 @@ fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
     let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
         .arg("--model")
         .arg(model)
-        .args(["--gpu-layers", "0", "--prompt", prompt])
+        .args([
+            "--timeout-seconds",
+            "300",
+            "--trace",
+            "--gpu-layers",
+            "0",
+            "--prompt",
+            prompt,
+        ])
         .output()
         .expect("run assistant with tools");
     let logs = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -89,8 +97,10 @@ fn result_for(logs: &str, tool: &str) -> Value {
     let result: Value = logs
         .lines()
         .find_map(|line| line.strip_prefix(&prefix))
-        .map(|json| serde_json::from_str(json).expect("JSON tool result"))
-        .unwrap_or_else(|| panic!("model did not call {tool}: {logs}"));
+        .map_or_else(
+            || panic!("model did not call {tool}: {logs}"),
+            |json| serde_json::from_str(json).expect("JSON tool result"),
+        );
     assert_eq!(result["ok"], true, "tool failed: {result}");
     result["result"].clone()
 }

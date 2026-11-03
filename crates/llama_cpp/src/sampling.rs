@@ -10,12 +10,12 @@ use llama_cpp_sys::{
     llama_sampler_chain_default_params, llama_sampler_chain_init, llama_sampler_chain_n,
     llama_sampler_chain_remove, llama_sampler_clone, llama_sampler_copy, llama_sampler_free,
     llama_sampler_get_seed, llama_sampler_init_adaptive_p, llama_sampler_init_dist,
-    llama_sampler_init_dry, llama_sampler_init_grammar, llama_sampler_init_grammar_lazy_patterns,
-    llama_sampler_init_greedy, llama_sampler_init_infill, llama_sampler_init_logit_bias,
-    llama_sampler_init_min_p, llama_sampler_init_mirostat, llama_sampler_init_mirostat_v2,
-    llama_sampler_init_penalties, llama_sampler_init_temp, llama_sampler_init_temp_ext,
-    llama_sampler_init_top_k, llama_sampler_init_top_n_sigma, llama_sampler_init_top_p,
-    llama_sampler_init_typical, llama_sampler_init_xtc, llama_sampler_name, llama_sampler_reset,
+    llama_sampler_init_dry, llama_sampler_init_greedy, llama_sampler_init_infill,
+    llama_sampler_init_logit_bias, llama_sampler_init_min_p, llama_sampler_init_mirostat,
+    llama_sampler_init_mirostat_v2, llama_sampler_init_penalties, llama_sampler_init_temp,
+    llama_sampler_init_temp_ext, llama_sampler_init_top_k, llama_sampler_init_top_n_sigma,
+    llama_sampler_init_top_p, llama_sampler_init_typical, llama_sampler_init_xtc,
+    llama_sampler_name, llama_sampler_reset,
 };
 
 use crate::context::LlamaContext;
@@ -47,6 +47,13 @@ pub enum SamplerInitError {
     /// unparseable GBNF grammar looks like; it logs the parse error itself.
     #[error("llama.cpp could not build the {0} sampler (see the llama.cpp log)")]
     NullReturn(&'static str),
+    /// A guarded native constructor threw; the thread-local diagnostic is retained.
+    #[error("native sampler construction failed: {0}")]
+    Native(String),
+}
+
+fn sampler_status(status: i32) -> Result<(), SamplerInitError> {
+    crate::shim::check_status(status).map_err(|error| SamplerInitError::Native(error.to_string()))
 }
 
 /// Convert a caller string, naming the argument so the error says which one.
@@ -308,6 +315,35 @@ impl LlamaSampler {
         Self::chain(samplers, false)
     }
 
+    /// Construct a sampler chain without panicking on a null native handle.
+    ///
+    /// Ownership of each child transfers only after the chain is allocated.
+    /// # Errors
+    /// Returns [`SamplerInitError::NullReturn`] for a null handle or
+    /// [`SamplerInitError::Native`] for a contained C++ exception.
+    pub fn try_chain(samplers: impl IntoIterator<Item = Self>) -> Result<Self, SamplerInitError> {
+        let mut ptr = std::ptr::null_mut();
+        // SAFETY: out points to writable storage; the shim catches exceptions.
+        let status = unsafe { llama_cpp_sys::common_shim_sampler_chain_init_raw(&raw mut ptr) };
+        sampler_status(status)?;
+        let chain = Self {
+            sampler: NonNull::new(ptr).ok_or(SamplerInitError::NullReturn("chain"))?,
+        };
+        for sampler in samplers {
+            // SAFETY: these are live owned handles. The shim transfers child
+            // ownership only on success and preserves it on allocation failure.
+            let status = unsafe {
+                llama_cpp_sys::common_shim_sampler_chain_add_raw(
+                    chain.sampler.as_ptr(),
+                    sampler.sampler.as_ptr(),
+                )
+            };
+            sampler_status(status)?;
+            std::mem::forget(sampler);
+        }
+        Ok(chain)
+    }
+
     /// Updates the logits `l_i`' = `l_i/t`. When `t <= 0.0`, the maximum logit is kept at its original
     /// value, the rest are set to -inf.
     ///
@@ -479,16 +515,23 @@ impl LlamaSampler {
         let grammar_str = c_string("grammar_str", grammar_str)?;
         let grammar_root = c_string("grammar_root", grammar_root)?;
 
-        // SAFETY: both pointers come from live `CString`s that outlast the call,
-        // and llama.cpp only reads them. The vocab reference is borrowed from
-        // `model` for the duration.
-        let sampler = unsafe {
-            llama_sampler_init_grammar(
+        let mut sampler = std::ptr::null_mut();
+        // SAFETY: the model and CStrings outlive the call. Empty trigger arrays
+        // are represented by null pointers and zero lengths. Out is writable.
+        let status = unsafe {
+            llama_cpp_sys::common_shim_sampler_grammar_init_raw(
                 model.get_vocab().vocab.as_ref(),
                 grammar_str.as_ptr(),
                 grammar_root.as_ptr(),
+                false,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+                0,
+                &raw mut sampler,
             )
         };
+        sampler_status(status)?;
         NonNull::new(sampler)
             .map(|sampler| Self { sampler })
             .ok_or(SamplerInitError::NullReturn("grammar"))
@@ -709,6 +752,20 @@ impl LlamaSampler {
         }
     }
 
+    /// Construct greedy sampling without panicking on a null native handle.
+    /// # Errors
+    /// Returns [`SamplerInitError::NullReturn`] for a null handle or
+    /// [`SamplerInitError::Native`] for a contained C++ exception.
+    pub fn try_greedy() -> Result<Self, SamplerInitError> {
+        let mut ptr = std::ptr::null_mut();
+        // SAFETY: out points to writable storage and the shim catches exceptions.
+        let status = unsafe { llama_cpp_sys::common_shim_sampler_greedy_init_raw(&raw mut ptr) };
+        sampler_status(status)?;
+        Ok(Self {
+            sampler: NonNull::new(ptr).ok_or(SamplerInitError::NullReturn("greedy"))?,
+        })
+    }
+
     /// Top-N sigma sampling.
     ///
     /// Keeps tokens within N standard deviations of the maximum logit.
@@ -901,21 +958,24 @@ impl LlamaSampler {
         let mut pattern_ptrs: Vec<*const c_char> =
             pattern_cstrings.iter().map(|s| s.as_ptr()).collect();
 
-        // SAFETY: every pointer is borrowed from a `CString`/slice that outlives
-        // the call, and the two lengths describe exactly those buffers.
-        // `trigger_tokens` is `#[repr(transparent)]` over `llama_token`, so the
-        // cast is a layout no-op. llama.cpp copies what it needs.
-        let sampler = unsafe {
-            llama_sampler_init_grammar_lazy_patterns(
+        let mut sampler = std::ptr::null_mut();
+        // SAFETY: every CString and token slice remains live throughout the
+        // call, all lengths match, and transparent tokens have native layout.
+        // The shim copies retained data and catches allocation/regex exceptions.
+        let status = unsafe {
+            llama_cpp_sys::common_shim_sampler_grammar_init_raw(
                 model.get_vocab().vocab.as_ref(),
                 grammar_str.as_ptr(),
                 grammar_root.as_ptr(),
+                true,
                 pattern_ptrs.as_mut_ptr(),
                 pattern_ptrs.len(),
                 trigger_tokens.as_ptr().cast(),
                 trigger_tokens.len(),
+                &raw mut sampler,
             )
         };
+        sampler_status(status)?;
         NonNull::new(sampler)
             .map(|sampler| Self { sampler })
             .ok_or(SamplerInitError::NullReturn("lazy grammar"))

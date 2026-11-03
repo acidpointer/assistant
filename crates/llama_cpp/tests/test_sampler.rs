@@ -331,3 +331,18 @@ fn test_with_tokens() {
         .with_tokens([LlamaToken(0), LlamaToken(1)]);
     assert_eq!(sampler.name(), "chain");
 }
+
+#[test]
+fn fallible_greedy_chain_owns_children_and_selects_maximum() {
+    let greedy = LlamaSampler::try_greedy().expect("construct guarded greedy sampler");
+    let mut chain = LlamaSampler::try_chain([greedy]).expect("construct guarded chain");
+    let mut data = LlamaTokenDataArray::new(
+        vec![
+            LlamaTokenData::new(LlamaToken(0), -2.0, 0.0),
+            LlamaTokenData::new(LlamaToken(1), 4.0, 0.0),
+        ],
+        false,
+    );
+    chain.apply(&mut data);
+    assert_eq!(data.selected_token(), Some(LlamaToken(1)));
+}

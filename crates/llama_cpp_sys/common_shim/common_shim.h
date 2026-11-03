@@ -69,6 +69,16 @@ bool common_shim_reasoning_budget_force(struct llama_sampler * smpl);
 // grammar, e.g. a JSON schema against a vocabulary with no `{`. Calling the raw
 // entry points from Rust turns that into a process abort, so route them here.
 
+// Constructors contain allocation/regex exceptions. Outputs are null on failure.
+// Children transfer to a chain only when add reports LLAMA_SHIM_OK.
+int32_t common_shim_sampler_chain_init_raw(struct llama_sampler ** out);
+int32_t common_shim_sampler_greedy_init_raw(struct llama_sampler ** out);
+int32_t common_shim_sampler_chain_add_raw(struct llama_sampler * chain, struct llama_sampler * child);
+int32_t common_shim_sampler_grammar_init_raw(
+        const struct llama_vocab * vocab, const char * grammar, const char * root,
+        bool lazy, const char ** patterns, size_t n_patterns,
+        const int32_t * tokens, size_t n_tokens, struct llama_sampler ** out);
+
 int32_t common_shim_sampler_accept_raw(struct llama_sampler * smpl, int32_t token);
 
 // Returns the sampled token, or -1 with a negative `*out_status`.

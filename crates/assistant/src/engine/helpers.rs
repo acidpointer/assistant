@@ -1,4 +1,5 @@
-pub fn find_stop(source: &str, stops: &Vec<String>) -> Option<usize> {
+//! Literal stop matching and UTF-8-safe streaming holdback; no native state.
+pub fn find_stop(source: &str, stops: &[String]) -> Option<usize> {
     stops
         .iter()
         .filter(|stop| !stop.is_empty())
@@ -6,7 +7,7 @@ pub fn find_stop(source: &str, stops: &Vec<String>) -> Option<usize> {
         .min()
 }
 
-pub fn holdback_len(text: &str, stops: &Vec<String>, max_stop_len: usize) -> usize {
+pub fn holdback_len(text: &str, stops: &[String], max_stop_len: usize) -> usize {
     if max_stop_len == 0 {
         return 0;
     }
@@ -52,9 +53,9 @@ mod tests {
 
     #[test]
     fn finds_the_earliest_stop_and_ignores_empty_stops() {
-        let stops = vec!["".to_owned(), "later".to_owned(), "first".to_owned()];
+        let stops = vec![String::new(), "later".to_owned(), "first".to_owned()];
         assert_eq!(find_stop("text first later", &stops), Some(5));
         assert_eq!(find_stop("text", &stops), None);
-        assert_eq!(holdback_len("text", &Vec::new(), 0), 0);
+        assert_eq!(holdback_len("text", &[], 0), 0);
     }
 }

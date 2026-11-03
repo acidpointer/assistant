@@ -1,48 +1,81 @@
-use llama_cpp::{context, llama_batch::BatchInitError, prelude::*};
+//! Typed failures at the native inference boundary. Errors preserve their causes;
+//! generation adds partial progress separately rather than fabricating a result.
+use llama_cpp::{
+    DecodeError, LLamaCppError, LlamaContextLoadError, LlamaModelLoadError, ShimError,
+    StringToTokenError,
+    llama_batch::{BatchAddError, BatchInitError},
+    sampling::SamplerInitError,
+    token::detokenizer::DetokenizeError,
+};
 
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub(crate) enum EngineError {
-    #[error("llama.cpp error: {0}")]
-    LlamaCppError(#[from] LLamaCppError),
-
-    #[error("llama.cpp error loading model: {0}")]
-    LlamaModelLoadError(#[from] LlamaModelLoadError),
-
-    #[error("llama.cpp context load error: {0}")]
-    LlamaContextLoadError(#[from] LlamaContextLoadError),
-
-    #[error("llama.cpp failed to add tokens to batch: {0}")]
-    LlamaBatchAddError(#[from] BatchAddError),
-
-    #[error("llama.cpp decode error: {0}")]
-    LlamaDecodeError(#[from] DecodeError),
-
-    #[error("Shim error: {0}")]
-    ShimError(#[from] ShimError),
-
-    #[error("Detokenizer error: {0}")]
-    DetokenizeError(#[from] DetokenizeError),
-
-    #[error("llama.cpp batch init error: {0}")]
-    BatchInitError(#[from] BatchInitError),
-
-    #[error("Engine already initialized")]
-    EngineAlreadyInitializedError,
-
-    #[error("Engine not initialized")]
-    EngineNotInitializedError,
-
-    #[error("The prompt produced no tokens")]
-    NoTokensError,
-
-    #[error("JSON error: {0}")]
-    JsonError(#[from] serde_json::Error),
-
-    #[error("Backend of llama.cpp was not initialized! Call init() first!")]
-    BackendNotInitializedError,
-
-    #[error("Token budget overflow")]
-    TokenBudgetOverflowError,
+/// Native initialization, validation, preparation, or execution failed.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum EngineError {
+    /// A backend is already initializing or initialized.
+    #[error("engine already initialized")]
+    AlreadyInitialized,
+    /// Explicit initialization has not completed.
+    #[error("engine not initialized")]
+    NotInitialized,
+    /// Invalid application configuration.
+    #[error("invalid configuration: {0}")]
+    Configuration(&'static str),
+    /// Input and reserved output do not fit the allocated sequence.
+    #[error("context budget exceeded: {input} input + {output} output > {capacity} capacity")]
+    Budget {
+        /// Tokens in the complete rendered input.
+        input: usize,
+        /// Reserved newly generated tokens.
+        output: usize,
+        /// Actual native sequence capacity.
+        capacity: usize,
+    },
+    /// A request targets another model instance.
+    #[error("prepared input belongs to another model")]
+    ModelMismatch,
+    /// A bounded payload exceeded its limit.
+    #[error("resource limit exceeded: {0}")]
+    Limit(&'static str),
+    /// The operation is invalid for the current generation state.
+    #[error("invalid generation state: {0}")]
+    State(&'static str),
+    /// Output delivery failed.
+    #[error("output delivery failed: {0}")]
+    Delivery(String),
+    /// A process-wide native operation failed.
+    #[error(transparent)]
+    Backend(#[from] LLamaCppError),
+    /// Model loading failed.
+    #[error(transparent)]
+    Model(#[from] LlamaModelLoadError),
+    /// Context allocation failed.
+    #[error(transparent)]
+    Context(#[from] LlamaContextLoadError),
+    /// Batch allocation failed.
+    #[error(transparent)]
+    Batch(#[from] BatchInitError),
+    /// A batch entry was rejected.
+    #[error(transparent)]
+    BatchEntry(#[from] BatchAddError),
+    /// Native evaluation failed.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
+    /// A guarded native helper failed.
+    #[error(transparent)]
+    Shim(#[from] ShimError),
+    /// Input tokenization failed.
+    #[error(transparent)]
+    Tokenize(#[from] StringToTokenError),
+    /// Output bytes could not be decoded.
+    #[error(transparent)]
+    Detokenize(#[from] DetokenizeError),
+    /// Sampler allocation failed.
+    #[error(transparent)]
+    Sampler(#[from] SamplerInitError),
+    /// Serialized chat metadata was invalid.
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
+/// Result of an engine operation.
+pub type EngineResult<T> = Result<T, EngineError>;

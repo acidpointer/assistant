@@ -124,6 +124,53 @@ bool common_shim_reasoning_budget_force(struct llama_sampler * smpl) {
 
 // ── guarded raw-sampler operations ──────────────────────────────────────────
 
+int32_t common_shim_sampler_chain_init_raw(struct llama_sampler ** out) {
+    if (!out) { return LLAMA_SHIM_INVALID_ARG; }
+    *out = nullptr;
+    return guard([&]() -> int32_t {
+        *out = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t common_shim_sampler_greedy_init_raw(struct llama_sampler ** out) {
+    if (!out) { return LLAMA_SHIM_INVALID_ARG; }
+    *out = nullptr;
+    return guard([&]() -> int32_t {
+        *out = llama_sampler_init_greedy();
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t common_shim_sampler_chain_add_raw(struct llama_sampler * chain, struct llama_sampler * child) {
+    if (!chain || !child || !llama_sampler_chain_get(chain, -1)) { return LLAMA_SHIM_INVALID_ARG; }
+    return guard([&]() -> int32_t {
+        // At pinned b12015 this is vector::push_back of a trivial entry. On an
+        // allocation exception the vector is unchanged and child remains caller-owned.
+        llama_sampler_chain_add(chain, child);
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t common_shim_sampler_grammar_init_raw(
+        const struct llama_vocab * vocab, const char * grammar, const char * root,
+        bool lazy, const char ** patterns, size_t n_patterns,
+        const int32_t * tokens, size_t n_tokens, struct llama_sampler ** out) {
+    if (!out) { return LLAMA_SHIM_INVALID_ARG; }
+    *out = nullptr;
+    if (!vocab || !grammar || !root || (n_patterns && !patterns) || (n_tokens && !tokens)) {
+        return LLAMA_SHIM_INVALID_ARG;
+    }
+    for (size_t i = 0; i < n_patterns; ++i) {
+        if (!patterns[i]) { return LLAMA_SHIM_INVALID_ARG; }
+    }
+    return guard([&]() -> int32_t {
+        *out = lazy ? llama_sampler_init_grammar_lazy_patterns(vocab, grammar, root, patterns, n_patterns, tokens, n_tokens)
+                    : llama_sampler_init_grammar(vocab, grammar, root);
+        return LLAMA_SHIM_OK;
+    });
+}
+
 int32_t common_shim_sampler_accept_raw(struct llama_sampler * smpl, int32_t token) {
     if (!smpl) {
         return LLAMA_SHIM_INVALID_ARG;

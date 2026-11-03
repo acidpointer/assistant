@@ -1,13 +1,26 @@
+//! Native inference foundation. Models borrow the process singleton and contexts
+//! borrow models. Contexts are worker-confined; prepared inputs bind rendering,
+//! tokenization, grammar, and parsing to one model. Errors are typed and bounded
+//! generation failures carry partial progress.
 mod context;
+#[allow(clippy::module_inception)] // Preserve the existing engine source layout.
 mod engine;
 mod errors;
 mod helpers;
 mod llm;
 
-pub use context::*;
-pub use engine::*;
-pub use errors::*;
-pub use helpers::*;
-pub use llm::*;
+pub(crate) use context::GenerationState;
+pub use context::{
+    Cancellation, FinishReason, Generation, GenerationFailure, GenerationOptions,
+    GenerationProgress, LLMContext, ParseMode, PreparedInput, StreamCmd, TokenSink, Usage,
+};
+pub use engine::ModelEngine;
+pub use errors::{EngineError, EngineResult};
+pub use llm::{LLMConfig, LLMModel, Thinking};
 
-pub(crate) type EngineResult<T> = std::result::Result<T, EngineError>;
+#[cfg(test)]
+pub(crate) fn test_engine() -> &'static ModelEngine {
+    static INITIALIZE: std::sync::Once = std::sync::Once::new();
+    INITIALIZE.call_once(|| ModelEngine::init().expect("initialize test engine"));
+    ModelEngine::get_instance().expect("test engine initialized")
+}
