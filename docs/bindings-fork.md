@@ -72,6 +72,7 @@ exists and which upstream API or behavior forced it.
 | `0004-exact-decode-lifecycle-hooks.patch` | Adds decode begin/end callbacks plus an ABI guard symbol, so safe callback owners (tensor transactions) can rely on exact lifecycle ordering and fail at link time against an unpatched library. |
 | `0005-fail-closed-eagle3-process.patch` | Replaces process-aborting `GGML_ABORT`/`GGML_ASSERT` paths in EAGLE-3 with recoverable errors for bad model pairs. |
 | `0006-runtime-state-safety.patch` | Appends a context-local attention-rotation opt-out with an ABI guard; synchronizes native logger pairs and confines fitting log scopes to their thread. |
+| `0007-vulkan-resource-lifecycle.patch` | Retires idle Vulkan logical devices before NVIDIA driver finalization, preserves registry descriptors across cache recreation, and destroys the instance from an ordered process-exit handler. |
 
 Rules:
 
@@ -167,6 +168,76 @@ module. Bridging records into `tracing` belongs to the application.
 Coverage is deliberately narrow: this callback covers llama/ggml core logs. The
 `common/` logger (`runtime::log`) and the clip/mtmd logger (`mtmd_log_set`) are
 separate native sinks and are not captured by `set_log_callback`.
+
+### Vulkan resource lifetime
+
+The Vulkan patch addresses the process-exit failure class tracked in
+[llama.cpp #10528](https://github.com/ggml-org/llama.cpp/issues/10528). The original
+NVIDIA 615.78.08 core showed a background shader compiler fault while the main
+thread finalized the driver, after generation and worker shutdown.
+
+- Registry device and buffer-type descriptors remain valid for the process
+  lifetime. They hold a device index rather than retaining a logical device.
+- Backends, native Vulkan buffer contexts, events, and pinned host
+  allocations retain their native storage owners. Releasing the last external
+  owner attempts cache cleanup; resident model weights continue to pin devices.
+- The additive native `ggml_backend_vk_cleanup()` returns false without retiring
+  any device while external owners or pinned allocations remain. It synchronizes
+  every eligible device before breaking staging-buffer cycles and destroying
+  devices. Later operations can recreate them using the same descriptors.
+- Initialization, device publication, staging-cache replacement and cleanup share
+  a lifecycle mutex. Retirement checks run on native owner release; there is no
+  polling or per-token cleanup hook.
+- A handler registered after instance creation attempts final device cleanup and
+  then destroys the instance ahead of the finalizers registered during instance
+  creation. Normal owner release retires devices before process finalization,
+  including compiler libraries loaded lazily after instance creation. It refuses to destroy
+  live resources. Hosts must still stop and release native work before process
+  exit; abandoning threads or live global inference owners is not supported.
+- The public native struct ABI and safe Rust API are unchanged. The sys wrapper
+  includes `ggml-vulkan.h` for the additive raw declarations; referencing Vulkan
+  symbols still requires a native Vulkan build. The upstream pin is unchanged.
+
+The isolated `test_vulkan_lifecycle` integration binary exercises live-owner
+refusal, empty buffers, tensor transfers, events, pinned allocations, stable
+descriptors, recreation, and concurrent cleanup/release without model weights.
+Its child-process test executes a Vulkan graph and exits through the real driver
+finalizers without calling explicit cleanup.
+Set `LLAMA_TEST_REQUIRE_VULKAN=1` to turn a missing device into a failure. Setting
+`GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1` additionally exercises staging transfers
+on discrete GPUs that normally map their memory directly. Run with a real GPU;
+a sandbox that hides driver devices cannot establish this coverage.
+
+Validation on 2026-11-03 used an NVIDIA RTX A500 Laptop GPU with driver
+615.78.08 and LFM3-1.7B Q6_K. The strict lifecycle tests passed with staging
+forced. GDB observed device destruction on the model worker before the exit
+hook, followed by normal process exit. Ten repetitions of the reported CLI
+prompt and three native generation runs exited cleanly without compiler errors.
+Three interleaved native runs per version measured median decode throughput of
+55.92 tokens/s before and 56.27 tokens/s after; this small sample establishes no
+observed decode regression, not a speedup. AMD and Intel hardware were not
+available for validation. The original driver fault was intermittent, so clean
+smoke runs alone cannot prove its absence.
+
+`cargo fmt --all --check` and `cargo check --workspace` passed. The unfiltered
+workspace test gate is still red for independent baseline issues:
+
+- `plaintext_tokenization_does_not_forge_special_tokens` and
+  `tokenize_prompt_neutralizes_injected_markup` assume special-token markup
+  absent from the fallback Llama 3 vocabulary.
+- `test_model_desc`, `test_model_rope_properties`,
+  `test_model_numeric_properties`, and `test_model_display` query model
+  properties left uninitialized by vocab-only loading. The display test aborts
+  in upstream `llama_hparams::n_head`, including without a usable GPU.
+- `model_can_use_two_different_tools_in_one_conversation` sometimes answers
+  arithmetic without calling `calculate`; the same failure reproduced on the
+  preserved pre-patch executable.
+
+The remaining tests passed with those cases excluded. The two other model tool
+tests passed separately and were excluded from the final repeat to avoid
+another lengthy CPU run. No existing test assertions were changed. The new
+Vulkan tests also passed the missing-driver skip path and the strict real-GPU
+path after that skip handling was verified.
 
 ### Ownership, allocation, and API compatibility (2026-11-03)
 

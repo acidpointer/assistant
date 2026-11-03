@@ -15,6 +15,10 @@
 // emits the corresponding extern fns.
 #include "llama-ext.h"
 
+// Vulkan lifecycle declarations are additive; callers must enable the native
+// Vulkan backend before referencing these symbols.
+#include "ggml-vulkan.h"
+
 #ifdef RPC_SUPPORT
 #include "ggml-rpc.h"
 #endif

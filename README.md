@@ -105,11 +105,14 @@ The Rust crates are ported from
 llama.cpp is pinned to
 [`a34de8618b25dfc32ee43749db47d767a9f0a25d`](https://github.com/ggml-org/llama.cpp/commit/a34de8618b25dfc32ee43749db47d767a9f0a25d)
 (`b12015`), upstream HEAD on October 30, 2026, including the LFM3 architecture.
-The sys crate applies four binding patches for speculative state, decode
-lifecycle, context-local rotation, and native logging safety to a build-directory
-copy; the submodule stays unmodified. The runtime-safety patch appends a context
+The sys crate applies five binding patches for speculative state, decode
+lifecycle, context-local rotation, native logging safety, and Vulkan resource
+lifetime to a build-directory copy; the submodule stays unmodified. The runtime-safety patch appends a context
 parameter and adds a required ABI guard. See [binding compatibility notes](docs/bindings-fork.md#ownership-allocation-and-api-compatibility-2026-11-03)
 for the fallible batch/ggml APIs and lifetime-bound native handles.
+The Vulkan patch retires unused devices before driver finalization and preserves
+buffer-type descriptors across cache recreation; see the
+[Vulkan lifetime contract](docs/bindings-fork.md#vulkan-resource-lifetime).
 The local port also adapts the chat capabilities shim to upstream's JSON API
 and keeps quantization preview parameters alive for the native state's lifetime.
 
