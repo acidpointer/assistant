@@ -39,7 +39,8 @@ pub struct LLMConfig {
     pub execution: ExecutionMode,
     /// CPU threads for both prefill and decoding.
     pub threads: u32,
-    /// Default generated-token ceiling, including protocol and reasoning.
+    /// Default generated-token ceiling, including protocol and reasoning. The
+    /// worker reduces this to actual available space; it is not a reservation.
     pub max_new_tokens: usize,
     /// Default template thinking mode.
     pub thinking: Thinking,
@@ -106,9 +107,9 @@ impl LLMConfig {
                 "threads must fit a positive native count",
             ));
         }
-        if self.max_new_tokens == 0 || self.max_new_tokens >= self.context_size as usize {
+        if self.max_new_tokens == 0 {
             return Err(EngineError::Configuration(
-                "max_new_tokens must leave room for input",
+                "max_new_tokens must be positive",
             ));
         }
         Ok(())
@@ -187,6 +188,21 @@ impl<'engine> LLMModel<'engine> {
 mod tests {
     use super::*;
     use crate::engine::{KvCacheType, LlamaFlashAttnType};
+    #[test]
+    fn desired_output_ceiling_is_independent_of_context_capacity() {
+        let mut config = LLMConfig::new("not-a-model.gguf");
+        config.context_size = 256;
+        config.batch_size = 128;
+        config.max_new_tokens = 4096;
+        config
+            .validate()
+            .expect("worker fits a ceiling to actual input/capacity");
+        config.max_new_tokens = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(EngineError::Configuration(_))
+        ));
+    }
     #[test]
     fn invalid_cache_microbatch_and_cpu_policies_fail_before_loading() {
         let mut config = LLMConfig::new("not-a-model.gguf");

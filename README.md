@@ -5,7 +5,7 @@ Rust workspace with local llama.cpp bindings and a tool-using assistant.
 | Crate | Purpose |
 | --- | --- |
 | `assistant` | Persistent runtime, shared application API, chat, tools and plugins |
-| `assistant-web` | Default HTTP/WebUI plugin and embedded single-file browser UI |
+| `assistant-web` | Default HTTP/WebUI plugin and embedded React/TypeScript UI |
 | `assistant-daemon` | Launcher package producing the single `assistant` binary |
 | `llama_cpp` | Safe Rust API, ported from eugenehp/llama-cpp-rs |
 | `llama_cpp_sys` | Generated FFI, native build, and C++ shims |
@@ -23,6 +23,18 @@ and OpenMP. Ninja is used when available. The assistant uses Vulkan by default;
 install Vulkan headers, the Vulkan loader, a GPU driver, and `glslc` as well.
 On Arch Linux, these are provided by `base-devel cmake ninja clang vulkan-headers
 vulkan-icd-loader shaderc` and your GPU's Vulkan driver package.
+
+Prepare the embedded frontend before a workspace/daemon build (Node 22.18+ or
+24.12+; no Node runtime is required for the deployed binary):
+
+```sh
+npm --prefix crates/assistant-web/frontend ci
+npm --prefix crates/assistant-web/frontend run build
+```
+
+After `npm ci`, `scripts/check-web.sh` runs the frontend quality/build steps
+before the workspace Rust gates. Browser integration remains an explicit
+`npm --prefix crates/assistant-web/frontend run test:browser` step.
 
 Choose a local GGUF explicitly; model paths are never committed. Normal startup
 runs the resident assistant with WebUI at **http://127.0.0.1:8080**:
@@ -54,7 +66,9 @@ Other GPU backends use `--no-default-features --features cuda` or
 default features now actually disables Vulkan. `--thinking` enables supported
 template reasoning; `--raw` bypasses chat/tools for diagnostic completion.
 `--ctx-size`, `--batch-size`, `--max-tokens` and `--threads` control native budgets.
-`--timeout-seconds` sets the per-interaction deadline (default 120 seconds).
+`--ctx-size` defaults to 8192, `--max-tokens` to 4096 per model turn, and
+`--run-max-tokens` to 8192 across the interaction.
+`--timeout-seconds` sets the per-interaction deadline (default 600 seconds).
 Cache controls include `--cache-type-k`, `--cache-type-v`, `--swa-cache`,
 `--flash-attn`, `--attn-rotation`, and `--ubatch-size`. Defaults remain FP16/full
 SWA. `--diagnostics` prints native allocation/settings JSON to stderr; `--cpu`

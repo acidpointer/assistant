@@ -76,7 +76,10 @@ and snapshot capture are one operation. A lagged subscription is closed; the
 consumer replaces its view from a new snapshot. No event replay store exists.
 
 The display transcript, native working context and future durable history are
-different states. Partial output carries its terminal status. Tools/reasoning
+different states. Run metadata/measurements stay retained while their exchanges
+are visible, even after the minimum deduplication window. Partial output carries its terminal status. A cutoff/failure before visible text
+gets an empty terminal display entry, so its host status remains visible without
+fabricating model content. Tools/reasoning
 do not become answer text. Model-turn boundary events keep continuation messages
 separate. The awaited core result finalizes each interaction, including failures
 that occurred before normal event delivery.
@@ -86,7 +89,7 @@ that occurred before normal event delivery.
 | New input | 16 KiB UTF-8; identifiers 128 ASCII characters |
 | One assistant message | 128 KiB UTF-8 |
 | Visible transcript | 128 messages and 1 MiB text; oldest complete runs evicted |
-| Submission records | 128; at least 10 minutes retained, capacity rejected |
+| Submission records | 128; at least 10 minutes and while visible, capacity rejected |
 | Application command inbox | 32 commands |
 | Native-to-application progress inbox | 256 items and 256 KiB text |
 | Shared subscriber ring | 64 updates, shared immutable payloads |
@@ -115,56 +118,164 @@ requests require JSON, `X-Assistant-Client: webui`, and an exact origin match wh
 Origin is present. Missing Origin is supported through the non-simple header
 requirement. Cross-origin access is not enabled.
 
-The HTML uses per-response CSP nonces, no remote assets, no interpreted message
-HTML and no persistent browser storage. Error responses use safe machine codes.
+The HTML loads embedded assets under a same-origin CSP, with no remote assets,
+interpreted message HTML or persistent browser storage. HTML revalidates and
+content-hashed JS/CSS/fonts/workers use immutable caching; gzip is prebuilt. Error responses use safe machine codes.
 SSE begins with `snapshot`, followed by `update` events; IDs are instance-scoped
 strings. Serialization failure or lag closes the stream. Each reconnect starts
 with authoritative state rather than replaying `Last-Event-ID`.
 
-## Single-file UI and verification
+## Typed frontend and verification
 
-`crates/assistant-web/webui.html` contains all production HTML/CSS/JavaScript.
-Transport, state transitions and rendering are separate functions within one
-strict-mode closure. The language floor is ES2017. Target browsers are Chromium
-80+, Firefox 78+, and Safari 13.1-era WebKit; modern viewport features have
-fallbacks. Current-engine tests do not establish minimum-version certification.
+Production source lives in `crates/assistant-web/frontend`. React/strict TypeScript
+uses Vite 8/Rolldown/Oxc, the Oxc React plugin, Oxlint with type-aware rules,
+Oxfmt, `tsc` and Steiger. Dependencies are pinned. FSD layers are `app`,
+`pages/chat`, `entities/{chat,telemetry}` and `shared`; unique chat actions remain
+in the page until reuse justifies feature slices. See [ADR 0004](decisions/0004-typed-frontend-and-measurements.md).
 
-Application text deltas coalesce for at most 20 ms or 16 KiB and flush at
-semantic boundaries/snapshot capture. Browser streaming appends text on animation frames and preserves existing message nodes.
-The transcript is bounded; input sizing changes only when input or viewport
-changes. Manual scroll position is respected. Status and completed-message
-announcements avoid per-token screen-reader updates. Enter-to-send respects
-composition, with Shift+Enter for newline. Responses are plain text in v1.
-
-Browser-only development tools are isolated from the production asset:
+Prepare assets before Cargo (also for CPU-only daemon builds):
 
 ```sh
-cd crates/assistant-web/tests/browser
+cd crates/assistant-web/frontend
 npm ci
-npx playwright install chromium firefox webkit
 npm run check
 npm test
+npm run build
+cd ../../..
+cargo build -p assistant-daemon
 ```
 
-Core tests use scripted evaluation without model files. HTTP boundary tests cover
-authority, structured errors and nonce templating. Browser fixtures exercise
-send/cancel, IME, reconnect, long streaming, stable nodes and responsive layouts.
-Actual minimum engines/mobile keyboards still require deployment-device checks.
+Node 22.18+ or 24.12+ is a build/development prerequisite. No Node process or
+separate asset directory is needed after deployment. Cargo verifies source/input
+checksums and embeds its own frozen copy; missing/stale assets fail with a build
+instruction. Cargo never invokes npm or uses a stale fallback. Generated dist is
+ignored. The build enforces a 120 KiB gzip initial JS/CSS budget; fonts, Markdown
+worker and syntax grammars load separately. Runtime dependency/font notices are
+available through the generated HTML's local license link.
 
-The real-daemon smoke test uses existing local weights and verifies HTTP policy,
-SSE generation, deduplication and SIGTERM with an open subscription:
+`npm run dev` runs a loopback Vite server proxying `/api` to the daemon at
+`127.0.0.1:8080`. Its development-only proxy rewrites Host/Origin together so
+production request policy stays intact. Node/HMR are not part of the binary.
+
+Target floors: Chromium 100+, Firefox 102 ESR+, Safari 15.4-era WebKit. Linux
+WebKitGTK 2.36 is a compatibility target, not an assertion that Safari and GTK
+versions are interchangeable. Explicit JS/CSS targets override Vite defaults.
+Current browser tests do not establish oldest WebView/device certification.
+
+Native application deltas coalesce for at most 20 ms/16 KiB. A single visible-tab
+connection batches updates on animation frames. Hidden tabs close their stream;
+runs continue on the daemon and visibility restores an authoritative snapshot.
+Keyed subscriptions preserve unrelated rows. Worker parsing is throttled, with
+one in-flight job and one latest pending version per mounted message. Limits:
+128 KiB input, 12,000 tokens/nodes, 48 recursive conversion levels and a 1.5 s
+worker watchdog. Failure displays literal source. Raw HTML stays text, unsafe
+links are suppressed, and images never load automatically. Completed messages
+receive lazy allowlisted syntax highlighting; code has Copy/Wrap controls.
+
+The normal textarea keeps native selection, multiline and IME behavior:
+
+| Action | Binding |
+| --- | --- |
+| Send | Enter or Ctrl/Cmd+Enter |
+| Newline | Shift+Enter |
+| Previous accepted prompt | Up in an empty draft or while recalling |
+| Next prompt / restore draft | Down while recalling |
+| Exit recall / close actions / otherwise stop | Escape |
+| Quick actions | Ctrl/Cmd+K |
+
+Recall creates a new draft; it never rewrites an earlier turn. History is bounded
+at 64 accepted local prompts and resets on daemon instance change. Ambiguous
+submissions retry only with the same key within a conservative monotonic retention
+window. Explicit rejections preserve the draft. Neither wall-clock changes nor
+late acknowledgments can create a new key or revive an old run.
+
+The responsive dark layout uses local Inter and JetBrains Mono, tabular metrics,
+short transform/opacity animations and reduced-motion support. Manual scrolling
+is respected; token streaming never starts repeated smooth scrolling. Status
+announcements avoid reading every token.
 
 ```sh
-cargo build -p assistant-daemon
+cd crates/assistant-web/frontend
+npx playwright install chromium firefox webkit
+npm run test:browser
+```
+
+The browser JSON report (`frontend/test-results/results.json`) includes measured
+input-to-frame p95 samples while streaming. The 100 ms automated regression
+ceiling on current engines is separate from the intended 50 ms deployment-device
+target; no minimum-hardware certification is claimed.
+
+Browser fixtures serve the built production assets and CSP through real HTTP/SSE.
+They cover Markdown/XSS, IME/recall, lost/late acknowledgments, reconnect recovery,
+320/768/2560 px layouts, bounded streaming, stable rows and manual scroll. Native
+unit tests cover token allowances and measured active time, including a deliberate
+consumer pause. Current WebKit on this development host needs test-only Ubuntu
+libraries; `ASSISTANT_TEST_WEBKIT_EXECUTABLE` optionally selects a compatible
+Playwright launcher without changing production assets.
+
+The real-daemon smoke test requires existing local weights:
+
+```sh
 python3 scripts/test-web-smoke.py --require-model
 python3 scripts/test-web-smoke.py --require-model --signal SIGINT
 ```
 
-The default model is the ignored `target/test-models/stories260K.gguf`; supply
-`--model` for another compatible local model. Absence skips without
-`--require-model`. No model is downloaded. On this development host, current
-WebKit testing needs compatible Ubuntu libraries for Playwright's Linux build;
-those test-only libraries are outside the repository and production binary.
+Default model: ignored `target/test-models/stories260K.gguf`; use `--model` for
+another local model. Absence skips unless `--require-model`. No model is downloaded. To check the live Rust-to-TypeScript contract too:
+
+```sh
+python3 scripts/test-web-smoke.py --require-model --model /path/to/model.gguf --contract-output /tmp/assistant-contract.json
+ASSISTANT_TEST_CONTRACT=/tmp/assistant-contract.json npm --prefix crates/assistant-web/frontend test
+```
+
+The optional contract case skips cleanly when no artifact is supplied.
+
+## Output limits and measurements
+
+Daemon defaults are `--ctx-size 8192 --max-tokens 4096 --run-max-tokens 8192
+--timeout-seconds 600`. Output and total-run counts include hidden reasoning and
+protocol, across tool continuations. Library `LLMConfig` retains its smaller
+experimental defaults; callers should choose their own capacity/output policy.
+A requested turn is clamped to the remaining run allowance and, for chat, to
+actual remaining context capacity after safe old-exchange eviction. A smaller
+`--ctx-size` can therefore retain the larger requested output ceiling; the actual
+turn still reserves only what fits. Raw diagnostics fit their entire input without
+history eviction. Context does
+not expand automatically and there is no semantic compaction. The UI explains
+`output_tokens`, `run_tokens` or `context_capacity` truncation. Oversized protected
+input still fails; deadlines/errors are separate outcomes. Use explicit ceilings
+that leave input room; larger contexts also require more cache memory.
+
+By default the header and assistant-message footer show tokens/s and VRAM only.
+Expand them for CPU, RSS/PSS, timings, counts and source details. Header throughput
+uses the measured active run while generating, otherwise weighted lifetime native
+throughput (`sum sampled tokens / sum active generation time`). It is never a mean
+of individual rates. The footer refers to its one model turn, including hidden
+sampled output. Prefill and first sampled-token latency are separate from visible
+text latency. Synthetic backends report timing unavailable.
+
+Native active times sum completed owner-thread steps, excluding scheduling and
+consumer waits. Timings/counters survive failures as measured prefixes;
+`measurement_complete=false` explicitly marks interruption before terminal native
+accounting. An unreported final native step is not counted or fabricated.
+
+CPU uses all daemon threads over monotonic phase boundaries; 100% is one core
+and multicore work can exceed 100%. It includes other daemon work in the same
+window. Linux RSS/PSS come from `/proc/self/smaps_rollup`. Dedicated VRAM is
+optional driver-reported NVML per-PID memory, deduplicated between compute and
+graphics queues and summed across physical devices. Other drivers/platforms
+currently show **Unavailable**, not zero or an allocator estimate. Unified memory
+is not added to RAM as fictitious dedicated VRAM. Memory windows retain baseline,
+last observation and maximum observed bytes, not exclusive per-message cost or
+continuous peak allocation. Resident model/cache memory can stay flat after a run.
+
+The transport-neutral core sampler uses one blocking operation at a time, shared
+by all tabs: 250 ms active, one second visible-idle, no idle polling with no
+subscribers. Per-turn/run aggregates and a latest sample are bounded; full sample
+histories are not retained. Native generations and process providers expose only
+owned snapshots to async code. `snapshot.resources`, `snapshot.inference`,
+`run.performance`, `run.resources`, `run.limit_reason` and `telemetry` SSE updates
+are additive v1 fields documented in OpenAPI.
 
 ## Systemd
 

@@ -12,8 +12,9 @@ mod llm;
 
 pub(crate) use context::GenerationState;
 pub use context::{
-    Cancellation, FinishReason, Generation, GenerationFailure, GenerationOptions,
-    GenerationProgress, LLMContext, ParseMode, PreparedInput, StreamCmd, TokenSink, Usage,
+    Cancellation, FinishReason, Generation, GenerationFailure, GenerationMetrics,
+    GenerationOptions, GenerationProgress, LLMContext, ParseMode, PreparedInput, StreamCmd,
+    TokenSink, Usage,
 };
 pub use diagnostics::{CacheDiagnostics, ContextRequest};
 pub use engine::ModelEngine;

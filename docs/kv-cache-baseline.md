@@ -154,13 +154,13 @@ Build once, then run without concurrent compilation or other GPU jobs:
 cargo build --release -p assistant --example cache_bench
 target/release/examples/cache_bench --model "$MODEL" --require-vulkan \
   --contexts 4096,32768 --batch 512 --ubatch 512 \
-  --no-web --prompt-tokens 1024 --decode-tokens 64 --repeats 3 >cache.jsonl
+  --prompt-tokens 1024 --decode-tokens 64 --repeats 3 >cache.jsonl
 python3 scripts/cache-results.py benchmark cache.jsonl
 ```
 
 Each matrix cell runs in a child process. A child retains one model and context
 for one cold and several warm trials. The matrix varies SWA and precision
-independently. Use `--contexts 4096 --no-web --prompt-tokens 4000 --decode-tokens 32` for
+independently. Use `--contexts 4096 --prompt-tokens 4000 --decode-tokens 32` for
 a nearly full 4K context. Longer capacities are explicit experiments; allocation
 failures remain failed cells, never successful CPU substitutions or missing
 rows. The parent completes remaining cells and returns failure if any failed.
@@ -196,7 +196,7 @@ Placement is a separate trace-enabled run:
 
 ```sh
 target/release/examples/cache_bench --model "$MODEL" --require-vulkan \
-  --profile compact-q8 --no-web --prompt-tokens 320 --decode-tokens 4 --repeats 1 \
+  --profile compact-q8 --prompt-tokens 320 --decode-tokens 4 --repeats 1 \
   --audit >placement.jsonl 2>placement.log
 python3 scripts/cache-results.py placement placement.log --require-backend Vulkan
 ```

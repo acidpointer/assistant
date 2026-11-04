@@ -24,6 +24,8 @@ impl Scripted {
                 messages
                     .into_iter()
                     .map(|message| ModelTurn {
+                        limit_reason: None,
+                        metrics: None,
                         message,
                         usage: Usage {
                             input_tokens: 10,
@@ -55,6 +57,7 @@ impl ModelBackend for Scripted {
         Box::pin(async move {
             self.requests.lock().await.push(request);
             self.turns.lock().await.pop_front().ok_or(ModelFailure {
+                metrics: None,
                 source: ChatError::Closed,
                 partial: None,
             })
@@ -178,12 +181,15 @@ async fn model_boundary_checks_limits_after_middleware() {
     let mut registrar = PluginRegistrar::default();
     registrar.layer_model(Oversize);
     let chat = chat(backend.clone(), registrar, RunLimits::default());
-    let error = chat
-        .generate("hello")
+    chat.generate("hello")
         .await
-        .expect_err("override cannot bypass allowance");
-    assert!(matches!(error.source, ChatError::Limit(_)));
-    assert!(backend.requests.lock().await.is_empty());
+        .expect("oversized preference is clamped");
+    let requests = backend.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].options.max_new_tokens,
+        Some(RunLimits::default().generated_tokens)
+    );
 }
 
 #[tokio::test]
@@ -468,4 +474,24 @@ async fn retrieval_hook_uses_typed_service_without_persisting_its_context() {
             Message::Assistant(AssistantMessage::text("answer"))
         ]
     );
+}
+
+#[tokio::test]
+async fn tool_continuations_use_the_remaining_run_allowance() {
+    let backend = Scripted::new(vec![calculator_call(), AssistantMessage::text("437")]);
+    let mut registrar = PluginRegistrar::default();
+    registrar.add_tool(Calculator).expect("register calculator");
+    let limits = RunLimits {
+        generated_tokens: 2,
+        ..RunLimits::default()
+    };
+    let chat = chat(backend.clone(), registrar, limits);
+    let response = chat
+        .generate("19 times 23")
+        .await
+        .expect("bounded tool continuation");
+    assert_eq!(response.usage.generated_tokens, 2);
+    let requests = backend.requests.lock().await;
+    assert_eq!(requests[0].options.max_new_tokens, Some(2));
+    assert_eq!(requests[1].options.max_new_tokens, Some(1));
 }

@@ -100,6 +100,20 @@ pub struct Usage {
     /// Sampled non-EOG tokens, including stop-sequence tokens.
     pub generated_tokens: usize,
 }
+/// Monotonic measurements made on the native owner thread. Active times sum only
+/// calls to `advance`; scheduler and consumer waits are excluded. GPU work uses
+/// the existing synchronous decode boundary, with no per-token extra sync.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct GenerationMetrics {
+    /// Active prompt evaluation time, in nanoseconds.
+    pub prefill_ns: u64,
+    /// Active sampling, decoding and detokenization time, in nanoseconds.
+    pub generation_ns: u64,
+    /// Wall time from native cursor creation to this measurement.
+    pub elapsed_ns: u64,
+    /// Wall time to the first sampled non-EOG token; not first visible text.
+    pub first_token_ns: Option<u64>,
+}
 /// Successful or deliberately truncated native output.
 #[derive(Debug, Clone)]
 pub struct Generation {
@@ -113,10 +127,14 @@ pub struct Generation {
     pub prefill_time: Duration,
     /// Time spent sampling and decoding output.
     pub generation_time: Duration,
+    /// Detailed owner-thread measurements.
+    pub metrics: GenerationMetrics,
 }
 /// Valid output already obtained before a failure.
 #[derive(Debug, Clone, Default)]
 pub struct GenerationProgress {
+    /// Measurements at the last completed native step.
+    pub metrics: GenerationMetrics,
     /// Completed UTF-8 output, excluding matched stop sequences.
     pub text: String,
     /// Accounting up to the failure boundary.
@@ -130,13 +148,13 @@ pub struct GenerationFailure {
     #[source]
     pub source: EngineError,
     /// Progress that must not be confused with a completed assistant message.
-    pub partial: GenerationProgress,
+    pub partial: Box<GenerationProgress>,
 }
 impl From<EngineError> for GenerationFailure {
     fn from(source: EngineError) -> Self {
         Self {
             source,
-            partial: GenerationProgress::default(),
+            partial: Box::default(),
         }
     }
 }
@@ -451,7 +469,7 @@ impl<'model> LLMContext<'model> {
                 ..Usage::default()
             },
             started: Instant::now(),
-            decoding: None,
+            metrics: GenerationMetrics::default(),
             reason: None,
         })
     }
@@ -466,7 +484,20 @@ impl<'model> LLMContext<'model> {
         {
             return Err(EngineError::State("stale generation cursor"));
         }
+        let started = Instant::now();
+        let prefill = state.cursor < state.input.tokens.len();
+        let tokens = state.usage.generated_tokens;
         let result = self.advance_inner(state);
+        let elapsed = nanos(started.elapsed());
+        if prefill {
+            state.metrics.prefill_ns += elapsed;
+        } else {
+            state.metrics.generation_ns += elapsed;
+        }
+        state.metrics.elapsed_ns = nanos(state.started.elapsed());
+        if state.usage.generated_tokens > tokens && state.metrics.first_token_ns.is_none() {
+            state.metrics.first_token_ns = Some(state.metrics.elapsed_ns);
+        }
         if result.is_err() {
             self.cache.valid = false;
             self.cache.logits = false;
@@ -511,7 +542,6 @@ impl<'model> LLMContext<'model> {
             state.cursor = end;
             return Ok(None);
         }
-        state.decoding.get_or_insert_with(Instant::now);
         let token = state.sampler.try_sample(&self.native, -1)?;
         if self.model.model_ref().is_eog_token(token) {
             return state.finish(FinishReason::EndOfGeneration);
@@ -571,7 +601,7 @@ pub(crate) struct GenerationState<'model> {
     max_tokens: usize,
     usage: Usage,
     started: Instant,
-    decoding: Option<Instant>,
+    metrics: GenerationMetrics,
     reason: Option<FinishReason>,
 }
 impl GenerationState<'_> {
@@ -581,26 +611,27 @@ impl GenerationState<'_> {
     pub(crate) fn progress(&self) -> GenerationProgress {
         GenerationProgress {
             text: self.buffer.text.clone(),
+            metrics: self.metrics.clone(),
             usage: self.usage.clone(),
         }
     }
     pub(crate) fn failure(&self, source: EngineError) -> GenerationFailure {
         GenerationFailure {
             source,
-            partial: self.progress(),
+            partial: Box::new(self.progress()),
         }
     }
     pub(crate) fn result(&self) -> Result<Generation, GenerationFailure> {
         let reason = self
             .reason
             .ok_or_else(|| self.failure(EngineError::State("generation is not finished")))?;
-        let decoded_at = self.decoding.unwrap_or_else(Instant::now);
         Ok(Generation {
             text: self.buffer.text.clone(),
+            metrics: self.metrics.clone(),
             usage: self.usage.clone(),
             finish_reason: reason,
-            prefill_time: decoded_at.saturating_duration_since(self.started),
-            generation_time: self.decoding.map_or(Duration::ZERO, |t| t.elapsed()),
+            prefill_time: Duration::from_nanos(self.metrics.prefill_ns),
+            generation_time: Duration::from_nanos(self.metrics.generation_ns),
         })
     }
     fn finish(&mut self, reason: FinishReason) -> EngineResult<Option<String>> {
@@ -677,3 +708,7 @@ impl StopBuffer {
 mod cache_tests;
 #[cfg(test)]
 mod tests;
+
+fn nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}

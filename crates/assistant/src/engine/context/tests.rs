@@ -60,6 +60,37 @@ fn native_generation_cache_stops_and_failure_recovery() {
     assert_eq!(chunks.concat(), baseline.text);
     assert!(chunks.len() >= 3, "fixture spans multiple chunks");
     assert_eq!(baseline.usage.prefill_tokens, input.token_count());
+    assert!(baseline.metrics.generation_ns > 0);
+    assert_eq!(
+        baseline.generation_time.as_nanos(),
+        u128::from(baseline.metrics.generation_ns)
+    );
+    assert!(baseline.metrics.first_token_ns.is_some());
+    // Deliberate consumer delay must affect wall time, not active native time.
+    let mut delayed = context
+        .begin(
+            &input,
+            GenerationOptions {
+                max_new_tokens: Some(2),
+                ..GenerationOptions::default()
+            },
+        )
+        .expect("timed cursor");
+    context.advance(&mut delayed).expect("first native step");
+    let active_before = delayed.metrics.prefill_ns + delayed.metrics.generation_ns;
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(
+        delayed.metrics.prefill_ns + delayed.metrics.generation_ns,
+        active_before
+    );
+    while !delayed.is_finished() {
+        context.advance(&mut delayed).expect("finish cursor");
+    }
+    let delayed = delayed.result().expect("timed result");
+    assert!(
+        delayed.metrics.elapsed_ns
+            >= delayed.metrics.prefill_ns + delayed.metrics.generation_ns + 15_000_000
+    );
     let cached = context.cached_tokens();
     let cancelled = Cancellation::default();
     cancelled.cancel();

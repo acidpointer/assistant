@@ -41,7 +41,7 @@ paths:
         '200':
           description: |
             SSE snapshot event followed by ordered update events. An update has
-            type run, message, delta, activity or evicted. Event IDs are opaque
+            type run, message, delta, activity, evicted or telemetry. Event IDs are opaque
             instance-qualified strings. Every reconnect receives a new snapshot;
             Last-Event-ID does not request replay. Lag or failure closes the stream.
           content:
@@ -152,7 +152,7 @@ components:
         status: {$ref: '#/components/schemas/Status'}
     Run:
       type: object
-      required: [id, chat_id, client_id, client_request_id, status, error, input_tokens, generated_tokens, warning_count, unknown_tool_outcome]
+      required: [id, chat_id, client_id, client_request_id, status, error, input_tokens, generated_tokens, warning_count, unknown_tool_outcome, performance, resources, limit_reason]
       properties:
         id: {type: string}
         chat_id: {type: string}
@@ -164,9 +164,12 @@ components:
         generated_tokens: {type: integer, minimum: 0}
         warning_count: {type: integer, minimum: 0}
         unknown_tool_outcome: {type: boolean}
+        limit_reason: {enum: [output_tokens, run_tokens, context_capacity, null]}
+        resources: {$ref: '#/components/schemas/ResourceWindow'}
+        performance: {type: array, maxItems: 8, items: {$ref: '#/components/schemas/Performance'}}
     Snapshot:
       type: object
-      required: [instance_id, chat_id, revision, messages, active_run, recent_runs, truncated]
+      required: [instance_id, chat_id, revision, messages, active_run, recent_runs, truncated, resources, inference]
       properties:
         instance_id: {type: string}
         chat_id: {type: string}
@@ -175,3 +178,68 @@ components:
         active_run: {oneOf: [{$ref: '#/components/schemas/Run'}, {type: 'null'}]}
         recent_runs: {type: array, maxItems: 128, items: {$ref: '#/components/schemas/Run'}}
         truncated: {type: boolean}
+        resources: {oneOf: [{$ref: '#/components/schemas/ResourceSample'}, {type: 'null'}]}
+        inference: {$ref: '#/components/schemas/InferenceTotals'}
+
+    ResourceSample:
+      type: object
+      description: Latest daemon observation. Null is unavailable, never an assumed zero.
+      required: [sampled_at_unix_ms, monotonic_ns, process_cpu_ns, cpu_percent, ram_rss_bytes, ram_pss_bytes, vram_bytes, vram_source, ram_source]
+      properties:
+        sampled_at_unix_ms: {type: [integer, 'null'], minimum: 0}
+        monotonic_ns: {type: integer, minimum: 0, description: Monotonic sampler age; use for intervals instead of UTC.}
+        process_cpu_ns: {type: [integer, 'null'], minimum: 0, description: All-thread process CPU clock.}
+        cpu_percent: {type: [number, 'null'], minimum: 0, description: Interval utilization; 100 percent is one CPU core.}
+        ram_rss_bytes: {type: [integer, 'null'], minimum: 0}
+        ram_pss_bytes: {type: [integer, 'null'], minimum: 0}
+        vram_bytes: {type: [integer, 'null'], minimum: 0, description: Driver-reported dedicated process VRAM across devices.}
+        vram_source: {type: [string, 'null'], examples: [nvml_process_v2]}
+        ram_source: {type: [string, 'null'], examples: [linux_smaps_rollup]}
+    ResourceBoundary:
+      type: object
+      required: [monotonic_ns, process_cpu_ns]
+      properties:
+        monotonic_ns: {type: integer, minimum: 0}
+        process_cpu_ns: {type: [integer, 'null'], minimum: 0}
+    ResourceWindow:
+      type: object
+      description: Process observations around a phase, including resident/shared work. Maxima are sampled, never exclusive costs or continuous peaks.
+      required: [started, ended, before, after, max_observed_rss_bytes, max_observed_vram_bytes]
+      properties:
+        started: {oneOf: [{$ref: '#/components/schemas/ResourceBoundary'}, {type: 'null'}]}
+        ended: {oneOf: [{$ref: '#/components/schemas/ResourceBoundary'}, {type: 'null'}]}
+        before: {oneOf: [{$ref: '#/components/schemas/ResourceSample'}, {type: 'null'}]}
+        after: {oneOf: [{$ref: '#/components/schemas/ResourceSample'}, {type: 'null'}]}
+        max_observed_rss_bytes: {type: [integer, 'null'], minimum: 0}
+        max_observed_vram_bytes: {type: [integer, 'null'], minimum: 0}
+    Timing:
+      type: object
+      description: Monotonic owner-thread nanoseconds. Active times exclude scheduler/consumer waits; no per-token extra GPU synchronization.
+      required: [prefill_ns, generation_ns, elapsed_ns, first_token_ns]
+      properties:
+        prefill_ns: {type: integer, minimum: 0}
+        generation_ns: {type: integer, minimum: 0}
+        elapsed_ns: {type: integer, minimum: 0}
+        first_token_ns: {type: [integer, 'null'], minimum: 0, description: First sampled non-EOG token, not first visible text.}
+    Performance:
+      type: object
+      required: [turn, generated_tokens, timing, resources, measurement_complete]
+      properties:
+        turn: {type: integer, minimum: 1}
+        generated_tokens: {type: integer, minimum: 0, description: Native non-EOG samples including hidden reasoning and protocol.}
+        timing: {oneOf: [{$ref: '#/components/schemas/Timing'}, {type: 'null'}]}
+        resources: {$ref: '#/components/schemas/ResourceWindow'}
+        measurement_complete: {type: boolean, description: False means a measured prefix; interrupted work may contain an unreported native step.}
+    InferenceTotals:
+      type: object
+      required: [generated_tokens, generation_ns]
+      properties:
+        generated_tokens: {type: integer, minimum: 0, description: Sum of sampled tokens with native measurements.}
+        generation_ns: {type: integer, minimum: 0, description: Sum of their active generation times; divide totals rather than averaging rates.}
+    TelemetryUpdate:
+      type: object
+      required: [type, sample, inference]
+      properties:
+        type: {const: telemetry}
+        sample: {$ref: '#/components/schemas/ResourceSample'}
+        inference: {$ref: '#/components/schemas/InferenceTotals'}

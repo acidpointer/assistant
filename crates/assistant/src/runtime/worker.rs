@@ -38,6 +38,7 @@ enum TurnEvent {
         text: String,
         reasoning: String,
         usage: Usage,
+        metrics: crate::engine::GenerationMetrics,
     },
     Finished(Result<ModelTurn, ModelFailure>),
 }
@@ -152,6 +153,7 @@ impl ModelBackend for WorkerHandle {
         Box::pin(async move {
             let (output, mut receiver) = mpsc::channel(self.event_capacity);
             let run_id = turn.run_id;
+            let turn_index = turn.turn;
             let mut guard = WakeOnDrop {
                 worker: self.clone(),
                 cancellation: turn.cancellation.clone(),
@@ -159,23 +161,29 @@ impl ModelBackend for WorkerHandle {
             };
             let mut partial = AssistantMessage::default();
             let mut usage = Usage::default();
+            let mut metrics = None;
+            let mut last_metrics = std::time::Instant::now();
             let deadline = turn.deadline;
             let cancellation = turn.cancellation.clone();
-            let fail = |source, message, usage| ModelFailure {
-                source,
-                partial: Some((message, usage)),
-            };
+            let fail =
+                |source, message, usage, metrics: Option<crate::engine::GenerationMetrics>| {
+                    ModelFailure {
+                        metrics: metrics.map(Box::new),
+                        source,
+                        partial: Some(Box::new((message, usage))),
+                    }
+                };
             tokio::select! {
-                () = cancellation.cancelled() => return Err(fail(ChatError::Cancelled, partial, usage)),
-                () = tokio::time::sleep_until(deadline.into()) => return Err(fail(ChatError::Deadline, partial, usage)),
+                () = cancellation.cancelled() => return Err(fail(ChatError::Cancelled, partial, usage, metrics)),
+                () = tokio::time::sleep_until(deadline.into()) => return Err(fail(ChatError::Deadline, partial, usage, metrics)),
                 sent = self.sender.send(Command::Generate { request: Box::new(request), turn, output }) => {
-                    if sent.is_err() { return Err(fail(ChatError::Closed, partial, usage)); }
+                    if sent.is_err() { return Err(fail(ChatError::Closed, partial, usage, metrics)); }
                 }
             }
             loop {
                 let event = tokio::select! {
-                    () = cancellation.cancelled() => return Err(fail(ChatError::Cancelled, partial, usage)),
-                    () = tokio::time::sleep_until(deadline.into()) => return Err(fail(ChatError::Deadline, partial, usage)),
+                    () = cancellation.cancelled() => return Err(fail(ChatError::Cancelled, partial, usage, metrics)),
+                    () = tokio::time::sleep_until(deadline.into()) => return Err(fail(ChatError::Deadline, partial, usage, metrics)),
                     event = receiver.recv() => event,
                 };
                 self.wake();
@@ -184,15 +192,33 @@ impl ModelBackend for WorkerHandle {
                         text,
                         reasoning,
                         usage: current,
+                        metrics: current_metrics,
                     }) => {
                         usage = current;
-                        events.usage(usage.clone()).await;
+                        metrics = Some(current_metrics.clone());
+                        events
+                            .measurements(usage.clone(), current_metrics.clone())
+                            .await;
+                        if last_metrics.elapsed() >= std::time::Duration::from_millis(100) {
+                            last_metrics = std::time::Instant::now();
+                            if let Err(error) = events
+                                .emit(RunEvent::ModelProgress {
+                                    run_id,
+                                    turn: turn_index,
+                                    usage: usage.clone(),
+                                    metrics: current_metrics,
+                                })
+                                .await
+                            {
+                                return Err(fail(error, partial, usage, metrics));
+                            }
+                        }
                         if !text.is_empty() {
                             partial.content.push_str(&text);
                             if let Err(error) =
                                 events.emit(RunEvent::TextDelta { run_id, text }).await
                             {
-                                return Err(fail(error, partial, usage));
+                                return Err(fail(error, partial, usage, metrics));
                             }
                         }
                         if !reasoning.is_empty() {
@@ -207,7 +233,7 @@ impl ModelBackend for WorkerHandle {
                                 })
                                 .await
                             {
-                                return Err(fail(error, partial, usage));
+                                return Err(fail(error, partial, usage, metrics));
                             }
                         }
                     }
@@ -215,7 +241,7 @@ impl ModelBackend for WorkerHandle {
                         guard.completed = true;
                         return result;
                     }
-                    None => return Err(fail(ChatError::Closed, partial, usage)),
+                    None => return Err(fail(ChatError::Closed, partial, usage, metrics)),
                 }
             }
         })
@@ -226,6 +252,8 @@ struct ContextEntry<'m> {
     lease: Weak<()>,
 }
 struct Active<'m> {
+    last_report: std::time::Instant,
+    limit_reason: Option<&'static str>,
     turn: TurnContext,
     input: PreparedInput<'m>,
     state: GenerationState<'m>,
@@ -290,6 +318,7 @@ fn worker_loop<'m>(
                             // returned without blocking other active contexts.
                             let _recipient_gone =
                                 output.try_send(TurnEvent::Finished(Err(ModelFailure {
+                                    metrics: None,
                                     source: error,
                                     partial: None,
                                 })));
@@ -377,9 +406,27 @@ fn begin<'m>(
         );
     }
     let entry = contexts.get_mut(&turn.chat_id).ok_or(ChatError::Closed)?;
+    let desired_reserve = request
+        .options
+        .max_new_tokens
+        .unwrap_or(model.config().max_new_tokens);
     let input = prepare_input(&mut entry.context, model, &mut request, &turn)?;
+    let available = entry.context.capacity().saturating_sub(input.token_count());
+    if available == 0 {
+        return Err(crate::engine::EngineError::Budget {
+            input: input.token_count(),
+            output: 1,
+            capacity: entry.context.capacity(),
+        }
+        .into());
+    }
+    let reserve = request
+        .options
+        .max_new_tokens
+        .unwrap_or(desired_reserve)
+        .min(available);
     let options = GenerationOptions {
-        max_new_tokens: request.options.max_new_tokens,
+        max_new_tokens: Some(reserve),
         max_output_bytes: turn.limits.output_bytes,
         cancellation: turn.cancellation.clone(),
         deadline: Some(turn.deadline),
@@ -387,12 +434,14 @@ fn begin<'m>(
     };
     let state = entry.context.begin(&input, options)?;
     Ok(Active {
+        limit_reason: (reserve < desired_reserve).then_some("context_capacity"),
         turn,
         input,
         state,
         output,
         pending: None,
         done: false,
+        last_report: std::time::Instant::now(),
         delivered_text: String::new(),
         delivered_reasoning: String::new(),
     })
@@ -461,12 +510,17 @@ fn prepare_input<'m>(
                 }
                 Ok(input) => {
                     if !crate::chat::runner::drop_oldest_exchange(&mut request.messages) {
-                        return Err(crate::engine::EngineError::Budget {
-                            input: input.token_count(),
-                            output: reserve,
-                            capacity: context.capacity(),
+                        let available = context.capacity().saturating_sub(input.token_count());
+                        if available == 0 {
+                            return Err(crate::engine::EngineError::Budget {
+                                input: input.token_count(),
+                                output: 1,
+                                capacity: context.capacity(),
+                            }
+                            .into());
                         }
-                        .into());
+                        request.options.max_new_tokens = Some(reserve.min(available));
+                        break input;
                     }
                 }
                 Err(crate::engine::EngineError::Budget { .. })
@@ -484,11 +538,12 @@ fn step<'m>(context: &mut LLMContext<'m>, active: &mut Active<'m>) -> Option<Tur
             let progress = active.state.progress();
             let source = ChatError::from(active.state.failure(source));
             return Some(TurnEvent::Finished(Err(ModelFailure {
+                metrics: Some(Box::new(progress.metrics.clone())),
                 source,
-                partial: Some((
+                partial: Some(Box::new((
                     partial_message(&active.input, &progress.text),
                     progress.usage,
-                )),
+                ))),
             })));
         }
         Ok(chunk) => {
@@ -514,10 +569,11 @@ fn step<'m>(context: &mut LLMContext<'m>, active: &mut Active<'m>) -> Option<Tur
                     }
                     active.done = true;
                     return Some(TurnEvent::Finished(Err(ModelFailure {
+                        metrics: Some(Box::new(progress.metrics.clone())),
                         source: ChatError::Protocol(
                             "partial parser retracted streamed content".into(),
                         ),
-                        partial: Some((message, progress.usage)),
+                        partial: Some(Box::new((message, progress.usage))),
                     })));
                 }
                 let text = message.content[active.delivered_text.len()..].to_owned();
@@ -531,10 +587,21 @@ fn step<'m>(context: &mut LLMContext<'m>, active: &mut Active<'m>) -> Option<Tur
                         text,
                         reasoning,
                         usage: progress.usage,
+                        metrics: progress.metrics,
                     });
                 }
             }
         }
+    }
+    if active.last_report.elapsed() >= std::time::Duration::from_millis(100) {
+        active.last_report = std::time::Instant::now();
+        let progress = active.state.progress();
+        return Some(TurnEvent::Delta {
+            text: String::new(),
+            reasoning: String::new(),
+            usage: progress.usage,
+            metrics: progress.metrics,
+        });
     }
     None
 }
@@ -543,6 +610,7 @@ fn finish_turn(active: &Active<'_>) -> Result<ModelTurn, ModelFailure> {
         .state
         .result()
         .map_err(|error| ModelFailure {
+            metrics: Some(Box::new(active.state.progress().metrics)),
             source: ChatError::from(error),
             partial: None,
         })
@@ -557,22 +625,24 @@ fn finish_turn(active: &Active<'_>) -> Result<ModelTurn, ModelFailure> {
                     },
                 )
                 .map_err(|error| ModelFailure {
+                    metrics: Some(Box::new(generation.metrics.clone())),
                     source: ChatError::Engine(error),
-                    partial: Some((
+                    partial: Some(Box::new((
                         partial_message(&active.input, &generation.text),
                         generation.usage.clone(),
-                    )),
+                    ))),
                 })?;
             let message = AssistantMessage::parse(
                 &value,
                 &format!("r{}_t{}", active.turn.run_id, active.turn.turn),
             )
             .map_err(|error| ModelFailure {
+                metrics: Some(Box::new(generation.metrics.clone())),
                 source: error,
-                partial: Some((
+                partial: Some(Box::new((
                     partial_message(&active.input, &generation.text),
                     generation.usage.clone(),
-                )),
+                ))),
             })?;
             if !message.content.starts_with(&active.delivered_text)
                 || !message
@@ -582,11 +652,14 @@ fn finish_turn(active: &Active<'_>) -> Result<ModelTurn, ModelFailure> {
                     .starts_with(&active.delivered_reasoning)
             {
                 return Err(ModelFailure {
+                    metrics: Some(Box::new(generation.metrics.clone())),
                     source: ChatError::Protocol("parser retracted streamed content".into()),
-                    partial: Some((message, generation.usage)),
+                    partial: Some(Box::new((message, generation.usage))),
                 });
             }
             Ok(ModelTurn {
+                limit_reason: active.limit_reason,
+                metrics: Some(generation.metrics),
                 message,
                 usage: generation.usage,
                 finish_reason: generation.finish_reason,

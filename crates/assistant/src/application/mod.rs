@@ -219,8 +219,10 @@ struct Record {
 }
 #[derive(Debug)]
 enum Progress {
+    Metrics(usize, usize, crate::engine::GenerationMetrics),
     Started,
-    Turn,
+    Turn(crate::telemetry::ResourceBoundary),
+    TurnFinished(usize, crate::telemetry::ResourceBoundary),
     Text(String),
     Activity(&'static str),
 }
@@ -232,6 +234,8 @@ struct QueuedProgress {
 
 #[derive(Debug)]
 struct Coordinator {
+    resource_sample: Option<crate::telemetry::ResourceSample>,
+    inference: InferenceTotals,
     chat: Chat,
     options: RequestOptions,
     instance: String,
@@ -261,6 +265,8 @@ impl Coordinator {
     ) -> Self {
         let (outgoing, _) = broadcast::channel(EVENT_CAPACITY);
         Self {
+            resource_sample: None,
+            inference: InferenceTotals::default(),
             chat,
             options,
             chat_id: format!("{instance}-primary"),
@@ -323,6 +329,8 @@ impl Coordinator {
     }
     fn snapshot(&self) -> Snapshot {
         Snapshot {
+            resources: self.resource_sample.clone(),
+            inference: self.inference.clone(),
             instance_id: self.instance.clone(),
             chat_id: self.chat_id.clone(),
             revision: self.cursor(),
@@ -365,8 +373,18 @@ impl Coordinator {
         {
             return Err(ApplicationError::InvalidInput);
         }
-        self.records
-            .retain(|r| !r.view.status.is_terminal() || r.created.elapsed() < REQUEST_RETENTION);
+        // Keep measurements with their visible exchanges even after the minimum
+        // deduplication window. The fixed record/message caps still apply.
+        let visible = self
+            .messages
+            .iter()
+            .map(|message| message.run_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        self.records.retain(|record| {
+            !record.view.status.is_terminal()
+                || record.created.elapsed() < REQUEST_RETENTION
+                || visible.contains(record.view.id.as_str())
+        });
         if let Some(record) = self.records.iter().find(|r| {
             r.scope == scope
                 && r.input.client_id == input.client_id
@@ -386,7 +404,15 @@ impl Coordinator {
         }
         self.run_sequence += 1;
         let id = format!("{}-r{}", self.instance, self.run_sequence);
+        let mut resources = crate::telemetry::ResourceWindow::default();
+        if let Some(sample) = &self.resource_sample {
+            resources.observe(sample);
+        }
+        resources.started = Some(crate::telemetry::boundary());
         let view = RunView {
+            performance: Vec::new(),
+            resources,
+            limit_reason: None,
             id: id.clone(),
             chat_id: self.chat_id.clone(),
             client_id: input.client_id.clone(),
@@ -407,7 +433,9 @@ impl Coordinator {
             view: view.clone(),
             created: Instant::now(),
         });
-        self.publish(Update::Run { run: view.clone() });
+        self.publish(Update::Run {
+            run: Box::new(view.clone()),
+        });
         self.add_message(DisplayMessage {
             id: format!("{id}-user"),
             run_id: id,
@@ -468,17 +496,48 @@ impl Coordinator {
             return;
         };
         match progress {
+            Progress::Metrics(turn, generated_tokens, timing) => {
+                if let Some(record) = self.records.back_mut()
+                    && let Some(performance) =
+                        record.view.performance.iter_mut().find(|p| p.turn == turn)
+                {
+                    performance.generated_tokens = generated_tokens;
+                    performance.timing = Some(timing);
+                }
+            }
             Progress::Started => {
                 if let Some(record) = self.records.back_mut() {
                     if record.view.status != Status::Stopping {
                         record.view.status = Status::Running;
                     }
                     let run = record.view.clone();
-                    self.publish(Update::Run { run });
+                    self.publish(Update::Run { run: Box::new(run) });
                 }
             }
-            Progress::Turn => {
+            Progress::TurnFinished(turn, boundary) => {
+                if let Some(record) = self.records.back_mut()
+                    && let Some(view) = record.view.performance.iter_mut().find(|p| p.turn == turn)
+                {
+                    view.resources.ended = Some(boundary);
+                    view.measurement_complete = true;
+                }
+            }
+            Progress::Turn(boundary) => {
                 self.turn += 1;
+                if let Some(record) = self.records.back_mut() {
+                    let mut resources = crate::telemetry::ResourceWindow::default();
+                    if let Some(sample) = &self.resource_sample {
+                        resources.observe(sample);
+                    }
+                    resources.started = Some(boundary);
+                    record.view.performance.push(PerformanceView {
+                        measurement_complete: false,
+                        turn: self.turn,
+                        generated_tokens: 0,
+                        timing: None,
+                        resources,
+                    });
+                }
             }
             Progress::Activity(label) => self.publish(Update::Activity { run_id: id, label }),
             Progress::Text(text) => {
@@ -525,7 +584,9 @@ impl Coordinator {
             if let Some(record) = self.records.iter_mut().find(|r| r.view.id == id) {
                 record.view = view.clone();
             }
-            self.publish(Update::Run { run: view.clone() });
+            self.publish(Update::Run {
+                run: Box::new(view.clone()),
+            });
         }
         Ok(view)
     }
@@ -598,6 +659,21 @@ impl Coordinator {
             status = Status::Failed;
             error = Some("limit_exceeded");
         }
+        // Reasoning-only truncation and failures before the first visible token
+        // still need a terminal display entry. Its text stays empty: host status
+        // must never be fabricated as model output or enter working context.
+        let message_id = self.assistant_id(&id);
+        if status != Status::Completed
+            && !self.messages.iter().any(|message| message.id == message_id)
+        {
+            self.add_message(DisplayMessage {
+                id: message_id,
+                run_id: id.clone(),
+                role: "assistant",
+                text: String::new(),
+                status,
+            });
+        }
         let changed = self
             .messages
             .iter_mut()
@@ -611,6 +687,13 @@ impl Coordinator {
             self.publish(Update::Message { message });
         }
         if let Some(record) = self.records.iter_mut().find(|r| r.view.id == id) {
+            complete_measurements(
+                &mut record.view,
+                &response,
+                &mut self.inference,
+                self.resource_sample.as_ref(),
+            );
+            record.view.limit_reason = response.limit_reason;
             record.view.status = status;
             record.view.error = error;
             record.view.input_tokens = response.usage.input_tokens;
@@ -625,9 +708,15 @@ impl Coordinator {
                     == Some("interrupted")
             });
             let run = record.view.clone();
-            self.publish(Update::Run { run });
+            self.publish(Update::Run { run: Box::new(run) });
         }
         self.active = None;
+        if let Some(sample) = self.resource_sample.clone() {
+            self.publish(Update::Telemetry {
+                sample,
+                inference: self.inference.clone(),
+            });
+        }
         self.trim();
     }
     /// Enqueue only presentation progress; byte permits include queued text and
@@ -647,8 +736,19 @@ impl Coordinator {
             .options(options)
             .on_event(move |event| {
                 let progress = match event {
+                    RunEvent::ModelProgress {
+                        turn,
+                        usage,
+                        metrics,
+                        ..
+                    } => Progress::Metrics(*turn, usage.generated_tokens, metrics.clone()),
                     RunEvent::Started { .. } => Progress::Started,
-                    RunEvent::ModelTurnStarted { .. } => Progress::Turn,
+                    RunEvent::ModelTurnStarted { .. } => {
+                        Progress::Turn(crate::telemetry::boundary())
+                    }
+                    RunEvent::ModelTurnFinished { turn, .. } => {
+                        Progress::TurnFinished(*turn, crate::telemetry::boundary())
+                    }
                     RunEvent::TextDelta { text, .. } => Progress::Text(text.clone()),
                     RunEvent::ToolStarted { .. } => Progress::Activity("Using a tool"),
                     RunEvent::ToolFinished { .. } => Progress::Activity("Thinking"),
@@ -671,12 +771,46 @@ impl Coordinator {
                 .map_err(|_| ChatError::Limit("application event queue"))
             })
     }
+    fn observe(&mut self, sample: crate::telemetry::ResourceSample) {
+        self.resource_sample = Some(sample.clone());
+        if self.active.is_some()
+            && let Some(record) = self.records.back_mut()
+        {
+            record.view.resources.observe(&sample);
+            if let Some(turn) = record.view.performance.last_mut() {
+                // Completed native turns keep their exact CPU terminal boundary.
+                if !turn.measurement_complete {
+                    turn.resources.observe(&sample);
+                }
+            }
+            let run = record.view.clone();
+            self.publish(Update::Run { run: Box::new(run) });
+        }
+        self.publish(Update::Telemetry {
+            sample,
+            inference: self.inference.clone(),
+        });
+    }
     async fn run(mut self, mut commands: mpsc::Receiver<Command>) -> ChatResult<()> {
         let (progress_tx, mut progress_rx) = mpsc::channel::<QueuedProgress>(256);
         let mut runs = JoinSet::new();
         let mut stopping = false;
+        let mut sampler = Some(crate::telemetry::Sampler::default());
+        let mut observations = JoinSet::new();
+        let mut sample_at = tokio::time::Instant::now();
         loop {
             tokio::select! {
+                () = tokio::time::sleep_until(sample_at), if sampler.is_some() && (self.active.is_some() || self.outgoing.receiver_count() > 0) && !stopping => {
+                    if let Some(mut provider) = sampler.take() {
+                        observations.spawn_blocking(move || { let sample = provider.sample(); (provider, sample) });
+                    }
+                }
+                Some(result) = observations.join_next(), if !observations.is_empty() => {
+                    let (provider, sample) = result.map_err(|_| ChatError::Configuration("telemetry provider task failed".into()))?;
+                    sampler = Some(provider);
+                    self.observe(sample);
+                    sample_at = tokio::time::Instant::now() + if self.active.is_some() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+                }
                 () = tokio::time::sleep_until(self.flush_at), if self.pending_delta.is_some() => self.flush_pending(),
                 () = self.stop.cancelled(), if !stopping => {
                     stopping = true; self.closed.store(true, Ordering::Release);
@@ -711,7 +845,19 @@ impl Coordinator {
                 Some(result) = runs.join_next(), if !runs.is_empty() => {
                     while let Ok(queued) = progress_rx.try_recv() { self.progress(queued.progress); }
                     match result {
-                        Ok(result) => self.finish(result),
+                        Ok(result) => {
+                            // Finish resources at the execution boundary, rather than
+                            // attributing the next idle interval to this message.
+                            if let Some(sampled) = observations.join_next().await {
+                                let (provider, sample) = sampled.map_err(|_| ChatError::Configuration("telemetry provider task failed".into()))?;
+                                sampler = Some(provider); self.observe(sample);
+                            }
+                            if let Some(mut provider) = sampler.take() {
+                                let (provider, sample) = tokio::task::spawn_blocking(move || { let sample = provider.sample(); (provider, sample) }).await.map_err(|_| ChatError::Configuration("telemetry provider task failed".into()))?;
+                                sampler = Some(provider); self.observe(sample);
+                            }
+                            self.finish(result);
+                        },
                         Err(_) => return Err(ChatError::Configuration("application run task terminated".into())),
                     }
                 }
@@ -720,7 +866,50 @@ impl Coordinator {
                 break;
             }
         }
+        while observations.join_next().await.is_some() {}
         Ok(())
+    }
+}
+
+/// Close observed process windows and fold exact measured native counters. Keeping
+/// this apart from status projection prevents terminal errors from losing metrics.
+fn complete_measurements(
+    view: &mut RunView,
+    response: &ChatResponse,
+    inference: &mut InferenceTotals,
+    sample: Option<&crate::telemetry::ResourceSample>,
+) {
+    if let Some(sample) = sample
+        && let Some(turn) = view.performance.last_mut()
+    {
+        let ended = turn.resources.ended.clone();
+        turn.resources.observe(sample);
+        if turn.measurement_complete {
+            turn.resources.ended = ended;
+        }
+    }
+    view.resources.ended = Some(crate::telemetry::boundary());
+    if let Some(turn) = view.performance.last_mut()
+        && !turn.measurement_complete
+    {
+        turn.resources.ended = Some(crate::telemetry::boundary());
+    }
+    for measured in &response.performance {
+        if let Some(view) = view
+            .performance
+            .iter_mut()
+            .find(|p| p.turn == measured.turn)
+        {
+            view.measurement_complete = measured.measurement_complete;
+            view.generated_tokens = measured.generated_tokens;
+            view.timing.clone_from(&measured.timing);
+        }
+        if let Some(timing) = &measured.timing {
+            inference.generated_tokens = inference
+                .generated_tokens
+                .saturating_add(measured.generated_tokens as u64);
+            inference.generation_ns = inference.generation_ns.saturating_add(timing.generation_ns);
+        }
     }
 }
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import gzip
 import queue
 import re
 import signal
@@ -23,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(binary: Path, model: Path, stop_signal: signal.Signals) -> None:
+def run(binary: Path, model: Path, stop_signal: signal.Signals, contract_output: Path | None) -> None:
     process = subprocess.Popen(
         [str(binary), "--model", str(model), "--port", "0", "--cpu", "--no-tools",
          "--ctx-size", "1024", "--batch-size", "32", "--max-tokens", "64"],
@@ -80,6 +81,15 @@ def run(binary: Path, model: Path, stop_signal: signal.Signals) -> None:
                 payload = response.read(8 * 1024 * 1024)
                 return json.loads(payload) if payload else None
 
+        with urllib.request.urlopen(base + "/", timeout=10) as response:
+            html = response.read().decode()
+            assert "worker-src 'self'" in response.headers["Content-Security-Policy"]
+            module = re.search(r'src="(/assets/[^" ]+\.js)"', html)
+            assert module is not None, "missing embedded module"
+        with urllib.request.urlopen(urllib.request.Request(base + module[1], headers={"Accept-Encoding": "gzip"}), timeout=10) as response:
+            assert response.headers["Content-Encoding"] == "gzip"
+            assert "immutable" in response.headers["Cache-Control"]
+            assert gzip.decompress(response.read()), "empty embedded module"
         bootstrap = request("/api/v1/bootstrap")
         chat = bootstrap["primary_chat_id"]
         path = f"/api/v1/chats/{chat}/runs"
@@ -131,6 +141,13 @@ def run(binary: Path, model: Path, stop_signal: signal.Signals) -> None:
         assert terminal["status"] in {"completed", "truncated"}, terminal
         snapshot = request(f"/api/v1/chats/{chat}")
         assert any(item["role"] == "assistant" and item["text"] for item in snapshot["messages"])
+        assert terminal["performance"], "native measurements missing"
+        assert sum(turn["generated_tokens"] for turn in terminal["performance"]) == terminal["generated_tokens"]
+        assert all(turn["measurement_complete"] and turn["timing"]["generation_ns"] > 0 for turn in terminal["performance"])
+        if terminal["status"] == "truncated":
+            assert terminal["limit_reason"] in {"output_tokens", "context_capacity", "run_tokens"}
+        if contract_output is not None:
+            contract_output.write_text(json.dumps(snapshot), encoding="utf-8")
 
         # Start another interaction and stop the process with an open subscriber.
         body["client_request_id"] = "shutdown"
@@ -164,6 +181,7 @@ def main() -> None:
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/assistant")
     parser.add_argument("--model", type=Path, default=ROOT / "target/test-models/stories260K.gguf")
     parser.add_argument("--require-model", action="store_true")
+    parser.add_argument("--contract-output", type=Path, help="Write the observed JSON snapshot for the TypeScript contract test")
     parser.add_argument("--signal", choices=("SIGTERM", "SIGINT"), default="SIGTERM")
     args = parser.parse_args()
     if not args.model.is_file():
@@ -171,7 +189,7 @@ def main() -> None:
             parser.error("a local model is required")
         print("SKIP: no local smoke-test model")
         return
-    run(args.binary.resolve(), args.model.resolve(), getattr(signal, args.signal))
+    run(args.binary.resolve(), args.model.resolve(), getattr(signal, args.signal), args.contract_output)
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
         .model("main", config)
         .system(system)
         .limits(RunLimits {
+            generated_tokens: args.run_max_tokens,
             duration: std::time::Duration::from_secs(args.timeout_seconds),
             ..RunLimits::default()
         });

@@ -89,6 +89,12 @@ pub struct DisplayMessage {
 /// Retained interaction metadata; it never retains complete raw model responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunView {
+    /// Per-model-turn counters/timings and observed process resource windows.
+    pub performance: Vec<PerformanceView>,
+    /// Whole-interaction observed resources, including tool and scheduler time.
+    pub resources: crate::telemetry::ResourceWindow,
+    /// Explicit termination boundary: `output_tokens`, `context_capacity`, `run_tokens`.
+    pub limit_reason: Option<&'static str>,
     /// Instance-scoped interaction identity.
     pub id: String,
     /// Conversation identity.
@@ -114,6 +120,10 @@ pub struct RunView {
 /// Bounded visible state, captured atomically with subscription registration.
 #[derive(Debug, Clone, Serialize)]
 pub struct Snapshot {
+    /// Latest process observation; absent before the first demand-driven sample.
+    pub resources: Option<crate::telemetry::ResourceSample>,
+    /// Weighted lifetime native throughput counters (never mean of rates).
+    pub inference: InferenceTotals,
     /// Changes on every process runtime start.
     pub instance_id: String,
     /// Primary conversation identity, also changes across instances.
@@ -135,10 +145,17 @@ pub struct Snapshot {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Update {
+    /// Latest process counters plus weighted lifetime inference totals.
+    Telemetry {
+        /// Current process observation.
+        sample: crate::telemetry::ResourceSample,
+        /// Sum of measured tokens and active decode times.
+        inference: InferenceTotals,
+    },
     /// Admission, execution, cancellation request or terminal metadata.
     Run {
         /// New run state.
-        run: RunView,
+        run: Box<RunView>,
     },
     /// Insert or replace one complete display entry.
     Message {
@@ -173,4 +190,28 @@ pub struct ApplicationEvent {
     pub id: String,
     /// Typed payload.
     pub update: Update,
+}
+
+/// One visible model turn's measured progress. Resource figures describe the
+/// daemon during its window, including resident weights and unrelated work.
+#[derive(Debug, Clone, Serialize)]
+pub struct PerformanceView {
+    /// False when only the last delivered native progress report is available.
+    pub measurement_complete: bool,
+    /// One-based model turn; matches the assistant message ID suffix.
+    pub turn: usize,
+    /// Native sampled non-EOG tokens, including hidden reasoning and protocol.
+    pub generated_tokens: usize,
+    /// Owner-thread active timings. Synthetic backends may not provide these.
+    pub timing: Option<crate::engine::GenerationMetrics>,
+    /// Observed process resources during this turn.
+    pub resources: crate::telemetry::ResourceWindow,
+}
+/// Exact sums for computing weighted native throughput across completed turns.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct InferenceTotals {
+    /// Only tokens with measured timing participate in this sum.
+    pub generated_tokens: u64,
+    /// Sum of active generation times in nanoseconds.
+    pub generation_ns: u64,
 }

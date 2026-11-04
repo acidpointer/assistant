@@ -43,8 +43,10 @@ pub struct RunContext {
     model_calls: usize,
     tool_calls: usize,
     usage: Usage,
+    performance: Vec<super::ModelPerformance>,
     last_message: AssistantMessage,
     last_finish: Option<FinishReason>,
+    limit_reason: Option<&'static str>,
     receipts: Vec<ToolReceipt>,
     evaluated_tools: Vec<String>,
 }
@@ -98,8 +100,10 @@ impl RunContext {
             model_calls: 0,
             tool_calls: 0,
             usage: Usage::default(),
+            performance: Vec::new(),
             last_message: AssistantMessage::default(),
             last_finish: None,
+            limit_reason: None,
             receipts: Vec::new(),
             evaluated_tools: Vec::new(),
             accepted: false,
@@ -196,16 +200,14 @@ impl RunContext {
             .options
             .max_new_tokens
             .unwrap_or(self.backend.default_max_tokens());
-        if max_tokens == 0
-            || max_tokens
-                > self
-                    .limits
-                    .generated_tokens
-                    .saturating_sub(self.usage.generated_tokens)
-        {
+        let remaining = self
+            .limits
+            .generated_tokens
+            .saturating_sub(self.usage.generated_tokens);
+        if max_tokens == 0 || remaining == 0 {
             return Err(ChatError::Limit("remaining generated-token allowance"));
         }
-        request.options.max_new_tokens = Some(max_tokens);
+        request.options.max_new_tokens = Some(max_tokens.min(remaining));
         request
             .options
             .thinking
@@ -224,29 +226,34 @@ impl RunContext {
         self.evaluated_tools = names;
         self.model_calls += 1;
         self.events.reset().await;
-        let turn = TurnContext {
-            chat_id: self.chat_id,
-            run_id: self.run_id,
-            turn: self.model_calls,
-            lease: self.lease.clone(),
-            limits: self.limits.clone(),
-            cancellation: self.cancellation.clone(),
-            deadline: self.deadline,
-        };
-        match self
+        let turn = self.turn_context();
+        let result = self
             .backend
             .evaluate(request, turn, self.events.clone())
-            .await
-        {
+            .await;
+        // Record accounting before publishing a fallible terminal observation.
+        match result {
             Ok(result) => {
-                self.add_usage(&result.usage)?;
+                self.record_model_turn(&result, remaining, max_tokens)?;
                 self.events.usage(Usage::default()).await;
                 self.last_message = result.message.clone();
                 self.last_finish = Some(result.finish_reason);
+                self.emit(RunEvent::ModelTurnFinished {
+                    run_id: self.run_id,
+                    turn: self.model_calls,
+                })
+                .await?;
                 Ok(result)
             }
             Err(error) => {
-                if let Some((message, usage)) = error.partial {
+                if let Some(partial) = error.partial {
+                    let (message, usage) = *partial;
+                    self.performance.push(super::ModelPerformance {
+                        measurement_complete: false,
+                        turn: self.model_calls,
+                        generated_tokens: usage.generated_tokens,
+                        timing: error.metrics.map(|metrics| *metrics),
+                    });
                     self.add_usage(&usage)?;
                     self.events.usage(Usage::default()).await;
                     self.last_message = message;
@@ -254,6 +261,40 @@ impl RunContext {
                 Err(error.source)
             }
         }
+    }
+    /// Capture the immutable execution boundary after admission has been checked.
+    fn turn_context(&self) -> TurnContext {
+        TurnContext {
+            chat_id: self.chat_id,
+            run_id: self.run_id,
+            turn: self.model_calls,
+            lease: self.lease.clone(),
+            limits: self.limits.clone(),
+            cancellation: self.cancellation.clone(),
+            deadline: self.deadline,
+        }
+    }
+    /// Retain terminal owner-thread measurements before any fallible observer.
+    fn record_model_turn(
+        &mut self,
+        result: &ModelTurn,
+        remaining: usize,
+        requested: usize,
+    ) -> ChatResult<()> {
+        if result.finish_reason == FinishReason::TokenLimit {
+            self.limit_reason = result.limit_reason.or(Some(if remaining <= requested {
+                "run_tokens"
+            } else {
+                "output_tokens"
+            }));
+        }
+        self.performance.push(super::ModelPerformance {
+            measurement_complete: result.metrics.is_some(),
+            turn: self.model_calls,
+            generated_tokens: result.usage.generated_tokens,
+            timing: result.metrics.clone(),
+        });
+        self.add_usage(&result.usage)
     }
     fn add_usage(&mut self, usage: &Usage) -> ChatResult<()> {
         self.usage.input_tokens = self
@@ -322,7 +363,20 @@ impl RunContext {
         usage.cached_tokens += progress.usage.cached_tokens;
         usage.prefill_tokens += progress.usage.prefill_tokens;
         usage.generated_tokens += progress.usage.generated_tokens;
+        let mut performance = self.performance.clone();
+        if !performance.iter().any(|p| p.turn == self.model_calls)
+            && let Some(timing) = progress.metrics.clone()
+        {
+            performance.push(super::ModelPerformance {
+                turn: self.model_calls,
+                generated_tokens: progress.usage.generated_tokens,
+                timing: Some(timing),
+                measurement_complete: false,
+            });
+        }
         ChatResponse {
+            performance,
+            limit_reason: self.limit_reason,
             run_id: self.run_id,
             message,
             tools: self.receipts.clone(),

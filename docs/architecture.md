@@ -27,7 +27,7 @@ archive. Summarization is not required for continued operation.
 | `crates/assistant/src/tools/` | Typed schemas, argument deserialization and registered Rust dispatch; opt-in CLI tools |
 | `crates/assistant/src/pipeline/` | Plugin configuration, typed services, ordered hooks and one-shot middleware continuations |
 | `crates/assistant/src/application/` | Bounded product admission, run ownership, display snapshots and subscriptions |
-| `crates/assistant-web/` | Runtime-ready HTTP/WebUI plugin; one embedded HTML asset |
+| `crates/assistant-web/` | Runtime-ready HTTP/WebUI plugin; verified embedded React/TypeScript assets |
 | `crates/assistant-daemon/` | Single `assistant` executable, CLI modes, signals and supervision |
 | `crates/llama_cpp/` | Maintained safe binding fork |
 | `crates/llama_cpp_sys/` | FFI, guarded shims, build-directory patches and pinned native submodule |
@@ -119,6 +119,16 @@ warnings because completed tool effects must not be replayed.
 Supporting context is literal model input, distinct from trusted system policy.
 This separation does not make retrieved data immune to prompt injection. Host
 capability selection and typed validation remain necessary.
+
+## Frontend and measurement boundary
+
+The compiled web plugin serves a prepared FSD frontend. Oxc-based tooling builds
+local assets that Cargo verifies and embeds. Rendering, connection lifecycle,
+chat state and native/process accounting remain separate. The application actor
+owns bounded per-turn metrics and one demand-driven process sampler; browsers
+never infer native tokens or daemon CPU/memory from display text. See
+[the measurement contract](web-ui.md#output-limits-and-measurements) and
+[ADR 0004](decisions/0004-typed-frontend-and-measurements.md).
 
 ## Deliberate limits
 

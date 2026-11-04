@@ -278,12 +278,12 @@ impl Default for RunLimits {
         Self {
             model_turns: 8,
             tool_calls: 8,
-            generated_tokens: 4096,
+            generated_tokens: 8192,
             input_bytes: 262_144,
             output_bytes: 131_072,
             tool_result_bytes: 16_384,
             working_messages: 128,
-            duration: Duration::from_secs(120),
+            duration: Duration::from_secs(600),
         }
     }
 }
@@ -334,6 +334,10 @@ pub enum RunStatus {
 /// Final or partial result from a bounded interaction.
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
+    /// Why a token boundary stopped output, if known.
+    pub limit_reason: Option<&'static str>,
+    /// Bounded per-model-turn native performance records.
+    pub performance: Vec<ModelPerformance>,
     /// Runtime-local interaction ID.
     pub run_id: u64,
     /// Last interpreted assistant response.
@@ -374,6 +378,24 @@ pub struct RunFailure {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum RunEvent {
+    /// Throttled native accounting, including hidden reasoning/protocol tokens.
+    ModelProgress {
+        /// Interaction identity.
+        run_id: u64,
+        /// One-based model turn.
+        turn: usize,
+        /// Native counters.
+        usage: Usage,
+        /// Owner-thread measurements.
+        metrics: crate::engine::GenerationMetrics,
+    },
+    /// A model backend has returned; transports may close its measurement window.
+    ModelTurnFinished {
+        /// Interaction identity.
+        run_id: u64,
+        /// One-based model turn.
+        turn: usize,
+    },
     /// A new model turn begins; transports must not merge tool continuations.
     ModelTurnStarted {
         /// Interaction identity.
@@ -441,10 +463,28 @@ pub struct ModelRequest {
 /// Parsed output and accounting from one model evaluation.
 #[derive(Debug, Clone)]
 pub struct ModelTurn {
+    /// Context reduction can lower the requested response allowance.
+    pub limit_reason: Option<&'static str>,
+    /// Native owner-thread timings, absent for synthetic middleware results.
+    pub metrics: Option<crate::engine::GenerationMetrics>,
     /// Interpreted assistant output.
     pub message: AssistantMessage,
     /// Native accounting.
     pub usage: Usage,
     /// Why the native evaluation stopped.
     pub finish_reason: FinishReason,
+}
+
+/// One model turn's counters and timings, retained even after cancellation.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelPerformance {
+    /// True only when the native owner returned terminal accounting; interruption
+    /// can otherwise preserve only a measured prefix of the operation.
+    pub measurement_complete: bool,
+    /// One-based model turn.
+    pub turn: usize,
+    /// Sampled non-EOG tokens, including reasoning and protocol.
+    pub generated_tokens: usize,
+    /// Timings are unavailable for synthetic model middleware responses.
+    pub timing: Option<crate::engine::GenerationMetrics>,
 }

@@ -92,3 +92,6 @@ Thumbs.db
 Desktop.ini
 
 # Keep Cargo.lock: this workspace ships an application, so builds need its pin.
+
+# Prepared embedded frontend assets are rebuilt from the pinned npm lockfile.
+/crates/assistant-web/frontend/dist/

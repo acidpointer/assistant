@@ -1,5 +1,5 @@
 //! Embedded, local-first HTTP transport plugin. The core owns interactions and
-//! bounded state; this crate owns HTTP, SSE, browser policy and one HTML asset.
+//! bounded state; this crate owns HTTP, SSE, browser policy and a verified embedded frontend build.
 //! Preparation binds without serving. Activation uses the ready application;
 //! shutdown stops admission, closes streams and joins the HTTP task.
 

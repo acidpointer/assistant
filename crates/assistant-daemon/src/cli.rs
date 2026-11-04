@@ -42,7 +42,7 @@ pub(crate) struct Args {
     pub(crate) raw: bool,
     #[arg(long, default_value_t = 1000)]
     pub(crate) gpu_layers: u32,
-    #[arg(long, default_value_t = 4096)]
+    #[arg(long, default_value_t = 8192)]
     pub(crate) ctx_size: u32,
     #[arg(long, default_value_t = 512)]
     pub(crate) batch_size: u32,
@@ -67,8 +67,12 @@ pub(crate) struct Args {
     /// Emit owned native cache/memory snapshots to stderr after each interaction.
     #[arg(long, requires = "no_web")]
     pub(crate) diagnostics: bool,
-    #[arg(long, default_value_t = 512)]
+    /// Sampled-token ceiling per model turn, including reasoning/protocol.
+    #[arg(long, default_value_t = 4096)]
     pub(crate) max_tokens: usize,
+    /// Total sampled tokens across model turns and tool continuations.
+    #[arg(long, default_value_t = 8192)]
+    pub(crate) run_max_tokens: usize,
     #[arg(long, default_value_t = 4)]
     pub(crate) threads: u32,
     #[arg(long)]
@@ -78,7 +82,7 @@ pub(crate) struct Args {
     #[arg(long, conflicts_with = "no_tools", requires = "no_web")]
     pub(crate) require_tool: bool,
     /// Wall-clock allowance per interaction, excluding model startup.
-    #[arg(long, default_value_t = 120)]
+    #[arg(long, default_value_t = 600)]
     pub(crate) timeout_seconds: u64,
     /// Print tool requests/results; prompt contents are not logged.
     #[arg(long, requires = "no_web")]

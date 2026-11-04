@@ -16,10 +16,10 @@ use assistant::{
 use axum::{
     Json, Router,
     extract::{ConnectInfo, DefaultBodyLimit, FromRequest, Path, Request, State},
-    http::{HeaderValue, Method, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{
-        Html, IntoResponse, Response, Sse,
+        IntoResponse, Response, Sse,
         sse::{Event, KeepAlive},
     },
     routing::{get, post},
@@ -29,7 +29,10 @@ use serde_json::json;
 use std::{convert::Infallible, net::IpAddr, sync::Arc, time::Duration};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
-const HTML: &str = include_str!("../webui.html");
+mod assets {
+    //! Frozen, verified frontend bytes; no filesystem reads occur while serving.
+    include!(concat!(env!("OUT_DIR"), "/web_assets.rs"));
+}
 #[derive(Debug, Clone)]
 struct WebState {
     assistant: AssistantHandle,
@@ -50,6 +53,7 @@ pub(crate) fn router(
     };
     Router::new()
         .route("/", get(index))
+        .route("/assets/{*path}", get(static_asset))
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/chats/{id}", get(snapshot))
         .route("/api/v1/chats/{id}/events", get(events))
@@ -139,9 +143,11 @@ async fn policy(State(state): State<WebState>, request: Request, next: Next) -> 
             }
         }
     };
-    response
-        .headers_mut()
-        .insert("cache-control", HeaderValue::from_static("no-store"));
+    if !response.headers().contains_key("cache-control") {
+        response
+            .headers_mut()
+            .insert("cache-control", HeaderValue::from_static("no-store"));
+    }
     response.headers_mut().insert(
         "x-content-type-options",
         HeaderValue::from_static("nosniff"),
@@ -155,36 +161,69 @@ async fn policy(State(state): State<WebState>, request: Request, next: Next) -> 
     response
 }
 
-async fn index() -> Result<Response, Problem> {
-    let mut bytes = [0_u8; 16];
-    getrandom::fill(&mut bytes)
-        .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "nonce_unavailable"))?;
-    let nonce = bytes
-        .iter()
-        .flat_map(|byte| {
-            const HEX: &[u8; 16] = b"0123456789abcdef";
-            [
-                char::from(HEX[usize::from(byte >> 4)]),
-                char::from(HEX[usize::from(byte & 15)]),
-            ]
-        })
-        .collect::<String>();
-    let csp = format!(
-        "default-src 'none'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
-    );
-    let mut response = Html(HTML.replace("__CSP_NONCE__", &nonce)).into_response();
-    response.headers_mut().insert(
-        "content-security-policy",
-        HeaderValue::from_str(&csp)
-            .map_err(|_| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "invalid_policy"))?,
-    );
+const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; worker-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+#[derive(Debug, Clone, Copy)]
+enum AssetCaching {
+    Revalidate,
+    Immutable,
+}
+async fn index(headers: HeaderMap) -> Result<Response, Problem> {
+    asset_response("index.html", &headers, AssetCaching::Revalidate)
+}
+async fn static_asset(Path(path): Path<String>, headers: HeaderMap) -> Result<Response, Problem> {
+    asset_response(&format!("assets/{path}"), &headers, AssetCaching::Immutable)
+}
+fn asset_response(
+    path: &str,
+    headers: &HeaderMap,
+    caching: AssetCaching,
+) -> Result<Response, Problem> {
+    let (bytes, compressed, mime) =
+        assets::asset(path).ok_or_else(|| Problem::new(StatusCode::NOT_FOUND, "not_found"))?;
+    let gzip = headers
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|encoding| {
+                let mut parts = encoding.trim().split(';');
+                parts.next() == Some("gzip")
+                    && parts.all(|parameter| {
+                        parameter
+                            .trim()
+                            .strip_prefix("q=")
+                            .is_none_or(|q| q.parse::<f32>().is_ok_and(|q| q > 0.0))
+                    })
+            })
+        });
+    let mut response = (
+        [
+            ("content-type", mime),
+            ("vary", "Accept-Encoding"),
+            (
+                "cache-control",
+                if matches!(caching, AssetCaching::Immutable) {
+                    "public, max-age=31536000, immutable"
+                } else {
+                    "no-cache"
+                },
+            ),
+            ("content-security-policy", CSP),
+        ],
+        if gzip { compressed } else { bytes },
+    )
+        .into_response();
+    if gzip {
+        response
+            .headers_mut()
+            .insert("content-encoding", HeaderValue::from_static("gzip"));
+    }
     Ok(response)
 }
 async fn bootstrap(State(state): State<WebState>) -> Result<Json<serde_json::Value>, Problem> {
     let snapshot = state.assistant.snapshot().await?;
     Ok(Json(
         json!({"api_version":1, "instance_id":snapshot.instance_id, "primary_chat_id":snapshot.chat_id,
-        "capabilities":{"history":false,"text":true,"cancellation":true},
+        "capabilities":{"history":false,"text":true,"cancellation":true,"metrics":true},
         "limits":{"input_bytes":INPUT_BYTES,"messages":MESSAGE_LIMIT,"transcript_bytes":TRANSCRIPT_BYTES,"deduplication_seconds":REQUEST_RETENTION.as_secs()}}),
     ))
 }

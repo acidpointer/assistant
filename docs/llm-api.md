@@ -198,8 +198,8 @@ native ownership must finish before handles can be freed. Dropping a running
 runtime requests stop but cannot await service flushing.
 
 Defaults: 16 admitted runs, 32 buffered native events per evaluation, 4 contexts
-per resident model; each interaction allows 8 model turns, 8 tool calls, 4096
-sampled tokens and 120 seconds. Request payload, raw output and individual tool
+per resident model; each interaction allows 8 model turns, 8 tool calls, 8192
+sampled tokens and 600 seconds. Request payload, raw output and individual tool
 result limits are 256 KiB, 128 KiB and 16 KiB. Recent messages are capped at 128
 before evaluation. Tools may still allocate internally; the host validates the
 returned payload and substitutes a bounded error for oversized results. Trusted
@@ -209,3 +209,32 @@ Native models/KV caches remain allocated while idle. These are resident-memory
 costs, not continuous inference. Memory persistence, wake-word/ASR/TTS, external
 transports, dynamic model unloading and background autonomous work are future
 features, not hidden work in this foundation.
+
+
+## Native performance accounting
+
+`ModelTurn::metrics` carries optional `GenerationMetrics` (active owner-thread
+prefill/generation nanoseconds, native elapsed time and first sampled-token
+latency). `ChatResponse::performance` retains bounded `ModelPerformance` records
+for completed evaluations and last-confirmed interrupted progress. A false
+`measurement_complete` means terminal native accounting was not received; it
+must not be presented as complete work. `RunEvent::ModelProgress` is throttled
+without text, and `ModelTurnFinished` closes application CPU observation windows.
+Public struct additions require downstream struct-literal callers to provide
+these fields; synthetic middleware may explicitly return unavailable metrics.
+
+Requested output is a preference bounded by remaining total-run tokens. Chat
+preparation may reduce it further when protected input leaves less native
+capacity, after complete old exchanges are dropped. `ChatResponse::limit_reason`
+distinguishes output, run and context token boundaries. No automatic continuation
+or new interaction bypasses a limit. See [web measurements](web-ui.md#output-limits-and-measurements)
+for the separate process resource contract.
+
+Metrics-bearing `Update::Run` payloads and native failure progress are boxed to
+keep ordinary deltas and successful Result values small. Rust struct-literal
+callers must use `Box::new(...)` for those fields; JSON shapes are unchanged.
+
+`LLMConfig::max_new_tokens` is a positive desired ceiling, so a smaller context
+need not reject the configuration. Worker operations cap it to actual input space.
+Direct `LLMContext::begin/generate` calls remain strict: supplied prompt plus the
+resolved allowance must fit, or a typed budget error is returned before decode.

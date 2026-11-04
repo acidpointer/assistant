@@ -37,13 +37,15 @@ pub(crate) struct TurnContext {
 }
 #[derive(Debug)]
 pub(crate) struct ModelFailure {
+    pub metrics: Option<Box<crate::engine::GenerationMetrics>>,
     pub source: ChatError,
-    pub partial: Option<(AssistantMessage, Usage)>,
+    pub partial: Option<Box<(AssistantMessage, Usage)>>,
 }
 #[derive(Debug, Default)]
 struct Progress {
     message: AssistantMessage,
     usage: Usage,
+    metrics: Option<crate::engine::GenerationMetrics>,
 }
 type EventHandler = Arc<dyn Fn(&RunEvent) -> ChatResult<()> + Send + Sync>;
 #[derive(Clone, Default)]
@@ -63,6 +65,7 @@ impl EventSink {
         {
             let mut progress = self.progress.lock().await;
             match &event {
+                RunEvent::ModelProgress { metrics, .. } => progress.metrics = Some(metrics.clone()),
                 RunEvent::TextDelta { text, .. } => progress.message.content.push_str(text),
                 RunEvent::ReasoningDelta { text, .. } => progress
                     .message
@@ -79,6 +82,17 @@ impl EventSink {
     }
     pub(crate) async fn reset(&self) {
         *self.progress.lock().await = Progress::default();
+    }
+    /// Keep counters and timings from the same delivered native step, even when
+    /// external progress observers are throttled or the run is interrupted.
+    pub(crate) async fn measurements(
+        &self,
+        usage: Usage,
+        metrics: crate::engine::GenerationMetrics,
+    ) {
+        let mut progress = self.progress.lock().await;
+        progress.usage = usage;
+        progress.metrics = Some(metrics);
     }
     pub(crate) async fn usage(&self, usage: Usage) {
         self.progress.lock().await.usage = usage;
@@ -388,6 +402,8 @@ impl Drop for CancelOnDrop {
 }
 fn empty_response(run_id: u64) -> ChatResponse {
     ChatResponse {
+        performance: Vec::new(),
+        limit_reason: None,
         run_id,
         message: AssistantMessage::default(),
         tools: Vec::new(),

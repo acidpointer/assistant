@@ -1,6 +1,6 @@
 //! Browser boundary tests independent of a model. Exercise the same authority
 //! parser and middleware used by the live server, including legacy clients that
-//! omit Origin. Static asset tests verify safe single-file CSP templating.
+//! omit Origin. Static asset tests verify the embedded build, CSP and caching boundaries.
 use super::*;
 use axum::body::Body;
 use tower::ServiceExt;
@@ -30,30 +30,44 @@ fn authority_uses_actual_destination_and_exact_port() {
 }
 
 #[tokio::test]
-async fn embedded_asset_uses_unique_nonces_and_has_no_runtime_dependencies() {
-    let first = index().await.expect("first page");
-    let second = index().await.expect("second page");
-    let first_policy = first
-        .headers()
-        .get("content-security-policy")
-        .expect("CSP")
-        .clone();
-    assert_ne!(
-        first_policy,
-        second
-            .headers()
-            .get("content-security-policy")
-            .expect("CSP")
-    );
-    let body = axum::body::to_bytes(first.into_body(), 128 * 1024)
+async fn embedded_assets_obey_csp_compression_and_cache_contract() {
+    let response = index(HeaderMap::new()).await.expect("embedded page");
+    assert_eq!(response.headers()["content-security-policy"], CSP);
+    assert_eq!(response.headers()["cache-control"], "no-cache");
+    let body = axum::body::to_bytes(response.into_body(), 128 * 1024)
         .await
         .expect("HTML");
     let html = String::from_utf8(body.to_vec()).expect("UTF-8 HTML");
-    assert!(!html.contains("__CSP_NONCE__"));
-    assert!(!html.contains(" src="));
-    assert!(!html.contains("innerHTML"));
-    assert!(html.contains("<style nonce="));
-    assert!(html.contains("<script nonce="));
+    assert!(html.contains("type=\"module\""));
+    assert!(!html.contains("<style"));
+    assert!(!html.contains("https://"));
+    let script = html
+        .split("src=\"")
+        .nth(1)
+        .and_then(|value| value.split('"').next())
+        .expect("module script");
+    let mut headers = HeaderMap::new();
+    headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+    let asset = asset_response(
+        script.trim_start_matches('/'),
+        &headers,
+        AssetCaching::Immutable,
+    )
+    .expect("script");
+    assert_eq!(asset.headers()["content-encoding"], "gzip");
+    assert_eq!(
+        asset.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    headers.insert("accept-encoding", HeaderValue::from_static("gzip;q=0"));
+    let raw = asset_response(
+        script.trim_start_matches('/'),
+        &headers,
+        AssetCaching::Immutable,
+    )
+    .expect("uncompressed script");
+    assert!(!raw.headers().contains_key("content-encoding"));
+    assert!(asset_response("../package.json", &headers, AssetCaching::Immutable).is_err());
 }
 
 #[tokio::test]

@@ -49,15 +49,22 @@ impl ModelBackend for Controlled {
                 })
                 .await
                 .map_err(|source| ModelFailure {
+                    metrics: None,
                     source,
                     partial: None,
                 })?;
             self.started.add_permits(1);
             tokio::select! {
-                () = turn.cancellation.cancelled() => return Err(ModelFailure { source: ChatError::Cancelled, partial: None }),
+                () = turn.cancellation.cancelled() => return Err(ModelFailure {
+                    metrics: None,
+                    source: ChatError::Cancelled,
+                    partial: None,
+                }),
                 permit = self.release.acquire() => { permit.expect("open gate").forget(); }
             }
             Ok(ModelTurn {
+                limit_reason: None,
+                metrics: None,
                 message: AssistantMessage::text("Hello"),
                 usage: Usage::default(),
                 finish_reason: FinishReason::EndOfGeneration,
@@ -103,7 +110,7 @@ async fn finished(handle: &AssistantHandle, id: &str) -> RunView {
                 && run.id == id
                 && run.status.is_terminal()
             {
-                return run.clone();
+                return run.as_ref().clone();
             }
         }
     })
@@ -313,6 +320,8 @@ impl ModelBackend for Continuation {
                     arguments: serde_json::json!({"operation":"add","a":1,"b":2}),
                 });
                 return Ok(ModelTurn {
+                    limit_reason: None,
+                    metrics: None,
                     message,
                     usage: Usage::default(),
                     finish_reason: FinishReason::EndOfGeneration,
@@ -325,12 +334,14 @@ impl ModelBackend for Continuation {
                 })
                 .await
                 .map_err(|source| ModelFailure {
+                    metrics: None,
                     source,
                     partial: None,
                 })?;
             self.partial_started.add_permits(1);
             turn.cancellation.cancelled().await;
             Err(ModelFailure {
+                metrics: None,
                 source: ChatError::Cancelled,
                 partial: None,
             })
@@ -403,4 +414,95 @@ async fn shutdown_finalizes_an_active_run_and_instances_are_distinct() {
         other.handle.snapshot().await.expect("other").instance_id
     );
     other.shutdown().await.expect("shutdown");
+}
+
+#[test]
+fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
+    let chat = Chat::new(
+        1,
+        String::new(),
+        Controlled::new(0),
+        Arc::new(PluginRegistrar::default().build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut actor = Coordinator::new(
+        chat,
+        RequestOptions::default(),
+        "instance".into(),
+        Arc::new(AtomicBool::new(false)),
+        Cancellation::default(),
+    );
+    let (old, _) = actor.admit("test".into(), input("old")).expect("admit old");
+    actor.active = None;
+    let record = actor.records.front_mut().expect("retained record");
+    record.view.status = Status::Completed;
+    record.created = Instant::now()
+        .checked_sub(REQUEST_RETENTION + Duration::from_secs(1))
+        .expect("test process clock supports retention interval");
+    actor
+        .admit("test".into(), input("second"))
+        .expect("admit new");
+    assert!(
+        actor.record(&old.id).is_ok(),
+        "visible message keeps its run measurements"
+    );
+    actor.active = None;
+    actor.messages.retain(|message| message.run_id != old.id);
+    actor
+        .admit("test".into(), input("third"))
+        .expect("admit after eviction");
+    assert!(matches!(
+        actor.record(&old.id),
+        Err(ApplicationError::NotFound)
+    ));
+}
+
+#[derive(Debug)]
+struct SilentFailure;
+impl ModelBackend for SilentFailure {
+    fn default_max_tokens(&self) -> usize {
+        8
+    }
+    fn default_thinking(&self) -> Thinking {
+        Thinking::Disabled
+    }
+    fn evaluate(
+        &self,
+        _: ModelRequest,
+        _: TurnContext,
+        _: EventSink,
+    ) -> BoxFuture<'_, Result<ModelTurn, ModelFailure>> {
+        Box::pin(async {
+            Err(ModelFailure {
+                source: ChatError::Protocol("private diagnostic".into()),
+                partial: None,
+                metrics: None,
+            })
+        })
+    }
+}
+#[tokio::test]
+async fn failure_before_visible_text_has_a_terminal_display_entry_without_fabricated_output() {
+    let mut app = application_with(Arc::new(SilentFailure), PluginRegistrar::default());
+    let run = app
+        .handle
+        .submit("test", input("silent-failure"))
+        .await
+        .expect("admit");
+    let outcome = finished(&app.handle, &run.id).await;
+    assert_eq!(outcome.status, Status::Failed);
+    assert_eq!(outcome.error, Some("generation_failed"));
+    let snapshot = app.handle.snapshot().await.expect("snapshot");
+    let answer = snapshot
+        .messages
+        .iter()
+        .find(|message| message.role == "assistant")
+        .expect("terminal row");
+    assert!(
+        answer.text.is_empty(),
+        "host failures are not model content"
+    );
+    assert_eq!(answer.status, Status::Failed);
+    app.shutdown().await.expect("shutdown");
 }

@@ -9,6 +9,7 @@ pub mod chat;
 pub mod engine;
 pub mod pipeline;
 pub mod runtime;
+pub mod telemetry;
 pub mod tools;
 
 pub use chat::{Chat, ChatResponse, Message, RequestOptions, RunEvent};
