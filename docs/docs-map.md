@@ -6,7 +6,7 @@ Each row points at a real file and says what it is for.
 | Document | Description | Status |
 | --- | --- | --- |
 | [`../AGENTS.md`](../AGENTS.md) | Operating manual for coding agents: ownership model, task modes, Rust standards, review protocol, binding-fork rules, quality gates. | Current |
-| [`../README.md`](../README.md) | Workspace entry point: crates, build prerequisites, run commands, upstream revisions, and test notes. | Current |
+| [`../README.md`](../README.md) | Workspace entry point: prebuilt binary operation/distribution, embedded assets, Linux native dependencies, repository setup/build, development checks, and upstream pin. | Current |
 | [`architecture.md`](architecture.md) | Current system architecture, crate boundaries, ownership split, resident workers, bounded working context, extension boundaries, and deliberate limits. | Current |
 | [`llm-api.md`](llm-api.md) | High-level chat/runtime API, typed tools, plugins/hooks/middleware, context-window policy, cancellation, failure and lifecycle contracts. | Current |
 | [`decisions/0001-persistent-runtime.md`](decisions/0001-persistent-runtime.md) | Accepted decision: singleton backend, thread-confined workers, bounded interaction pipeline and separate future permanent memory. | Accepted |
