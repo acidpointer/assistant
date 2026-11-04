@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["crates/assistant", "crates/llama_cpp", "crates/llama_cpp_sys"]
-default-members = ["crates/assistant"]
+members = ["crates/assistant", "crates/assistant-daemon", "crates/assistant-web", "crates/llama_cpp", "crates/llama_cpp_sys"]
+default-members = ["crates/assistant-daemon"]
 
 [workspace.dependencies]
 anyhow = "1.0.104"
@@ -14,6 +14,7 @@ llama_cpp = { path = "crates/llama_cpp", default-features = false }
 llama_cpp_sys = { path = "crates/llama_cpp_sys", version = "0.9.0" }
 thiserror = "2.0.21"
 tracing = "0.1"
+getrandom = "0.3.4"
 
 [workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }

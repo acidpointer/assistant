@@ -1,0 +1,728 @@
+//! Bounded application coordinator shared by all product transports. One Tokio
+//! task serializes admission, snapshots and subscriptions; inference runs in an
+//! owned task and retains the core's worker confinement and receipt finalization.
+//! Slow subscribers resnapshot; they never backpressure inference. This view is
+//! volatile presentation state, distinct from model context and durable history.
+
+mod types;
+pub use types::*;
+
+use crate::{
+    chat::{
+        Chat, ChatError, ChatResponse, ChatResult, RequestOptions, RunEvent, RunFailure, RunStatus,
+    },
+    engine::{Cancellation, EngineError},
+};
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore, broadcast, mpsc, oneshot, watch},
+    task::{JoinHandle, JoinSet},
+};
+
+/// Maximum UTF-8 bytes in one new user input.
+pub const INPUT_BYTES: usize = 16 * 1024;
+/// Maximum retained visible message count.
+pub const MESSAGE_LIMIT: usize = 128;
+/// Maximum visible text bytes in one assistant message.
+pub const MESSAGE_BYTES: usize = 128 * 1024;
+/// Maximum retained visible text bytes.
+pub const TRANSCRIPT_BYTES: usize = 1024 * 1024;
+/// Maximum remembered submission keys, including active work.
+pub const REQUEST_LIMIT: usize = 128;
+/// Minimum deduplication retention; capacity is rejected instead of early eviction.
+pub const REQUEST_RETENTION: Duration = Duration::from_secs(600);
+const EVENT_CAPACITY: usize = 64;
+
+/// A snapshot and its subsequent updates, registered in one coordinator step.
+#[derive(Debug)]
+pub struct Subscription {
+    /// State immediately before the first queued event.
+    pub snapshot: Snapshot,
+    /// Lagged receivers must discard their view and subscribe again.
+    pub events: broadcast::Receiver<Arc<ApplicationEvent>>,
+}
+
+type Reply<T> = oneshot::Sender<Result<T, ApplicationError>>;
+#[derive(Debug)]
+enum Command {
+    Submit(String, Submission, Reply<RunView>),
+    Snapshot(Reply<Snapshot>),
+    ChatId(Reply<String>),
+    Subscribe(Reply<Subscription>),
+    Run(String, Reply<RunView>),
+    Cancel(String, Reply<RunView>),
+}
+
+/// Restricted, cloneable entry point for transports. It owns no runtime shutdown
+/// authority. Handles surviving shutdown return [`ApplicationError::Closed`].
+#[derive(Debug, Clone)]
+pub struct AssistantHandle {
+    commands: mpsc::Sender<Command>,
+    closed: Arc<AtomicBool>,
+}
+impl AssistantHandle {
+    async fn call<T>(&self, make: impl FnOnce(Reply<T>) -> Command) -> Result<T, ApplicationError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ApplicationError::Closed);
+        }
+        let (tx, rx) = oneshot::channel();
+        self.commands
+            .try_send(make(tx))
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => ApplicationError::Capacity,
+                mpsc::error::TrySendError::Closed(_) => ApplicationError::Closed,
+            })?;
+        rx.await.map_err(|_| ApplicationError::Closed)?
+    }
+    /// Submit literal input. Scope is a trusted host-assigned transport identity.
+    /// # Errors
+    /// Rejects invalid input, conflicting keys, busy chats, capacity or shutdown.
+    pub async fn submit(
+        &self,
+        scope: &str,
+        input: Submission,
+    ) -> Result<RunView, ApplicationError> {
+        // Validate before queueing, so the command bound also bounds owned bytes.
+        if !Coordinator::identifier(scope)
+            || !Coordinator::identifier(&input.client_id)
+            || !Coordinator::identifier(&input.request_id)
+            || input.text.len() > INPUT_BYTES
+            || input.text.trim().is_empty()
+        {
+            return Err(ApplicationError::InvalidInput);
+        }
+        self.call(|reply| Command::Submit(scope.into(), input, reply))
+            .await
+    }
+    /// Inspect the bounded presentation view without waiting for inference.
+    /// # Errors
+    /// Reports coordinator capacity or shutdown.
+    pub async fn snapshot(&self) -> Result<Snapshot, ApplicationError> {
+        self.call(Command::Snapshot).await
+    }
+    /// Read the primary identity without copying the retained transcript.
+    /// # Errors
+    /// Reports coordinator capacity or shutdown.
+    pub async fn chat_id(&self) -> Result<String, ApplicationError> {
+        self.call(Command::ChatId).await
+    }
+    /// Atomically obtain a snapshot and its subsequent updates.
+    /// # Errors
+    /// Reports subscription/command capacity or shutdown.
+    pub async fn subscribe(&self) -> Result<Subscription, ApplicationError> {
+        self.call(Command::Subscribe).await
+    }
+    /// Inspect an active or recently completed interaction.
+    /// # Errors
+    /// Reports expired/unknown identity, capacity or shutdown.
+    pub async fn run(&self, id: &str) -> Result<RunView, ApplicationError> {
+        if id.len() > 128 {
+            return Err(ApplicationError::NotFound);
+        }
+        self.call(|reply| Command::Run(id.into(), reply)).await
+    }
+    /// Request cooperative cancellation. A terminal outcome remains unchanged.
+    /// # Errors
+    /// Reports expired/unknown identity, capacity or shutdown.
+    pub async fn cancel(&self, id: &str) -> Result<RunView, ApplicationError> {
+        if id.len() > 128 {
+            return Err(ApplicationError::NotFound);
+        }
+        self.call(|reply| Command::Cancel(id.into(), reply)).await
+    }
+}
+
+/// Runtime-owned coordinator. Explicit shutdown joins accepted interactions.
+#[derive(Debug)]
+pub(crate) struct Application {
+    pub(crate) handle: AssistantHandle,
+    stop: Cancellation,
+    task: JoinHandle<ChatResult<()>>,
+    finished: watch::Receiver<bool>,
+}
+impl Application {
+    pub(crate) fn start(chat: Chat, options: RequestOptions) -> ChatResult<Self> {
+        let mut random = [0_u8; 16];
+        getrandom::fill(&mut random)
+            .map_err(|_| ChatError::Configuration("instance identity unavailable".into()))?;
+        let instance = random
+            .iter()
+            .flat_map(|byte| {
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                [
+                    char::from(HEX[usize::from(byte >> 4)]),
+                    char::from(HEX[usize::from(byte & 15)]),
+                ]
+            })
+            .collect::<String>();
+        let (commands, incoming) = mpsc::channel(32);
+        let closed = Arc::new(AtomicBool::new(false));
+        let handle = AssistantHandle {
+            commands,
+            closed: closed.clone(),
+        };
+        let stop = Cancellation::default();
+        let actor = Coordinator::new(chat, options, instance, closed, stop.clone());
+        let (completion, finished) = watch::channel(false);
+        let task = tokio::spawn(async move {
+            let result = actor.run(incoming).await;
+            completion.send_replace(true);
+            result
+        });
+        Ok(Self {
+            handle,
+            stop,
+            task,
+            finished,
+        })
+    }
+    pub(crate) async fn terminated(&self) -> ChatResult<()> {
+        let mut finished = self.finished.clone();
+        loop {
+            if *finished.borrow_and_update() {
+                return Err(ChatError::Closed);
+            }
+            finished.changed().await.map_err(|_| ChatError::Closed)?;
+        }
+    }
+    pub(crate) fn close(&self) {
+        self.handle.closed.store(true, Ordering::Release);
+    }
+    pub(crate) async fn shutdown(&mut self) -> ChatResult<()> {
+        self.close();
+        self.stop.cancel();
+        (&mut self.task)
+            .await
+            .map_err(|_| ChatError::Configuration("application task terminated".into()))?
+    }
+}
+impl Drop for Application {
+    fn drop(&mut self) {
+        self.close();
+        self.stop.cancel();
+    }
+}
+
+#[derive(Debug)]
+struct Record {
+    scope: String,
+    input: Submission,
+    view: RunView,
+    created: Instant,
+}
+#[derive(Debug)]
+enum Progress {
+    Started,
+    Turn,
+    Text(String),
+    Activity(&'static str),
+}
+#[derive(Debug)]
+struct QueuedProgress {
+    progress: Progress,
+    _bytes: OwnedSemaphorePermit,
+}
+
+#[derive(Debug)]
+struct Coordinator {
+    chat: Chat,
+    options: RequestOptions,
+    instance: String,
+    chat_id: String,
+    closed: Arc<AtomicBool>,
+    stop: Cancellation,
+    messages: VecDeque<DisplayMessage>,
+    records: VecDeque<Record>,
+    active: Option<(String, Cancellation)>,
+    turn: usize,
+    sequence: u64,
+    run_sequence: u64,
+    truncated: bool,
+    projection_failed: bool,
+    /// Deltas are coalesced for at most 20ms; snapshots and semantic boundaries flush.
+    pending_delta: Option<(String, String)>,
+    flush_at: tokio::time::Instant,
+    outgoing: broadcast::Sender<Arc<ApplicationEvent>>,
+}
+impl Coordinator {
+    fn new(
+        chat: Chat,
+        options: RequestOptions,
+        instance: String,
+        closed: Arc<AtomicBool>,
+        stop: Cancellation,
+    ) -> Self {
+        let (outgoing, _) = broadcast::channel(EVENT_CAPACITY);
+        Self {
+            chat,
+            options,
+            chat_id: format!("{instance}-primary"),
+            instance,
+            closed,
+            stop,
+            messages: VecDeque::new(),
+            records: VecDeque::new(),
+            active: None,
+            turn: 0,
+            sequence: 0,
+            run_sequence: 0,
+            truncated: false,
+            projection_failed: false,
+            pending_delta: None,
+            flush_at: tokio::time::Instant::now(),
+            outgoing,
+        }
+    }
+    fn cursor(&self) -> String {
+        format!("{}:{}", self.instance, self.sequence)
+    }
+    fn publish(&mut self, update: Update) {
+        self.flush_pending();
+        self.emit(update);
+    }
+    fn emit(&mut self, update: Update) {
+        self.sequence += 1;
+        // No receivers is ordinary idle operation. State remains authoritative.
+        let _ = self.outgoing.send(Arc::new(ApplicationEvent {
+            id: self.cursor(),
+            update,
+        }));
+    }
+    fn flush_pending(&mut self) {
+        if let Some((message_id, text)) = self.pending_delta.take() {
+            self.emit(Update::Delta { message_id, text });
+        }
+    }
+    fn queue_delta(&mut self, message_id: String, text: &str) {
+        if self.pending_delta.as_ref().is_some_and(|(id, pending)| {
+            id != &message_id || pending.len().saturating_add(text.len()) > 16 * 1024
+        }) {
+            self.flush_pending();
+        }
+        if self.pending_delta.is_none() {
+            self.flush_at = tokio::time::Instant::now() + Duration::from_millis(20);
+            self.pending_delta = Some((message_id, String::new()));
+        }
+        if let Some((_, pending)) = &mut self.pending_delta {
+            pending.push_str(text);
+        }
+        if self
+            .pending_delta
+            .as_ref()
+            .is_some_and(|(_, pending)| pending.len() >= 16 * 1024)
+        {
+            self.flush_pending();
+        }
+    }
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            instance_id: self.instance.clone(),
+            chat_id: self.chat_id.clone(),
+            revision: self.cursor(),
+            messages: self.messages.iter().cloned().collect(),
+            recent_runs: self.records.iter().map(|r| r.view.clone()).collect(),
+            active_run: self
+                .active
+                .as_ref()
+                .and_then(|(id, _)| self.record(id).ok()),
+            truncated: self.truncated,
+        }
+    }
+    fn record(&self, id: &str) -> Result<RunView, ApplicationError> {
+        self.records
+            .iter()
+            .find(|record| record.view.id == id)
+            .map(|r| r.view.clone())
+            .ok_or(ApplicationError::NotFound)
+    }
+    fn identifier(value: &str) -> bool {
+        !value.is_empty()
+            && value.len() <= 128
+            && value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    }
+    fn admit(
+        &mut self,
+        scope: String,
+        input: Submission,
+    ) -> Result<(RunView, bool), ApplicationError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(ApplicationError::Closed);
+        }
+        if !Self::identifier(&scope)
+            || !Self::identifier(&input.client_id)
+            || !Self::identifier(&input.request_id)
+            || input.text.len() > INPUT_BYTES
+            || input.text.trim().is_empty()
+        {
+            return Err(ApplicationError::InvalidInput);
+        }
+        self.records
+            .retain(|r| !r.view.status.is_terminal() || r.created.elapsed() < REQUEST_RETENTION);
+        if let Some(record) = self.records.iter().find(|r| {
+            r.scope == scope
+                && r.input.client_id == input.client_id
+                && r.input.request_id == input.request_id
+        }) {
+            return if record.input.text == input.text {
+                Ok((record.view.clone(), false))
+            } else {
+                Err(ApplicationError::Conflict)
+            };
+        }
+        if self.active.is_some() {
+            return Err(ApplicationError::Busy);
+        }
+        if self.records.len() >= REQUEST_LIMIT {
+            return Err(ApplicationError::Capacity);
+        }
+        self.run_sequence += 1;
+        let id = format!("{}-r{}", self.instance, self.run_sequence);
+        let view = RunView {
+            id: id.clone(),
+            chat_id: self.chat_id.clone(),
+            client_id: input.client_id.clone(),
+            client_request_id: input.request_id.clone(),
+            status: Status::Accepted,
+            error: None,
+            input_tokens: 0,
+            generated_tokens: 0,
+            warning_count: 0,
+            unknown_tool_outcome: false,
+        };
+        self.active = Some((id.clone(), Cancellation::default()));
+        self.turn = 0;
+        self.projection_failed = false;
+        self.records.push_back(Record {
+            scope,
+            input: input.clone(),
+            view: view.clone(),
+            created: Instant::now(),
+        });
+        self.publish(Update::Run { run: view.clone() });
+        self.add_message(DisplayMessage {
+            id: format!("{id}-user"),
+            run_id: id,
+            role: "user",
+            text: input.text,
+            status: Status::Accepted,
+        });
+        Ok((view, true))
+    }
+    fn trim(&mut self) {
+        self.trim_for(0);
+    }
+    fn trim_for(&mut self, additional_bytes: usize) {
+        let mut removed = Vec::new();
+        while self.messages.len() > MESSAGE_LIMIT
+            || self
+                .messages
+                .iter()
+                .map(|m| m.text.len())
+                .sum::<usize>()
+                .saturating_add(additional_bytes)
+                > TRANSCRIPT_BYTES
+        {
+            let Some(first) = self.messages.front() else {
+                break;
+            };
+            if self
+                .active
+                .as_ref()
+                .is_some_and(|(id, _)| id == &first.run_id)
+            {
+                break;
+            }
+            let old_run = first.run_id.clone();
+            while self.messages.front().is_some_and(|m| m.run_id == old_run) {
+                if let Some(message) = self.messages.pop_front() {
+                    removed.push(message.id);
+                }
+            }
+        }
+        if !removed.is_empty() {
+            self.truncated = true;
+            self.publish(Update::Evicted {
+                message_ids: removed,
+            });
+        }
+    }
+    fn add_message(&mut self, message: DisplayMessage) {
+        self.messages.push_back(message.clone());
+        self.publish(Update::Message { message });
+        self.trim();
+    }
+    fn assistant_id(&self, id: &str) -> String {
+        format!("{id}-assistant-{}", self.turn)
+    }
+    fn progress(&mut self, progress: Progress) {
+        let Some((id, cancellation)) = self.active.clone() else {
+            return;
+        };
+        match progress {
+            Progress::Started => {
+                if let Some(record) = self.records.back_mut() {
+                    if record.view.status != Status::Stopping {
+                        record.view.status = Status::Running;
+                    }
+                    let run = record.view.clone();
+                    self.publish(Update::Run { run });
+                }
+            }
+            Progress::Turn => {
+                self.turn += 1;
+            }
+            Progress::Activity(label) => self.publish(Update::Activity { run_id: id, label }),
+            Progress::Text(text) => {
+                let message_id = self.assistant_id(&id);
+                if !self.messages.iter().any(|m| m.id == message_id) {
+                    self.add_message(DisplayMessage {
+                        id: message_id.clone(),
+                        run_id: id,
+                        role: "assistant",
+                        text: String::new(),
+                        status: Status::Running,
+                    });
+                }
+                // Keep even malicious extension output within the projection budget.
+                let message_bytes = self
+                    .messages
+                    .iter()
+                    .find(|m| m.id == message_id)
+                    .map_or(0, |m| m.text.len());
+                self.trim_for(text.len());
+                let retained = self.messages.iter().map(|m| m.text.len()).sum::<usize>();
+                if retained.saturating_add(text.len()) > TRANSCRIPT_BYTES
+                    || message_bytes.saturating_add(text.len()) > MESSAGE_BYTES
+                {
+                    self.projection_failed = true;
+                    cancellation.cancel();
+                    return;
+                }
+                if let Some(message) = self.messages.iter_mut().find(|m| m.id == message_id) {
+                    message.text.push_str(&text);
+                }
+                self.queue_delta(message_id, &text);
+                self.trim();
+            }
+        }
+    }
+    fn cancel(&mut self, id: &str) -> Result<RunView, ApplicationError> {
+        let mut view = self.record(id)?;
+        if let Some((active, cancellation)) = &self.active
+            && active == id
+        {
+            cancellation.cancel();
+            view.status = Status::Stopping;
+            if let Some(record) = self.records.iter_mut().find(|r| r.view.id == id) {
+                record.view = view.clone();
+            }
+            self.publish(Update::Run { run: view.clone() });
+        }
+        Ok(view)
+    }
+    /// Successful final text is authoritative. On interruption the core response
+    /// can refer to an earlier complete tool turn, so preserve delivered per-turn
+    /// text instead of guessing which message owns buffered partial progress.
+    fn reconcile_final_message(&mut self, id: &str, response: &ChatResponse) {
+        if !matches!(response.status, RunStatus::Completed | RunStatus::Truncated) {
+            return;
+        }
+        if response.message.content.len() > MESSAGE_BYTES {
+            self.projection_failed = true;
+            return;
+        }
+        let message_id = self.assistant_id(id);
+        let current = self.messages.iter().find(|m| m.id == message_id);
+        let previous = current.map_or(0, |m| m.text.len());
+        let final_bytes = response.message.content.len();
+        self.trim_for(final_bytes.saturating_sub(previous));
+        let retained = self
+            .messages
+            .iter()
+            .map(|m| m.text.len())
+            .sum::<usize>()
+            .saturating_sub(previous);
+        if retained.saturating_add(final_bytes) > TRANSCRIPT_BYTES {
+            self.projection_failed = true;
+        }
+        if !self.projection_failed && !response.message.content.is_empty() {
+            if let Some(message) = self.messages.iter_mut().find(|m| m.id == message_id) {
+                message.text.clone_from(&response.message.content);
+            } else {
+                self.messages.push_back(DisplayMessage {
+                    id: message_id,
+                    run_id: id.into(),
+                    role: "assistant",
+                    text: response.message.content.clone(),
+                    status: Status::Running,
+                });
+            }
+        }
+    }
+    fn finish(&mut self, result: Result<ChatResponse, RunFailure>) {
+        let Some((id, _)) = self.active.clone() else {
+            return;
+        };
+        let (response, mut error) = match result {
+            Ok(response) => (response, None),
+            Err(failure) => {
+                let error = match &failure.source {
+                    ChatError::Cancelled => "cancelled",
+                    ChatError::Deadline => "deadline",
+                    ChatError::Closed => "closed",
+                    ChatError::Engine(EngineError::Budget { .. }) => "context_budget_exceeded",
+                    ChatError::Limit(_) => "limit_exceeded",
+                    _ => "generation_failed",
+                };
+                (*failure.partial, Some(error))
+            }
+        };
+        let mut status = match response.status {
+            RunStatus::Completed => Status::Completed,
+            RunStatus::Truncated => Status::Truncated,
+            RunStatus::Cancelled => Status::Cancelled,
+            RunStatus::Deadline => Status::Deadline,
+            RunStatus::Failed => Status::Failed,
+        };
+        self.reconcile_final_message(&id, &response);
+        if self.projection_failed {
+            status = Status::Failed;
+            error = Some("limit_exceeded");
+        }
+        let changed = self
+            .messages
+            .iter_mut()
+            .filter(|m| m.run_id == id)
+            .map(|message| {
+                message.status = status;
+                message.clone()
+            })
+            .collect::<Vec<_>>();
+        for message in changed {
+            self.publish(Update::Message { message });
+        }
+        if let Some(record) = self.records.iter_mut().find(|r| r.view.id == id) {
+            record.view.status = status;
+            record.view.error = error;
+            record.view.input_tokens = response.usage.input_tokens;
+            record.view.generated_tokens = response.usage.generated_tokens;
+            record.view.warning_count = response.warnings.len();
+            record.view.unknown_tool_outcome = response.tools.iter().any(|receipt| {
+                receipt
+                    .result
+                    .get("error")
+                    .and_then(|error| error.get("kind"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("interrupted")
+            });
+            let run = record.view.clone();
+            self.publish(Update::Run { run });
+        }
+        self.active = None;
+        self.trim();
+    }
+    /// Enqueue only presentation progress; byte permits include queued text and
+    /// callbacks never await socket consumers or coordinator capacity.
+    fn request(
+        &self,
+        text: String,
+        cancellation: Cancellation,
+        tx: mpsc::Sender<QueuedProgress>,
+    ) -> crate::chat::Request {
+        let mut options = self.options.clone();
+        options.cancellation = cancellation;
+
+        let bytes = Arc::new(Semaphore::new(256 * 1024));
+        self.chat
+            .request(text)
+            .options(options)
+            .on_event(move |event| {
+                let progress = match event {
+                    RunEvent::Started { .. } => Progress::Started,
+                    RunEvent::ModelTurnStarted { .. } => Progress::Turn,
+                    RunEvent::TextDelta { text, .. } => Progress::Text(text.clone()),
+                    RunEvent::ToolStarted { .. } => Progress::Activity("Using a tool"),
+                    RunEvent::ToolFinished { .. } => Progress::Activity("Thinking"),
+                    _ => return Ok(()),
+                };
+                let cost = match &progress {
+                    Progress::Text(text) => text.len().max(1),
+                    _ => 1,
+                };
+                let cost =
+                    u32::try_from(cost).map_err(|_| ChatError::Limit("application event bytes"))?;
+                let permit = bytes
+                    .clone()
+                    .try_acquire_many_owned(cost)
+                    .map_err(|_| ChatError::Limit("application event bytes"))?;
+                tx.try_send(QueuedProgress {
+                    progress,
+                    _bytes: permit,
+                })
+                .map_err(|_| ChatError::Limit("application event queue"))
+            })
+    }
+    async fn run(mut self, mut commands: mpsc::Receiver<Command>) -> ChatResult<()> {
+        let (progress_tx, mut progress_rx) = mpsc::channel::<QueuedProgress>(256);
+        let mut runs = JoinSet::new();
+        let mut stopping = false;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(self.flush_at), if self.pending_delta.is_some() => self.flush_pending(),
+                () = self.stop.cancelled(), if !stopping => {
+                    stopping = true; self.closed.store(true, Ordering::Release);
+                    if let Some((_, cancellation)) = &self.active { cancellation.cancel(); }
+                }
+                command = commands.recv(), if !stopping => {
+                    let Some(command) = command else { self.stop.cancel(); continue };
+                    match command {
+                        Command::Snapshot(reply) => { self.flush_pending(); let _ = reply.send(Ok(self.snapshot())); }
+                        Command::ChatId(reply) => { let _ = reply.send(Ok(self.chat_id.clone())); }
+                        Command::Subscribe(reply) => {
+                            self.flush_pending();
+                            let result = if self.outgoing.receiver_count() >= 32 { Err(ApplicationError::Capacity) }
+                                else { Ok(Subscription { snapshot: self.snapshot(), events: self.outgoing.subscribe() }) };
+                            let _ = reply.send(result);
+                        }
+                        Command::Run(id, reply) => { let _ = reply.send(self.record(&id)); }
+                        Command::Cancel(id, reply) => { let result = self.cancel(&id); let _ = reply.send(result); }
+                        Command::Submit(scope, input, reply) => {
+                            let text = input.text.clone();
+                            let admitted = self.admit(scope, input);
+                            if let Ok((_, true)) = &admitted
+                                && let Some((_, cancellation)) = &self.active {
+                                    let request = self.request(text, cancellation.clone(), progress_tx.clone());
+                                    runs.spawn(request.run());
+                            }
+                            let _ = reply.send(admitted.map(|(view, _)| view));
+                        }
+                    }
+                }
+                Some(queued) = progress_rx.recv(), if self.active.is_some() => { self.progress(queued.progress); }
+                Some(result) = runs.join_next(), if !runs.is_empty() => {
+                    while let Ok(queued) = progress_rx.try_recv() { self.progress(queued.progress); }
+                    match result {
+                        Ok(result) => self.finish(result),
+                        Err(_) => return Err(ChatError::Configuration("application run task terminated".into())),
+                    }
+                }
+            }
+            if stopping && runs.is_empty() {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

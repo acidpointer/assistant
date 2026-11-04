@@ -1,14 +1,17 @@
 //! Persistent, event-driven owner of services and dedicated inference workers.
 //!
-//! Configuration does no native I/O. `start` starts services then workers, rolling
-//! back on failure. Chat handles exchange owned requests through bounded queues.
-//! Explicit shutdown cancels admitted runs, joins workers, then stops services.
+//! Registration is inert. Startup prepares runtime services before model loading
+//! and activates them after application readiness, rolling back on failure.
+//! Shutdown quiesces ingress, finalizes runs, joins transports and native workers,
+//! then stops dependencies. Handles exchange bounded owned data across tasks.
 //! Dropping a running runtime requests cancellation but cannot await service flush.
+pub mod services;
 mod worker;
 use crate::{
-    chat::{Chat, ChatError, ChatResult, ModelBackend, RunLimits},
+    application::{Application, AssistantHandle},
+    chat::{Chat, ChatError, ChatResult, ModelBackend, RequestOptions, RunLimits},
     engine::{Cancellation, LLMConfig, ModelEngine},
-    pipeline::{ModelLayer, Pipeline, Plugin, PluginRegistrar, RunLayer, ToolLayer},
+    pipeline::{ModelLayer, Pipeline, Plugin, PluginRegistrar, RunLayer, Service, ToolLayer},
     tools::Tool,
 };
 use std::{
@@ -124,6 +127,9 @@ impl RuntimeControl {
         }
         let wait = async {
             loop {
+                let notified = self.idle.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 if self
                     .active
                     .lock()
@@ -133,7 +139,7 @@ impl RuntimeControl {
                 {
                     break;
                 }
-                self.idle.notified().await;
+                notified.await;
             }
         };
         tokio::time::timeout(grace, wait)
@@ -258,7 +264,7 @@ impl RuntimeBuilder {
     /// Validate and freeze configuration without starting workers.
     /// # Errors
     /// Rejects invalid models, bounds, plugin dependencies, and stage ordering.
-    pub fn build(self) -> ChatResult<AssistantRuntime> {
+    pub fn build(mut self) -> ChatResult<AssistantRuntime> {
         if let Some(error) = self.error {
             return Err(error);
         }
@@ -304,7 +310,11 @@ impl RuntimeBuilder {
             config.validate()?;
             models.insert(name, config);
         }
+        let runtime_services = std::mem::take(&mut self.registrar.runtime_services);
+        let lifecycle = std::mem::take(&mut self.registrar.lifecycle);
         Ok(AssistantRuntime {
+            runtime_services,
+            lifecycle,
             engine: self.engine,
             models,
             primary,
@@ -322,6 +332,8 @@ impl RuntimeBuilder {
 /// Validated, unstarted runtime. Dropping it has no worker/native side effects.
 #[derive(Debug)]
 pub struct AssistantRuntime {
+    runtime_services: Vec<Arc<dyn services::RuntimeServiceFactory>>,
+    lifecycle: Vec<Arc<dyn Service>>,
     engine: &'static ModelEngine,
     models: BTreeMap<String, LLMConfig>,
     primary: String,
@@ -363,12 +375,12 @@ impl AssistantRuntime {
             .map_err(|_| ChatError::Configuration("start requires a Tokio runtime".into()))?;
         let control = RuntimeControl::new(self.queue_capacity);
         let mut started = 0;
-        for service in &self.pipeline.lifecycle {
+        for service in &self.lifecycle {
             let result = tokio::time::timeout(self.shutdown_grace, service.start())
                 .await
                 .unwrap_or(Err(ChatError::Deadline));
             if let Err(source) = result {
-                let cleanup = stop_services(&self.pipeline, started, self.shutdown_grace).await;
+                let cleanup = stop_services(&self.lifecycle, started, self.shutdown_grace).await;
                 return Err(ChatError::Startup {
                     source: Box::new(source),
                     cleanup,
@@ -376,6 +388,16 @@ impl AssistantRuntime {
             }
             started += 1;
         }
+        let prepared = match prepare_services(&self.runtime_services, self.shutdown_grace).await {
+            Ok(prepared) => prepared,
+            Err(source) => {
+                let cleanup = stop_services(&self.lifecycle, started, self.shutdown_grace).await;
+                return Err(ChatError::Startup {
+                    source: Box::new(source),
+                    cleanup,
+                });
+            }
+        };
         let mut workers = BTreeMap::new();
         let mut threads = Vec::new();
         for (name, config) in self.models {
@@ -401,7 +423,7 @@ impl AssistantRuntime {
                     }
                     let mut cleanup = join_workers(&mut threads).await;
                     cleanup
-                        .extend(stop_services(&self.pipeline, started, self.shutdown_grace).await);
+                        .extend(stop_services(&self.lifecycle, started, self.shutdown_grace).await);
                     return Err(ChatError::Startup {
                         source: Box::new(error),
                         cleanup,
@@ -421,7 +443,7 @@ impl AssistantRuntime {
             self.limits.clone(),
             control.clone(),
         );
-        Ok(RunningAssistant {
+        let mut running = RunningAssistant {
             workers,
             threads,
             chat,
@@ -430,7 +452,23 @@ impl AssistantRuntime {
             system: self.system,
             limits: self.limits,
             shutdown_grace: self.shutdown_grace,
-        })
+            lifecycle: self.lifecycle,
+            runtime_services: Vec::new(),
+            application: None,
+        };
+        if let Err(source) = running.activate_services(prepared).await {
+            let cleanup = running
+                .shutdown()
+                .await
+                .err()
+                .map(|e| vec![e.to_string()])
+                .unwrap_or_default();
+            return Err(ChatError::Startup {
+                source: Box::new(source),
+                cleanup,
+            });
+        }
+        Ok(running)
     }
 }
 
@@ -438,6 +476,9 @@ impl AssistantRuntime {
 /// Explicit [`Self::shutdown`] is required to await service flushing and joins.
 #[derive(Debug)]
 pub struct RunningAssistant {
+    application: Option<Application>,
+    lifecycle: Vec<Arc<dyn Service>>,
+    runtime_services: Vec<Box<dyn services::RunningService>>,
     workers: BTreeMap<String, Arc<WorkerHandle>>,
     threads: Vec<std::thread::JoinHandle<()>>,
     chat: Chat,
@@ -448,6 +489,55 @@ pub struct RunningAssistant {
     shutdown_grace: Duration,
 }
 impl RunningAssistant {
+    /// Activate owned ready services only after the application API exists.
+    async fn activate_services(
+        &mut self,
+        prepared: Vec<Box<dyn services::PreparedService>>,
+    ) -> ChatResult<()> {
+        let application = Application::start(self.chat.clone(), RequestOptions::default())?;
+        let context = services::RuntimeContext {
+            assistant: application.handle.clone(),
+            services: self.pipeline.services.clone(),
+            shutdown: services::ShutdownSignal(self.control.shutdown.clone()),
+        };
+        self.application = Some(application);
+        for service in prepared {
+            // Activation owns partial-start cleanup; its future is never abandoned.
+            self.runtime_services
+                .push(service.activate(context.clone()).await?);
+        }
+        Ok(())
+    }
+    /// Shared application API for product transports.
+    /// # Errors
+    /// Returns closed if application startup did not complete.
+    pub fn assistant(&self) -> ChatResult<AssistantHandle> {
+        self.application
+            .as_ref()
+            .map(|app| app.handle.clone())
+            .ok_or(ChatError::Closed)
+    }
+    /// Wait for a required runtime service to terminate unexpectedly.
+    /// # Errors
+    /// Reports the service failure; an unexpected successful exit also fails.
+    pub async fn wait_for_failure(&self) -> ChatResult<()> {
+        let mut waits = self
+            .runtime_services
+            .iter()
+            .map(|service| service.terminated())
+            .collect::<Vec<_>>();
+        if let Some(application) = &self.application {
+            waits.push(Box::pin(application.terminated()));
+        }
+        if waits.is_empty() {
+            return std::future::pending().await;
+        }
+        let (result, _, _) = futures_util::future::select_all(waits).await;
+        result?;
+        Err(ChatError::Configuration(
+            "required runtime service stopped".into(),
+        ))
+    }
     /// Inspect resident contexts on their owning workers. No context is created
     /// by this call. The aggregate counts shared weights once per worker.
     /// # Errors
@@ -497,20 +587,38 @@ impl RunningAssistant {
     /// Reports grace expiration, worker panic, or service failure after cleanup.
     pub async fn shutdown(mut self) -> ChatResult<()> {
         let mut failures = Vec::new();
+        if let Some(application) = &self.application {
+            application.close();
+        }
+        for service in self.runtime_services.iter().rev() {
+            match tokio::time::timeout(self.shutdown_grace, service.quiesce()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => failures.push(error.to_string()),
+                Err(_) => failures.push("runtime service quiesce deadline exceeded".into()),
+            }
+        }
+        if let Some(application) = &mut self.application
+            && let Err(error) = application.shutdown().await
+        {
+            failures.push(error.to_string());
+        }
         if let Err(error) = self.control.cancel_and_wait(self.shutdown_grace).await {
             failures.push(error.to_string());
         }
+        for service in self.runtime_services.iter_mut().rev() {
+            // Service shutdown must join its tasks; its own bounded network drain
+            // must not abandon native ownership or application finalization.
+            if let Err(error) = service.shutdown().await {
+                failures.push(error.to_string());
+            }
+        }
+        self.runtime_services.clear();
         for worker in self.workers.values() {
             worker.stop();
         }
         failures.extend(join_workers(&mut self.threads).await);
         failures.extend(
-            stop_services(
-                &self.pipeline,
-                self.pipeline.lifecycle.len(),
-                self.shutdown_grace,
-            )
-            .await,
+            stop_services(&self.lifecycle, self.lifecycle.len(), self.shutdown_grace).await,
         );
         if failures.is_empty() {
             Ok(())
@@ -538,9 +646,13 @@ async fn join_workers(threads: &mut Vec<std::thread::JoinHandle<()>>) -> Vec<Str
     }
     failures
 }
-async fn stop_services(pipeline: &Pipeline, started: usize, grace: Duration) -> Vec<String> {
+async fn stop_services(
+    lifecycle: &[Arc<dyn Service>],
+    started: usize,
+    grace: Duration,
+) -> Vec<String> {
     let mut failures = Vec::new();
-    for service in pipeline.lifecycle[..started].iter().rev() {
+    for service in lifecycle[..started].iter().rev() {
         match tokio::time::timeout(grace, service.shutdown()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => failures.push(error.to_string()),
@@ -552,3 +664,18 @@ async fn stop_services(pipeline: &Pipeline, started: usize, grace: Duration) -> 
 
 #[cfg(test)]
 mod tests;
+
+/// Prepared handles release resources if a later factory fails or times out.
+async fn prepare_services(
+    factories: &[Arc<dyn services::RuntimeServiceFactory>],
+    grace: Duration,
+) -> ChatResult<Vec<Box<dyn services::PreparedService>>> {
+    let mut prepared = Vec::new();
+    for factory in factories {
+        let service = tokio::time::timeout(grace, factory.prepare())
+            .await
+            .map_err(|_| ChatError::Deadline)??;
+        prepared.push(service);
+    }
+    Ok(prepared)
+}

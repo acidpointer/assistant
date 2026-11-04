@@ -397,7 +397,7 @@ it need not block an explicitly bounded experimental codec benchmark.
 | `crates/llama_cpp_sys/ext_shim/` and existing shim support | Fallible memory collection, topology/effective-state snapshots | Agent-owned binding/native glue |
 | `crates/llama_cpp/src/context/`, `model.rs`, `quantize.rs` | Owned diagnostics, safe validation, cache type mapping, accurate docs | Agent-owned bindings |
 | `crates/assistant/src/engine/` | Model-level cache configuration, microbatch resolution, diagnostics and typed errors | Human-owned application; implementation requires an explicit request |
-| `crates/assistant/src/main.rs` | Thin CLI parsing and diagnostic output | Human-owned application |
+| `crates/assistant-daemon/src/app.rs` | Thin CLI parsing and diagnostic output | Human-owned application |
 | `crates/assistant/src/runtime/` | Context policy propagation; accounting/admission when selected | Human-owned application |
 | Assistant tests and benchmark/example tooling | Cache lifecycle, quality categories and reproducible results | Shared tests; respect application ownership |
 | `docs/` and crate READMEs | API contracts, results, supported profiles and instructions | Shared documentation |

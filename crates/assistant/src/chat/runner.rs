@@ -530,6 +530,12 @@ pub async fn run_loop(context: &mut RunContext, pipeline: &Pipeline) -> ChatResu
         .collect();
     for turn_index in 0..context.limits.model_turns {
         context.check_running()?;
+        context
+            .emit(RunEvent::ModelTurnStarted {
+                run_id: context.run_id,
+                turn: turn_index + 1,
+            })
+            .await?;
         let mut request = ModelRequest {
             system: context.system.clone(),
             messages: context.messages.clone(),

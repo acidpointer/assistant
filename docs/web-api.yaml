@@ -1,0 +1,177 @@
+openapi: 3.1.0
+info:
+  title: Local assistant web API
+  version: 1.0.0
+  description: Volatile primary-chat API. No authentication or durable history.
+paths:
+  /api/v1/bootstrap:
+    get:
+      operationId: bootstrap
+      responses:
+        '200':
+          description: Instance, primary_chat_id, API version, capabilities and limits.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [api_version, instance_id, primary_chat_id, capabilities, limits]
+                properties:
+                  api_version: {const: 1}
+                  instance_id: {type: string}
+                  primary_chat_id: {type: string}
+                  capabilities: {type: object}
+                  limits: {type: object}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/chats/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: snapshot
+      responses:
+        '200':
+          description: Bounded presentation snapshot, independent of native working context.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Snapshot'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/chats/{id}/events:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: events
+      responses:
+        '200':
+          description: |
+            SSE snapshot event followed by ordered update events. An update has
+            type run, message, delta, activity or evicted. Event IDs are opaque
+            instance-qualified strings. Every reconnect receives a new snapshot;
+            Last-Event-ID does not request replay. Lag or failure closes the stream.
+          content:
+            text/event-stream:
+              schema: {type: string}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/chats/{id}/runs:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: submit
+      parameters: [{$ref: '#/components/parameters/ClientHeader'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [client_id, client_request_id, input]
+              properties:
+                client_id: {$ref: '#/components/schemas/RequestId'}
+                client_request_id: {$ref: '#/components/schemas/RequestId'}
+                input:
+                  type: object
+                  additionalProperties: false
+                  required: [type, text]
+                  properties:
+                    type: {const: text}
+                    text: {type: string, minLength: 1, description: Nonblank; at most 16384 UTF-8 bytes.}
+      responses:
+        '202':
+          description: Accepted or deduplicated run. Conflicting keys or busy chats return 409.
+          headers:
+            Location: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/runs/{id}:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    get:
+      operationId: inspectRun
+      responses:
+        '200':
+          description: Active or retained terminal metadata.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+  /api/v1/runs/{id}/cancel:
+    parameters: [{$ref: '#/components/parameters/Id'}]
+    post:
+      operationId: cancel
+      parameters: [{$ref: '#/components/parameters/ClientHeader'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {type: object, example: {}}
+      responses:
+        '202':
+          description: Cancellation requested; await a terminal event.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        '200':
+          description: Already terminal; outcome is unchanged.
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Run'}
+        default: {$ref: '#/components/responses/Problem'}
+components:
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: {type: string}
+    ClientHeader:
+      name: X-Assistant-Client
+      in: header
+      required: true
+      schema: {const: webui}
+  responses:
+    Problem:
+      description: Safe structured failure; 400/413/415/422 input, 403 origin, 404 expired identity, 409 conflict/busy, 429 capacity, 503 closed.
+      content:
+        application/problem+json:
+          schema:
+            type: object
+            required: [type, title, status, code]
+            properties:
+              type: {type: string, format: uri}
+              title: {type: string}
+              status: {type: integer}
+              code: {type: string}
+  schemas:
+    RequestId: {type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_.-]+$'}
+    Status: {enum: [accepted, running, stopping, completed, truncated, cancelled, deadline, failed]}
+    Message:
+      type: object
+      required: [id, run_id, role, text, status]
+      properties:
+        id: {type: string}
+        run_id: {type: string}
+        role: {enum: [user, assistant]}
+        text: {type: string}
+        status: {$ref: '#/components/schemas/Status'}
+    Run:
+      type: object
+      required: [id, chat_id, client_id, client_request_id, status, error, input_tokens, generated_tokens, warning_count, unknown_tool_outcome]
+      properties:
+        id: {type: string}
+        chat_id: {type: string}
+        client_id: {type: string}
+        client_request_id: {type: string}
+        status: {$ref: '#/components/schemas/Status'}
+        error: {type: [string, 'null']}
+        input_tokens: {type: integer, minimum: 0}
+        generated_tokens: {type: integer, minimum: 0}
+        warning_count: {type: integer, minimum: 0}
+        unknown_tool_outcome: {type: boolean}
+    Snapshot:
+      type: object
+      required: [instance_id, chat_id, revision, messages, active_run, recent_runs, truncated]
+      properties:
+        instance_id: {type: string}
+        chat_id: {type: string}
+        revision: {type: string}
+        messages: {type: array, maxItems: 128, items: {$ref: '#/components/schemas/Message'}}
+        active_run: {oneOf: [{$ref: '#/components/schemas/Run'}, {type: 'null'}]}
+        recent_runs: {type: array, maxItems: 128, items: {$ref: '#/components/schemas/Run'}}
+        truncated: {type: boolean}

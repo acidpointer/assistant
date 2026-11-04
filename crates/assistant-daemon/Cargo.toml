@@ -1,0 +1,28 @@
+[package]
+name = "assistant-daemon"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[[bin]]
+name = "assistant"
+path = "src/main.rs"
+
+[dependencies]
+assistant = { path = "../assistant", default-features = false }
+assistant-web = { path = "../assistant-web" }
+anyhow = { workspace = true }
+clap = { workspace = true }
+tokio = { version = "1", features = ["rt", "macros", "signal", "io-util", "io-std"] }
+serde_json = "1"
+
+[features]
+default = ["vulkan"]
+vulkan = ["assistant/vulkan"]
+cuda = ["assistant/cuda"]
+metal = ["assistant/metal"]
+turboquant = ["assistant/turboquant"]
+
+[lints]
+workspace = true

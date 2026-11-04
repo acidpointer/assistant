@@ -4,7 +4,9 @@ Rust workspace with local llama.cpp bindings and a tool-using assistant.
 
 | Crate | Purpose |
 | --- | --- |
-| `assistant` | Persistent runtime, high-level chat API, typed tools and CLI |
+| `assistant` | Persistent runtime, shared application API, chat, tools and plugins |
+| `assistant-web` | Default HTTP/WebUI plugin and embedded single-file browser UI |
+| `assistant-daemon` | Launcher package producing the single `assistant` binary |
 | `llama_cpp` | Safe Rust API, ported from eugenehp/llama-cpp-rs |
 | `llama_cpp_sys` | Generated FFI, native build, and C++ shims |
 
@@ -22,21 +24,30 @@ install Vulkan headers, the Vulkan loader, a GPU driver, and `glslc` as well.
 On Arch Linux, these are provided by `base-devel cmake ninja clang vulkan-headers
 vulkan-icd-loader shaderc` and your GPU's Vulkan driver package.
 
-Choose a local GGUF explicitly; model paths are never committed:
-
-```sh
-cargo run --release -- --model /path/to/model.gguf --prompt "What time is it?" --trace
-```
-
-Without `--prompt`, the CLI reads interactions from stdin until EOF, sharing one
-conversation and resident model. `--daemon` starts the runtime and waits for
-Ctrl-C; external transports are future work.
+Choose a local GGUF explicitly; model paths are never committed. Normal startup
+runs the resident assistant with WebUI at **http://127.0.0.1:8080**:
 
 ```sh
 cargo run --release -- --model /path/to/model.gguf
-cargo run --release -- --model /path/to/model.gguf --daemon
-cargo run --release --no-default-features -- --model /path/to/model.gguf --gpu-layers 0 --prompt "Hello!"
+cargo run --release -- --model /path/to/model.gguf --host 127.0.0.1 --port 8080
 ```
+
+`--no-web` disables all web functionality. One-shot prompts are diagnostic/testing
+operations and **require `--no-web`**; a running web server cannot be combined with
+`--prompt`. Interactive stdin is also explicit. Default server/headless modes
+stay resident regardless of stdin EOF. SIGINT and SIGTERM initiate cleanup.
+
+```sh
+cargo run --release -- --model /path/to/model.gguf --no-web --prompt "What time is it?" --trace
+cargo run --release -- --model /path/to/model.gguf --no-web --interactive
+cargo run --release -- --model /path/to/model.gguf --no-web
+```
+
+The last command runs headless until shutdown. `--daemon` remains a compatibility
+alias for resident mode. Explicit `--host`/`--port` conflict with `--no-web`.
+See [the web contract](docs/web-ui.md) for API, plugin lifecycle, limits, browser
+support and systemd operation. The workspace defaults to `assistant-daemon`;
+package-qualified binary commands use `-p assistant-daemon`.
 
 Other GPU backends use `--no-default-features --features cuda` or
 `--no-default-features --features metal` and their platform toolkits. Disabling
@@ -56,7 +67,7 @@ the repeatable benchmark/placement workflow.
 [The API guide](docs/llm-api.md) describes `Chat::generate`, request overrides,
 streaming, cancellation, typed tools, plugins, ordered hooks and middleware.
 [The architecture](docs/architecture.md) explains ownership and working context.
-The binary is a thin adapter over this library. `src/example.rs` is a retained
+The binary composes this library with the default web plugin. `src/example.rs` is a retained
 historical walkthrough and is not compiled.
 
 The CLI opts into two example tools:
@@ -75,7 +86,7 @@ user-visible text streams to stdout. Prompt bodies and raw protocol are not logg
 The runtime stays resident between interactions and blocks while idle. Recent
 history is bounded; oldest complete exchanges are evicted to fit message, byte
 and native token budgets. It does not summarize or persist memory. Weights and
-allocated KV caches still occupy memory while idle. External transports,
+allocated KV caches still occupy memory while idle. Additional transports,
 semantic/graph memory and voice remain separate future features.
 
 ## Checks
@@ -96,7 +107,7 @@ absolute GGUF path with a compatible tool-capable chat template. Set
 `ASSISTANT_TEST_REQUIRE_MODEL=1` to fail rather than skip when absent:
 
 ```sh
-cargo test -p assistant -- --test-threads=1
+cargo test -p assistant-daemon -- --test-threads=1
 ```
 
 They check arithmetic, exact `date` output, and a conversation needing both

@@ -60,6 +60,226 @@ fn config() -> LLMConfig {
     config
 }
 
+#[derive(Debug)]
+struct ReadyFactory {
+    name: &'static str,
+    events: Arc<std::sync::Mutex<Vec<String>>>,
+    fail_prepare: bool,
+    fail_activate: bool,
+    terminate: bool,
+}
+#[derive(Debug)]
+struct Reservation {
+    name: &'static str,
+    events: Arc<std::sync::Mutex<Vec<String>>>,
+}
+impl Reservation {
+    fn event(&self, phase: &str) {
+        self.events
+            .lock()
+            .expect("events")
+            .push(format!("{phase} {}", self.name));
+    }
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        self.event("release");
+    }
+}
+#[derive(Debug)]
+struct ReadyPrepared {
+    reservation: Reservation,
+    fail: bool,
+    terminate: bool,
+}
+#[derive(Debug)]
+struct ReadyRunning {
+    reservation: Reservation,
+    assistant: AssistantHandle,
+    terminate: bool,
+}
+impl services::RuntimeServiceFactory for ReadyFactory {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn prepare(&self) -> BoxFuture<'_, ChatResult<Box<dyn services::PreparedService>>> {
+        Box::pin(async {
+            self.events
+                .lock()
+                .expect("events")
+                .push(format!("prepare {}", self.name));
+            if self.fail_prepare {
+                return Err(ChatError::Configuration("prepare failure".into()));
+            }
+            Ok(Box::new(ReadyPrepared {
+                reservation: Reservation {
+                    name: self.name,
+                    events: self.events.clone(),
+                },
+                fail: self.fail_activate,
+                terminate: self.terminate,
+            }) as Box<dyn services::PreparedService>)
+        })
+    }
+}
+impl services::PreparedService for ReadyPrepared {
+    fn activate(
+        self: Box<Self>,
+        context: services::RuntimeContext,
+    ) -> BoxFuture<'static, ChatResult<Box<dyn services::RunningService>>> {
+        Box::pin(async move {
+            self.reservation.event("activate");
+            context
+                .assistant
+                .snapshot()
+                .await
+                .map_err(|_| ChatError::Closed)?;
+            if self.fail {
+                return Err(ChatError::Configuration("activation failure".into()));
+            }
+            Ok(Box::new(ReadyRunning {
+                reservation: self.reservation,
+                assistant: context.assistant,
+                terminate: self.terminate,
+            }) as Box<dyn services::RunningService>)
+        })
+    }
+}
+impl services::RunningService for ReadyRunning {
+    fn quiesce(&self) -> BoxFuture<'_, ChatResult<()>> {
+        Box::pin(async {
+            self.reservation.event("quiesce");
+            Ok(())
+        })
+    }
+    fn terminated(&self) -> BoxFuture<'_, ChatResult<()>> {
+        Box::pin(async {
+            if self.terminate {
+                Err(ChatError::Closed)
+            } else {
+                std::future::pending().await
+            }
+        })
+    }
+    fn shutdown(&mut self) -> BoxFuture<'_, ChatResult<()>> {
+        Box::pin(async {
+            self.reservation.event("stop");
+            assert_eq!(
+                self.assistant
+                    .snapshot()
+                    .await
+                    .expect_err("application already closed"),
+                crate::application::ApplicationError::Closed
+            );
+            Ok(())
+        })
+    }
+}
+#[derive(Debug)]
+struct ReadyPlugins(Vec<Arc<ReadyFactory>>);
+impl Plugin for ReadyPlugins {
+    fn configure(&self, registrar: &mut PluginRegistrar) -> ChatResult<()> {
+        for factory in &self.0 {
+            registrar.runtime_service(factory.clone())?;
+        }
+        Ok(())
+    }
+}
+fn factory(name: &'static str, events: &Arc<std::sync::Mutex<Vec<String>>>) -> ReadyFactory {
+    ReadyFactory {
+        name,
+        events: events.clone(),
+        fail_prepare: false,
+        fail_activate: false,
+        terminate: false,
+    }
+}
+
+#[tokio::test]
+async fn runtime_preparation_is_inert_until_start_and_rolls_back_before_model_loading() {
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let first = factory("first", &events);
+    let mut second = factory("second", &events);
+    second.fail_prepare = true;
+    let mut missing = config();
+    missing.model_path = "deliberately-missing.gguf".into();
+    let runtime = AssistantRuntime::builder(test_engine())
+        .model("main", missing)
+        .plugin(ReadyPlugins(vec![Arc::new(first), Arc::new(second)]))
+        .build()
+        .expect("build");
+    assert!(events.lock().expect("events").is_empty());
+    let failure = runtime.start().await.expect_err("prepare failure");
+    assert!(failure.to_string().contains("prepare failure"));
+    assert_eq!(
+        *events.lock().expect("events"),
+        ["prepare first", "prepare second", "release first"]
+    );
+}
+
+#[tokio::test]
+async fn runtime_activation_failure_quiesces_and_joins_started_services() {
+    if !config().model_path.is_file() {
+        return;
+    }
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let first = factory("first", &events);
+    let mut second = factory("second", &events);
+    second.fail_activate = true;
+    let failure = AssistantRuntime::builder(test_engine())
+        .model("main", config())
+        .plugin(ReadyPlugins(vec![Arc::new(first), Arc::new(second)]))
+        .build()
+        .expect("build")
+        .start()
+        .await
+        .expect_err("activation failure");
+    assert!(failure.to_string().contains("activation failure"));
+    assert_eq!(
+        *events.lock().expect("events"),
+        [
+            "prepare first",
+            "prepare second",
+            "activate first",
+            "activate second",
+            "release second",
+            "quiesce first",
+            "stop first",
+            "release first"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn required_service_termination_is_observed_and_handles_close_on_shutdown() {
+    if !config().model_path.is_file() {
+        return;
+    }
+    let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut ready = factory("required", &events);
+    ready.terminate = true;
+    let runtime = AssistantRuntime::builder(test_engine())
+        .model("main", config())
+        .plugin(ReadyPlugins(vec![Arc::new(ready)]))
+        .build()
+        .expect("build")
+        .start()
+        .await
+        .expect("start");
+    let handle = runtime.assistant().expect("application");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), runtime.wait_for_failure())
+            .await
+            .expect("failure observed")
+            .is_err()
+    );
+    runtime.shutdown().await.expect("shutdown");
+    assert_eq!(
+        handle.snapshot().await.expect_err("closed"),
+        crate::application::ApplicationError::Closed
+    );
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // Complete worker admission/inspection/release scenario.
 async fn required_cache_worker_snapshots_and_context_release() {

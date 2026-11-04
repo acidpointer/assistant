@@ -1,0 +1,13 @@
+# Example user service: replace both paths before installing with systemctl --user.
+[Unit]
+Description=Local assistant
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/assistant --model /path/to/model.gguf --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=180
+
+[Install]
+WantedBy=default.target

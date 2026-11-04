@@ -17,6 +17,7 @@ fn generates_after_a_prompt_larger_than_one_batch() {
     }
 
     let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
+        .arg("--no-web")
         .arg("--model")
         .arg(model)
         .args([
@@ -80,6 +81,7 @@ fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
     let swa = std::env::var("ASSISTANT_TEST_SWA").unwrap_or_else(|_| "full".into());
     let gpu_layers = std::env::var("ASSISTANT_TEST_GPU_LAYERS").unwrap_or_else(|_| "0".into());
     let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
+        .arg("--no-web")
         .arg("--model")
         .arg(model)
         .args([
@@ -111,6 +113,7 @@ fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
 fn invalid_cache_policy_is_rejected_before_model_loading() {
     let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
         .args([
+            "--no-web",
             "--model",
             "missing.gguf",
             "--cache-type-v",

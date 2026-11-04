@@ -40,7 +40,7 @@ normally and returned `ready`:
 cargo run --features turboquant -- --model ./model.gguf \
   --cache-type-k pq3_0 --cache-type-v pq3_0 --swa-cache compact \
   --require-vulkan --diagnostics --max-tokens 32 \
-  --prompt 'Reply with just the word ready.'
+  --no-web --prompt 'Reply with just the word ready.'
 ```
 
 Its native snapshot reported row/graph/transform versions 1, 128-coordinate

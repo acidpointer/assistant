@@ -25,6 +25,10 @@ Each row points at a real file and says what it is for.
 | [`benchmarks/cache-quality-2026-11-04.json`](benchmarks/cache-quality-2026-11-04.json) | Feature-enabled Vulkan quality references: 68 task cases, 85 numerical checkpoints, model/source/patch/executable identities and unchanged experimental gates. | Measured NVIDIA evidence; no PQ3 inference, 2026-11-04 |
 | [`../crates/llama_cpp/README.md`](../crates/llama_cpp/README.md) | Binding crate overview, feature flags, usage example, and fallible/lifetime-bound API migration. | Current |
 | [`../crates/llama_cpp/TENSOR_TRANSACTIONS_SAFETY.md`](../crates/llama_cpp/TENSOR_TRANSACTIONS_SAFETY.md) | Safety contract for `TensorTransactions` and decode-lifecycle callbacks. Read before touching tensor capture or FFI callbacks. | Current |
+| [`web-ui.md`](web-ui.md) | Default web plugin, --no-web/testing modes, runtime-service lifecycle, shared application bounds, browser contract and validation. | Implemented, 2026-11-04 |
+| [`web-api.yaml`](web-api.yaml) | Versioned HTTP/SSE API: requests, run and snapshot schemas, cancellation, errors and bounded recovery. | Implemented v1 |
+| [`decisions/0003-runtime-services-and-web.md`](decisions/0003-runtime-services-and-web.md) | One executable, compiled transport plugins, runtime-ready lifecycle and shared application ownership. | Accepted and implemented |
+| [`../packaging/systemd/assistant.service`](../packaging/systemd/assistant.service) | Example foreground user service; replace executable/model paths before installation. | Example |
 
 ## Planned documents
 

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: implemented foundation, 2026-11-03. Application behavior is human-owned;
+Status: resident runtime and default web plugin, 2026-11-04. Application behavior is human-owned;
 this foundation was explicitly requested. See [the API contract](llm-api.md)
 and [the runtime decision](decisions/0001-persistent-runtime.md).
 
@@ -26,7 +26,9 @@ archive. Summarization is not required for continued operation.
 | `crates/assistant/src/chat/` | Typed messages, operation overrides, semantic events, bounded model/tool runner and recent working history |
 | `crates/assistant/src/tools/` | Typed schemas, argument deserialization and registered Rust dispatch; opt-in CLI tools |
 | `crates/assistant/src/pipeline/` | Plugin configuration, typed services, ordered hooks and one-shot middleware continuations |
-| `crates/assistant/src/main.rs` | Thin one-shot, stdin or resident-idle CLI adapter over the library |
+| `crates/assistant/src/application/` | Bounded product admission, run ownership, display snapshots and subscriptions |
+| `crates/assistant-web/` | Runtime-ready HTTP/WebUI plugin; one embedded HTML asset |
+| `crates/assistant-daemon/` | Single `assistant` executable, CLI modes, signals and supervision |
 | `crates/llama_cpp/` | Maintained safe binding fork |
 | `crates/llama_cpp_sys/` | FFI, guarded shims, build-directory patches and pinned native submodule |
 
@@ -38,7 +40,9 @@ library and CLI.
 ## Ownership and execution
 
 ```text
-CLI / future transports
+WebPlugin / future transports
+          |
+       AssistantHandle (bounded application coordinator)
           |
        Chat::request(...).run()
           |
@@ -63,11 +67,16 @@ its weights locally and owns the contexts borrowing them. One scheduling step is
 one prefill batch or one sampled token. Active chats on a worker rotate between
 steps. Native calls themselves cannot be preempted.
 
+The default product is a foreground daemon with WebUI. `--no-web` skips the web
+plugin entirely; explicit diagnostic `--prompt` and `--interactive` require it.
+See [the web contract](web-ui.md) and [runtime-service decision](decisions/0003-runtime-services-and-web.md).
+
 Async plugin services and tools run on Tokio. Registration does no I/O. Startup
-starts services in registration order, then resident model workers. Failure rolls
+starts dependency services, prepares runtime services, starts model workers and
+the application coordinator, then activates runtime services. Failure rolls
 back successfully started resources and retains rollback diagnostics. Shutdown
-closes admission, cancels runs, joins native workers, then stops services in
-reverse order. Explicit shutdown is required to await flushing; dropping the
+closes admission, quiesces runtime services, finalizes runs, closes/joins runtime
+services, joins native workers, then stops dependency services in reverse order. Explicit shutdown is required to await flushing; dropping the
 runtime only requests stop.
 
 ## Context and resource invariants
@@ -114,7 +123,7 @@ capability selection and typed validation remain necessary.
 ## Deliberate limits
 
 Inference currently uses greedy sampling. There is no memory database, restart
-recovery, voice pipeline, external transport, scheduler for autonomous background
+recovery, voice pipeline, additional transport implementations, scheduler for autonomous background
 model work, process sandbox for tools or GPU model unloading policy. Resident
 weights and allocated KV caches consume memory while idle. Native load/decode
 cannot be forcibly cancelled; shutdown waits for native owners before freeing

@@ -47,6 +47,25 @@ creates independent state on resident weights, subject to native context limits.
 management. Request supporting context is retained through tool continuations
 but does not become permanent chat history or trusted system policy.
 
+## Product application and runtime services
+
+The daemon registers `assistant_web::WebPlugin` by default. `--no-web` omits it;
+`--prompt` is an explicit testing/diagnostic operation requiring `--no-web`.
+Normal transports use `RunningAssistant::assistant()` and its shared
+`AssistantHandle` for submission, snapshots, subscriptions, inspection and
+cancellation. Low-level `Chat` remains available for direct library/diagnostic
+use; those direct mutations do not update the application display view.
+
+Plugins register runtime-ready factories through
+`PluginRegistrar::runtime_service`. See `runtime::services` for preparation,
+activation, quiescence, termination observation and shutdown contracts. The
+runtime keeps these handles outside `Pipeline`, rolls back startup failures and
+supervises unexpected termination through `wait_for_failure`. Existing dependency
+services retain their pre-model lifecycle. Model-turn boundary events now identify
+separate assistant messages across tool continuations.
+
+See [web and lifecycle contracts](web-ui.md) and [the HTTP specification](web-api.yaml).
+
 ## Tools
 
 A capability implements `tools::Tool`, declaring its stable name, argument type,

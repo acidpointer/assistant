@@ -275,6 +275,7 @@ impl<'a> NextTool<'a> {
 /// Builder-only registration. Runtime state never lives inside this registrar.
 #[derive(Debug, Default)]
 pub struct PluginRegistrar {
+    pub(crate) runtime_services: Vec<Arc<dyn crate::runtime::services::RuntimeServiceFactory>>,
     pub(crate) tools: ToolRegistry,
     services: Services,
     pub(crate) lifecycle: Vec<Arc<dyn Service>>,
@@ -286,6 +287,28 @@ pub struct PluginRegistrar {
     tool_layers: Vec<Arc<dyn ToolLayer>>,
 }
 impl PluginRegistrar {
+    /// Register a runtime-ready service without performing I/O.
+    /// # Errors
+    /// Rejects empty, oversized or duplicate service identities.
+    pub fn runtime_service(
+        &mut self,
+        factory: Arc<dyn crate::runtime::services::RuntimeServiceFactory>,
+    ) -> ChatResult<()> {
+        let name = factory.name();
+        if name.is_empty()
+            || name.len() > 128
+            || self
+                .runtime_services
+                .iter()
+                .any(|service| service.name() == name)
+        {
+            return Err(ChatError::Configuration(
+                "duplicate/invalid runtime service name".into(),
+            ));
+        }
+        self.runtime_services.push(factory);
+        Ok(())
+    }
     /// Install one plugin, including nested plugin dependencies.
     /// # Errors
     /// Rejects duplicates and propagates registration failures.
@@ -410,7 +433,6 @@ impl PluginRegistrar {
         Ok(Pipeline {
             tools: self.tools,
             services: Arc::new(self.services),
-            lifecycle: self.lifecycle,
             hooks,
             run_layers: self.run_layers,
             model_layers: self.model_layers,
@@ -424,7 +446,6 @@ impl PluginRegistrar {
 pub struct Pipeline {
     pub(crate) tools: ToolRegistry,
     pub(crate) services: Arc<Services>,
-    pub(crate) lifecycle: Vec<Arc<dyn Service>>,
     hooks: Vec<HookRegistration>,
     pub(crate) run_layers: Vec<Arc<dyn RunLayer>>,
     pub(crate) model_layers: Vec<Arc<dyn ModelLayer>>,

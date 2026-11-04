@@ -374,6 +374,13 @@ pub struct RunFailure {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum RunEvent {
+    /// A new model turn begins; transports must not merge tool continuations.
+    ModelTurnStarted {
+        /// Interaction identity.
+        run_id: u64,
+        /// One-based turn index within the interaction.
+        turn: usize,
+    },
     /// A request was admitted to the runner.
     Started {
         /// Interaction identity.

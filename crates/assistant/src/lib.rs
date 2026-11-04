@@ -4,6 +4,7 @@
 //! owned messages; they never expose FFI pointers. Durable memory and transports
 //! integrate through plugins rather than becoming dependencies of generation.
 
+pub mod application;
 pub mod chat;
 pub mod engine;
 pub mod pipeline;

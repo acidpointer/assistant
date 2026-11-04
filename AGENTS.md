@@ -28,6 +28,8 @@ business logic** in:
 
 - `crates/assistant/` (daemon, transports, sessions, tools, prompt policy,
   orchestration, high-level LLM API)
+- `crates/assistant-web/` (HTTP/WebUI plugin)
+- `crates/assistant-daemon/` (the single `assistant` executable and process lifecycle)
 - future application crates
 
 For these areas, act as a senior engineer and reviewer:
@@ -263,11 +265,11 @@ Practical notes:
 
 ### Known baseline
 
-The application layer is mid-refactor. At the last audit, `cargo run` was a
-no-op, `crates/assistant/src/example.rs` was orphaned, and several assistant
-integration tests failed because the binary ignored CLI arguments. Do not
-assume a red assistant test means a binding regression; check
-`docs/architecture.md` for the current known state and verify the cause.
+The default binary starts the WebPlugin; diagnostic one-shot tests must pass
+`--no-web --prompt`. Binary integration tests live in `assistant-daemon`; core
+tests remain in `assistant`. `crates/assistant/src/example.rs` is historical and
+uncompiled. See `docs/architecture.md` and `docs/web-ui.md` for current behavior;
+do not assume an application failure is a binding regression.
 
 ## 10. Change management
 

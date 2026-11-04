@@ -1,5 +1,8 @@
 # Cargo output, including crates built independently of the workspace.
 target/
+node_modules/
+playwright-report/
+test-results/
 .rustc_info.json
 
 # Native builds outside Cargo's OUT_DIR.
