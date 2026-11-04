@@ -41,7 +41,7 @@ examples: `cargo doc -p llama_cpp --no-deps`.
 | `native` | no | CPU tuning for the build machine |
 | `dynamic-link` | no | Build shared libraries instead of static libraries |
 | `q1` | no | Compatibility no-op; Q1_0 is supported unconditionally |
-| `turboquant` | no | Experimental PQ3 CPU reference and guarded `pq3_reference::Pq3Block`; no live PQ3 cache selection |
+| `turboquant` | no | Experimental PQ3 reference and restricted CPU/Vulkan cache inference; state I/O/position shifts unavailable |
 | `prebuilt` | no | Falls back to source while the required patches are active |
 
 Use `default-features = false` to select only the backends/APIs you need.
@@ -87,6 +87,11 @@ See the [cache baseline](../../docs/kv-cache-baseline.md) for limitations and
 model/GPU validation coverage.
 
 The experimental [PQ3 reference contract](../../docs/pq3-reference-contract.md)
-freezes its native block/ABI and explains the remaining graph/Vulkan work.
+freezes its native block/graph ABI, supported CPU/Vulkan inference and restrictions.
 `cargo test -p llama_cpp --no-default-features --features turboquant --test test_pq3_reference`
 exercises the codec without a model or GPU.
+
+
+The [measured PQ3 candidate](../../docs/pq3-inference-evaluation.md) remains
+opt-in: it fails the fixed retrieval/KL gates and repeats a near-full 4K
+throughput regression versus Q4. AMD/Intel are unvalidated; QJL is deferred.

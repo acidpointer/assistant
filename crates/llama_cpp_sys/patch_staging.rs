@@ -8,8 +8,11 @@ use std::{fs, path::Path};
 pub enum CodecPatches {
     /// Existing mandatory safety patches only.
     Disabled,
-    /// Add the PQ3 CPU reference; does not enable inference support.
-    Pq3Reference,
+    /// Add PQ3 row and CPU graph support; GPU selection remains unsupported.
+    #[cfg(test)]
+    Pq3Cpu,
+    /// Complete codec sources; actual Vulkan execution requires a compiled backend.
+    Pq3Graph,
 }
 
 const REQUIRED: &[&str] = &[
@@ -28,11 +31,17 @@ pub fn stage(source: &Path, destination: &Path, codec: CodecPatches) -> Result<(
         fs::remove_dir_all(destination).map_err(|e| format!("clear staged patches: {e}"))?;
     }
     fs::create_dir_all(destination).map_err(|e| format!("create staged patches: {e}"))?;
-    let experimental = match codec {
-        CodecPatches::Disabled => None,
-        CodecPatches::Pq3Reference => Some("0008-pq3-cpu-format.patch"),
+    let experimental: &[&str] = match codec {
+        CodecPatches::Disabled => &[],
+        #[cfg(test)]
+        CodecPatches::Pq3Cpu => &["0008-pq3-cpu-format.patch", "0009-pq3-kv-graph-state.patch"],
+        CodecPatches::Pq3Graph => &[
+            "0008-pq3-cpu-format.patch",
+            "0009-pq3-kv-graph-state.patch",
+            "0010-pq3-vulkan-cache-attention.patch",
+        ],
     };
-    for name in REQUIRED.iter().copied().chain(experimental) {
+    for name in REQUIRED.iter().chain(experimental).copied() {
         let input = source.join(name);
         if !input.is_file() {
             return Err(format!(

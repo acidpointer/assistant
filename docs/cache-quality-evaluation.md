@@ -1,10 +1,9 @@
 # Deterministic cache quality evaluation
 
 Status: experimental evaluation harness, 2026-11-04. This supplements the
-[cache preparation baseline](kv-cache-baseline.md) before new codecs are usable.
-It exercises existing FP16/full, FP16/compact, Q8/compact and Q4/compact profiles.
-Enabling `turboquant` currently tests build compatibility only; it does not
-select PQ3 inference.
+[cache preparation baseline](kv-cache-baseline.md) for experimental codecs.
+The default matrix covers FP16/full, FP16/compact, Q8/compact and Q4/compact.
+`--include-pq3` adds full/compact PQ3 inference and enables `turboquant`.
 
 ## Fixed inputs and scoring
 
@@ -53,15 +52,15 @@ python3 scripts/cache-quality-results.py check /tmp/cache-quality.json \
 ```
 
 Omit `--full` for smoke or `--require-vulkan` for CPU-compatible evaluation.
-`--turboquant` compiles the experimental CPU reference alongside the existing
-cache profiles. The runner hashes the model, sets explicit required-fixture
+`--turboquant` compiles experimental support alongside existing cache profiles;
+`--include-pq3` also evaluates both PQ3 candidates. The runner hashes the model, sets explicit required-fixture
 flags, runs task and numerical jobs separately, and saves raw logs plus scored
 JSON, including model/source/active-patch identities and executable/log hashes.
 Missing models and missing requested Vulkan execution fail required jobs;
-default workspace tests skip these optional model evaluations cleanly. The
-Vulkan requirement checks observed weight-device allocations; it does not
-replace the separate operator-placement audit or prove every operation runs on
-the GPU. Diagnostics retain `gpu_placement: not_observed` when no trace exists.
+default workspace tests skip these optional model evaluations cleanly. For existing formats the Vulkan requirement checks weight-device allocations.
+PQ3 additionally requires actual-device native operation preflight and positive
+completed Vulkan write/attention counters with a reported path. Neither replaces
+the separate scheduler audit or proves every graph node runs on GPU.
 
 The Rust entry points are
 [`tests/cache_quality.rs`](../crates/assistant/tests/cache_quality.rs) and
@@ -120,5 +119,39 @@ Each numerical run has 17 checkpoints across four texts. The repeated FP16/full
 run's maximum KL was 0. Q4's worst KL exceeds the declared 0.05
 experimental candidate gate; its passing tasks do not override that failure.
 Q4 also loses two exact-answer retrieval cases relative to FP16/full in this
-fixture. The artifact records the failed verdict without changing thresholds. No PQ3
-candidate exists yet, and these debug runs are not performance measurements.
+fixture. The artifact records the failed verdict without changing thresholds. This table is the preserved pre-PQ3 reference; debug quality runs are not
+performance measurements.
+
+
+## PQ3 candidate job
+
+```sh
+python3 scripts/cache-quality-results.py run --model /path/to/model.gguf \
+  --output /tmp/pq3-quality.json --full --require-vulkan --include-pq3
+python3 scripts/cache-quality-results.py check /tmp/pq3-quality.json \
+  --candidate pq3_0 --swa Compact
+```
+
+The full candidate artifact requires 102 scored tasks and 119 numerical
+checkpoints (six configurations plus repeated FP16/full). Missing candidate
+records cannot masquerade as a complete evaluation. Candidate task failures
+remain data; gate checks are a separate command and may correctly exit nonzero.
+The authored fixtures, exact-answer scoring and acceptance limits are unchanged.
+
+
+The [PQ3 candidate artifact](benchmarks/pq3-quality-2026-11-04.json) retains
+all 102 task cases and 119 numerical records, with source inputs unchanged for
+the capture. FP16/Q8/Q4 reference scores reproduce the earlier artifact exactly.
+
+| Profile | Tasks passed | Mean target NLL delta | Maximum checkpoint KL |
+| --- | ---: | ---: | ---: |
+| PQ3/Full | 11/17 | +0.007044 | 0.125069 |
+| PQ3/Compact | 11/17 | +0.007044 | 0.125069 |
+
+Both candidates fail the unchanged gate. `retrieve-river-gate-3500-middle` is
+lost despite passing FP16 and Q4. Retrieval accuracy drops from 7/12 to 6/12
+(8.33 percentage points), and maximum KL exceeds 0.05. Mean NLL passes its
+0.05 limit. Repeated FP16/full has zero KL variation in this run. Completed
+Vulkan indexed writes and attention plus the cooperative-matrix-2 path are
+observed for the PQ3 configurations. This result supports keeping the codec
+experimental, not changing production defaults or loosening thresholds.

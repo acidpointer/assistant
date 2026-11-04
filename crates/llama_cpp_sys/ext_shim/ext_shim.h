@@ -14,6 +14,23 @@ extern "C" {
 // CPU reference only. Exactly 128 floats / 50 encoded bytes. Inputs to encode
 // and dot must be finite with block norm <= 65504. No graph rotation is applied.
 // Output is unchanged on error; shared status/TLS errors contain failures.
+// Versioned owned snapshot. execution: 0=other codec, 1=CPU reference,
+// 2=required Vulkan. Counts cover successfully synchronized GPU submissions;
+// reading this record adds neither synchronization nor device readback.
+struct llama_pq3_graph_info_v1 {
+    uint32_t abi_version;
+    uint32_t row_version;
+    uint32_t graph_version;
+    uint32_t transform_version;
+    uint32_t execution;
+    uint32_t path_mask;
+    uint32_t block_values;
+    uint32_t block_bytes;
+    uint64_t indexed_writes;
+    uint64_t attention_operations;
+};
+int32_t llama_pq3_graph_inspect_guarded(const struct llama_context * ctx, struct llama_pq3_graph_info_v1 * out);
+
 int32_t llama_pq3_encode_block_guarded(const float * input, size_t count, uint8_t * output, size_t bytes);
 int32_t llama_pq3_decode_block_guarded(const uint8_t * input, size_t bytes, float * output, size_t count);
 int32_t llama_pq3_dot_q8_guarded(const uint8_t * input, size_t bytes, const float * query, size_t count, float * output);
@@ -33,6 +50,9 @@ int32_t llama_memory_breakdown_collect_v2(
         struct llama_memory_breakdown_entry * out,
         size_t capacity,
         size_t * required);
+
+// Change attention policy without exceptions crossing FFI; unsupported codec changes fail before mutation.
+int32_t llama_context_set_causal_guarded(struct llama_context * ctx, bool causal);
 
 // Complete pending work with the shared exception/TLS error contract.
 int32_t llama_context_synchronize_guarded(struct llama_context * ctx);

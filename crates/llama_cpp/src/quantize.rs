@@ -431,6 +431,9 @@ pub enum GgmlType {
     Q2_0 = 42,
     /// Native eight-bit E4M3 floating-point storage; not an initial KV policy.
     F8E4M3 = 43,
+    /// Experimental cache/reference storage; forbidden for model weights.
+    #[cfg(feature = "turboquant")]
+    PQ3_0 = 44,
 }
 
 impl From<GgmlType> for llama_cpp_sys::ggml_type {
@@ -479,6 +482,8 @@ impl TryFrom<llama_cpp_sys::ggml_type> for GgmlType {
             41 => Ok(Self::Q1_0),
             42 => Ok(Self::Q2_0),
             43 => Ok(Self::F8E4M3),
+            #[cfg(feature = "turboquant")]
+            44 => Ok(Self::PQ3_0),
             _ => Err(v),
         }
     }
@@ -862,6 +867,23 @@ impl QuantizeParams {
         self
     }
 
+    /// Cache-only storage must never reach file quantization or preview setup.
+    pub(crate) fn cache_only_type_requested(&self) -> bool {
+        #[cfg(feature = "turboquant")]
+        {
+            self.output_tensor_type == Some(GgmlType::PQ3_0)
+                || self.token_embedding_type == Some(GgmlType::PQ3_0)
+                || self
+                    .tt_overrides
+                    .iter()
+                    .any(|item| item.ty == GgmlType::PQ3_0)
+        }
+        #[cfg(not(feature = "turboquant"))]
+        {
+            false
+        }
+    }
+
     /// Build the raw C struct, together with the temporary backing storage
     /// that must outlive the struct.  Returns `(raw_params, _guards)`.
     ///
@@ -1129,6 +1151,9 @@ impl<'model> QuantPreview<'model> {
         model: &'model crate::model::LlamaModel,
         params: &'model QuantizeParams,
     ) -> Result<Self, QuantPreviewError> {
+        if params.cache_only_type_requested() {
+            return Err(QuantPreviewError::CacheOnlyType);
+        }
         let guard = Box::new(params.to_raw());
         // The guarded wrapper: `llama_quant_init` throws for a model it cannot
         // quantize, and that unwinding into Rust aborts the process.
@@ -1219,6 +1244,9 @@ impl<'model> QuantPreview<'model> {
 /// Failure building or using a [`QuantPreview`].
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum QuantPreviewError {
+    /// A cache-only storage type was selected for model weights.
+    #[error("cache-only storage cannot be used for model weights")]
+    CacheOnlyType,
     /// llama.cpp could not build a quantization state for this model.
     #[error("could not initialize quantization state")]
     Init,

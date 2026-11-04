@@ -41,6 +41,7 @@ class QualityGates(unittest.TestCase):
             duplicate[key].append(duplicate[key][0])
             self.assertFalse(QUALITY.validate_records(duplicate, FIXTURE, False, "a" * 64), key)
         self.assertFalse(QUALITY.validate_records(records, FIXTURE, True, "a" * 64))
+        self.assertFalse(QUALITY.validate_records(records, FIXTURE, False, "a" * 64, include_pq3=True))
         self.assertFalse(QUALITY.validate_records(records, FIXTURE, False, "b" * 64))
 
     def test_losing_a_baseline_task_or_exceeding_loss_gate_fails_candidate(self):

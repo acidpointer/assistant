@@ -45,8 +45,8 @@ def parse(path):
         for prefix, key in prefixes.items():
             if line.startswith(prefix):
                 record = json.loads(line[len(prefix):])
-                if key == "text":
-                    record["profile"] = {"q8_0": "q8", "q4_0": "q4"}.get(record["profile"], record["profile"])
+                if key in ("text", "tasks", "configurations"):
+                    record["profile"] = {"q8_0": "q8", "q4_0": "q4", "pq3": "pq3_0"}.get(record["profile"], record["profile"])
                 records[key].append(record)
                 break
     return records
@@ -59,7 +59,7 @@ def summarize(records):
         group = groups.setdefault(key, {"tasks": [], "text": []})
         group["tasks"].append(record)
     for record in records["text"]:
-        profile = {"q8_0": "q8", "q4_0": "q4"}.get(record["profile"], record["profile"])
+        profile = {"q8_0": "q8", "q4_0": "q4", "pq3": "pq3_0"}.get(record["profile"], record["profile"])
         key = (profile, record["swa"])
         groups.setdefault(key, {"tasks": [], "text": []})["text"].append(record)
     summary = []
@@ -115,7 +115,7 @@ def source_identity(turboquant):
         if (name.startswith("crates/") or name.startswith("scripts/") or name in ("Cargo.toml", "Cargo.lock")) and path.is_file() and path.suffix in (".rs", ".h", ".hpp", ".c", ".cpp", ".patch", ".toml", ".lock", ".json", ".py", ".cmake"):
             inputs[name] = digest(path)
     patches = ROOT / "crates/llama_cpp_sys/patches"
-    active = sorted(p for p in patches.glob("*.patch") if p.name[:4] in ("0003", "0004", "0005", "0006", "0007") or turboquant and p.name.startswith("0008"))
+    active = sorted(p for p in patches.glob("*.patch") if p.name[:4] in ("0003", "0004", "0005", "0006", "0007") or turboquant and p.name[:4] in ("0008", "0009", "0010"))
     return {"workspace_revision": git("rev-parse", "HEAD"),
             "native_revision": git("-C", "crates/llama_cpp_sys/llama.cpp", "rev-parse", "HEAD"),
             "rustc": subprocess.check_output(["rustc", "--version"], text=True).strip(),
@@ -124,9 +124,11 @@ def source_identity(turboquant):
             "source_set_sha256": hashlib.sha256(json.dumps(inputs, sort_keys=True).encode()).hexdigest()}
 
 
-def validate_records(records, fixture, full, checksum):
+def validate_records(records, fixture, full, checksum, include_pq3=False):
     """Reject partial/duplicate baseline jobs before applying acceptance gates."""
     expected_groups = {("f16", "Full"), ("f16", "Compact"), ("q8", "Compact"), ("q4", "Compact")}
+    if include_pq3:
+        expected_groups |= {("pq3_0", "Full"), ("pq3_0", "Compact")}
     retrieval = fixture["retrieval"]
     expected_cases = {r["id"] for r in fixture["tasks"] if full or r["smoke"]}
     for size in retrieval["target_user_tokens" if full else "smoke_target_user_tokens"]:
@@ -165,6 +167,7 @@ def main():
     run.add_argument("--full", action="store_true")
     run.add_argument("--require-vulkan", action="store_true")
     run.add_argument("--turboquant", action="store_true", help="compile opt-in reference feature; selected caches remain FP16/Q8/Q4")
+    run.add_argument("--include-pq3", action="store_true", help="evaluate full/compact PQ3 candidates; enables turboquant")
     check = commands.add_parser("check")
     check.add_argument("artifact", type=Path)
     check.add_argument("--candidate", required=True)
@@ -178,16 +181,19 @@ def main():
     if args.command == "check":
         artifact = json.loads(args.artifact.read_text())
         if (artifact["status"] != "complete" or artifact["fixture_manifest"] != manifest
-                or not validate_records(artifact["records"], fixture, artifact["full"], artifact["model_sha256"])):
+                or not validate_records(artifact["records"], fixture, artifact["full"], artifact["model_sha256"], artifact.get("include_pq3",False))):
             raise ValueError("candidate gates require a complete artifact with matching fixtures")
         verdict = check_candidate(artifact["records"], args.candidate, args.swa, fixture["acceptance"])
         print(json.dumps(verdict, indent=2))
         raise SystemExit(0 if verdict["passed"] else 1)
+    args.turboquant = args.turboquant or args.include_pq3
     model = args.model.resolve(strict=True)
     checksum = digest(model)
     env = dict(os.environ, ASSISTANT_QUALITY_MODEL=str(model), ASSISTANT_QUALITY_MODEL_SHA256=checksum, ASSISTANT_QUALITY_REQUIRE_MODEL="1")
-    for flag in ("ASSISTANT_QUALITY_FULL", "ASSISTANT_QUALITY_REQUIRE_VULKAN"):
+    for flag in ("ASSISTANT_QUALITY_FULL", "ASSISTANT_QUALITY_REQUIRE_VULKAN", "ASSISTANT_QUALITY_INCLUDE_PQ3"):
         env.pop(flag, None)
+    if args.include_pq3:
+        env["ASSISTANT_QUALITY_INCLUDE_PQ3"] = "1"
     if args.full:
         env["ASSISTANT_QUALITY_FULL"] = "1"
     if args.require_vulkan:
@@ -215,11 +221,11 @@ def main():
         for key in records:
             records[key].extend(parsed[key])
     source_inputs_unchanged = source_identity(args.turboquant)["source_set_sha256"] == identity["source_set_sha256"]
-    complete = status == 0 and source_inputs_unchanged and validate_records(records, fixture, args.full, checksum)
+    complete = status == 0 and source_inputs_unchanged and validate_records(records, fixture, args.full, checksum, args.include_pq3)
     artifact = {"schema": 1, "status": "complete" if complete else "incomplete",
                 "model_sha256": checksum, "fixture_manifest": manifest, "full": args.full,
                 "source_identity": identity, "source_inputs_unchanged": source_inputs_unchanged,
-                "turboquant_reference_feature": args.turboquant,
+                "turboquant_reference_feature": args.turboquant, "include_pq3": args.include_pq3,
                 "acceptance": fixture["acceptance"], "records": records, "summary": summarize(records),
                 "test_binaries": [{"file": name, "sha256": digest(ROOT / name)}
                     for name in sorted({match.group(1) for log in logs

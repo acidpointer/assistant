@@ -1,10 +1,12 @@
-# PQ3 CPU reference contract
+# PQ3 row and inference contract
 
-Status: experimental CPU format delivered, 2026-11-04. This is the contract for
-[`0008-pq3-cpu-format.patch`](../crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch)
-and [`Pq3Block`](../crates/llama_cpp/src/pq3_reference.rs), not a claim of
-compressed-cache inference. See the [implementation plan](turboquant-implementation-plan.md)
-for the remaining graph, state and Vulkan work.
+Status: experimental row, CPU graph and Vulkan graph implemented, 2026-11-04.
+Patch [0008](../crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch) freezes
+the row codec; [0009](../crates/llama_cpp_sys/patches/0009-pq3-kv-graph-state.patch)
+and [0010](../crates/llama_cpp_sys/patches/0010-pq3-vulkan-cache-attention.patch)
+add restricted live-cache inference. The [transform ADR](decisions/0002-pq3-graph-transform.md)
+fixes graph identity separately from the row ABI. Quality/performance acceptance
+is a separate measured decision; defaults remain FP16/full SWA.
 
 ## Source and attribution
 
@@ -37,8 +39,9 @@ performance.
 
 Existing native type IDs are preserved, including F8_E4M3 = 43. PQ3_0 is
 appended at 44, and type count becomes 45 only with the experimental patch.
-The safe general `GgmlType` gains the missing F8 mapping, but deliberately has
-no PQ3 cache/weight variant in this phase.
+The safe general `GgmlType` preserves F8 and exposes PQ3 only with `turboquant`.
+PQ3 is cache-only: safe quantization entry points and native model/weight paths
+reject its use as a weight type.
 
 | Property | Contract |
 | --- | --- |
@@ -100,7 +103,7 @@ dots, reference attention and invalid inputs. Scalar reference code is not an
 optimized inference benchmark. GPU reductions may need declared tolerances
 rather than byte equality when their reduction order differs.
 
-## Deliberate differences and remaining transform decision
+## Deliberate differences and graph transform
 
 The donor has an optional `GGML_TQ_NORM_CORRECTION` environment policy that
 changes the stored scale to an MSE optimum, with mutable static initialization.
@@ -115,20 +118,17 @@ There is a material donor discrepancy: its standalone transform helpers use
 row helpers obtain signs but do not apply them. Copying those helpers would
 not establish which transform actual inference uses.
 
-Therefore the row contract freezes *no implicit transform*. The future graph
-patch must explicitly choose and test the Q/K transform, V transform and output
-inverse before implementing kernels or state compatibility. A seeded transform
-needs identical signs on CPU/GPU and the correct inverse order; plain Hadamard
-needs its own quality evidence. The current K rotation uses 128 dimensions,
-while V commonly uses 64; this 128-value format cannot inherit V's existing
-64-dimensional rotation without a deliberate graph change. Context-local
-rotation opt-outs must not silently disable a required transform.
+The row contract therefore applies no implicit transform. Graph identity 1
+explicitly uses `T = H128 D` for Q/K/V and `T^-1 = D H128` for output. The
+[ADR](decisions/0002-pq3-graph-transform.md) freezes sign words, ordering and
+orientation. Separate sign multiplication preserves the fast-Hadamard hint only
+on plain H. Both K and V use 128 coordinates. Rotation opt-outs are rejected.
 
 ## Build, support and state boundaries
 
 `turboquant` is off by default, independent of `vulkan`, and forwarded through
-assistant → llama_cpp → llama_cpp_sys. It adds only patch 0008 to the mandatory
-0003–0007 series. Selection and contents participate in the source-copy cache
+assistant → llama_cpp → llama_cpp_sys. It adds ordered patches 0008–0010 to the mandatory
+0003–0007 series, including in CPU-only builds. Selection and contents participate in the source-copy cache
 key; absent required files fail the build. Generated FFI uses selected headers.
 The package includes native test sources so patched CMake/test inputs exist
 outside a checkout too.
@@ -144,11 +144,42 @@ The native `test-pq3-reference` target is available in a disposable patched
 source copy configured with `LLAMA_BUILD_TESTS=ON`. Patch verifier tests compare
 the real ordered series against CLI `patch`, including the new test file.
 
-PQ3 K/V selection is rejected at native context creation before allocation.
-PQ3 model tensors and weight-quantization selections are rejected too. Existing
-FP16/Q8/Q4 inference remains available with the feature enabled. There is no
-PQ3 CLI option, Vulkan kernel, persistent cache state or supported inference
-pair yet. No new-format state can be produced by a live context in this phase.
-Graph/state patch 0009 and Vulkan patch 0010 are the next deliverables; only
-then should the safe cache API/runtime expose PQ3/PQ3. QJL-corrected TBQ3
-remains separate later work.
+`KvCacheType::PQ3_0` requires matched K/V, exact 128-dimensional attention
+heads, causal single-sequence Llama or LFM3, required rotation and flash
+attention. Recurrent zero-KV layers are excluded from geometry checks. CPU
+execution requires explicit CPU placement. Vulkan execution checks the actual
+attention-layer devices and required operations before allocating cache buffers;
+other backends and unsupported combinations fail. GPU F16 indexed writes are
+supported; a contiguous F16 encode uses F16→F32→PQ3 rather than an advertised
+direct F16 copy. Production attention decodes compressed blocks directly.
+
+Full/sequence/extended/device/file state I/O and positional rebasing are
+unsupported. They fail before parsing, writing, allocation from caller-supplied
+capacity, or hybrid-state mutation. Append, compact-window cell reuse without
+rebasing, and full reset/replay are supported. Speculative decoding, training,
+shared-cache ownership and dynamic noncausal attention are rejected.
+
+The checked `Pq3Block` API rejects nonfinite/oversized inputs. Live GGML kernels
+retain valid-finite-activation and representable-norm preconditions; they do not
+provide a new per-write host error/readback mechanism. NaN/infinite activations
+can propagate invalid norms and attention results. They are not a supported
+input or silently repaired cache data. Norm underflow deliberately yields the
+canonical zero. This is an experimental numerical limitation, not a guarantee
+of recoverable model arithmetic errors.
+
+`ContextCacheInfo::pq3` owns row/graph/transform identities, native block size,
+execution mode and completed Vulkan indexed-write/attention counts and path
+mask. Counts advance after successful normal synchronization, with no extra
+production readback. They prove those operations occurred, not that every graph
+node stayed on GPU; separate scheduler audits provide that evidence.
+
+ABI v1 keeps context-parameter layout and the 50-byte row unchanged. Patch 0009
+changes the internal C++ memory interface: rebuild the complete composed native
+source; never mix old native objects. New guarded project C ABI records are
+versioned. `LlamaContext::set_causal_attn` now returns `Result<(), ShimError>`;
+callers must handle it. `try_model_quantize` adds typed validation errors;
+legacy `model_quantize` retains its numeric signature and returns error 1 for
+invalid strings/cache-only selections instead of panicking. Legacy unsafe state
+restore now passes the slice length to the bounded native API. New feature-gated
+cache-info fields/error variants may require downstream struct/match updates.
+QJL-corrected TBQ3 and persistent PQ3 state remain separate future work.

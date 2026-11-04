@@ -35,22 +35,40 @@ fn feature_selection_invalidates_cache_and_removes_stale_codec_sources() {
     stage(&source, &staged, CodecPatches::Disabled).expect("base patches");
     let baseline = fingerprint(&staged).expect("base fingerprint");
     assert!(!staged.join("0008-pq3-cpu-format.patch").exists());
-    stage(&source, &staged, CodecPatches::Pq3Reference).expect("codec patches");
+    assert!(!staged.join("0009-pq3-kv-graph-state.patch").exists());
+    stage(&source, &staged, CodecPatches::Pq3Cpu).expect("codec patches");
+    assert!(staged.join("0009-pq3-kv-graph-state.patch").is_file());
+    assert!(!staged
+        .join("0010-pq3-vulkan-cache-attention.patch")
+        .exists());
     assert_ne!(baseline, fingerprint(&staged).expect("codec fingerprint"));
+    let cpu = fingerprint(&staged).expect("CPU fingerprint");
+    stage(&source, &staged, CodecPatches::Pq3Graph).expect("full codec sources");
+    assert!(staged
+        .join("0010-pq3-vulkan-cache-attention.patch")
+        .is_file());
+    assert_ne!(
+        cpu,
+        fingerprint(&staged).expect("Vulkan source fingerprint")
+    );
     stage(&source, &staged, CodecPatches::Disabled).expect("feature disabled again");
+    assert!(!staged
+        .join("0010-pq3-vulkan-cache-attention.patch")
+        .exists());
     assert_eq!(
         baseline,
         fingerprint(&staged).expect("base fingerprint restored")
     );
     assert!(!staged.join("0008-pq3-cpu-format.patch").exists());
+    assert!(!staged.join("0009-pq3-kv-graph-state.patch").exists());
 }
 #[test]
 fn missing_required_patch_and_read_errors_fail_closed() {
     let temp = Scratch::new();
     let source = temp.0.join("missing");
     fs::create_dir(&source).expect("source directory");
-    let error = stage(&source, &temp.0.join("active"), CodecPatches::Pq3Reference)
-        .expect_err("missing patch");
+    let error =
+        stage(&source, &temp.0.join("active"), CodecPatches::Pq3Cpu).expect_err("missing patch");
     assert!(error.contains("required native patch is absent"));
     assert!(fingerprint(&temp.0.join("absent")).is_err());
 }

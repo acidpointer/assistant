@@ -1030,6 +1030,9 @@ fn compile_shims(manifest_dir: &Path, llama_dst: &Path, target: &str) {
             .define("LLAMA_RS_TURBOQUANT", "1")
             .include(llama_dst.join("ggml/src"));
     }
+    if cfg!(feature = "vulkan") && cfg!(feature = "turboquant") {
+        build.define("LLAMA_RS_VULKAN", "1");
+    }
     if any {
         build.compile("llama_shims");
     }
@@ -1959,7 +1962,7 @@ fn main() {
     let sentinel = out_dir.join(".llama-src-version");
     let staged_dir = out_dir.join("patches-active");
     let codec = if cfg!(feature = "turboquant") {
-        patch_staging::CodecPatches::Pq3Reference
+        patch_staging::CodecPatches::Pq3Graph
     } else {
         patch_staging::CodecPatches::Disabled
     };

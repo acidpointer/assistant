@@ -590,9 +590,10 @@ fn causal_attn_reads_back_what_was_set() {
 
     let mut ctx = context(&model);
     assert!(ctx.causal_attn(), "a decoder context defaults to causal");
-    ctx.set_causal_attn(false);
+    ctx.set_causal_attn(false)
+        .expect("supported non-causal policy");
     assert!(!ctx.causal_attn());
-    ctx.set_causal_attn(true);
+    ctx.set_causal_attn(true).expect("supported causal policy");
     assert!(ctx.causal_attn());
 }
 

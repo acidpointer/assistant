@@ -654,19 +654,74 @@ pub fn model_meta_key_str(key: u32) -> String {
         .to_owned()
 }
 
+/// Typed failures from model-file quantization.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ModelQuantizeError {
+    /// A model path contains an interior NUL.
+    #[error("invalid {field} path")]
+    InvalidPath {
+        /// Input or output path field.
+        field: &'static str,
+        /// Original NUL conversion diagnostic.
+        #[source]
+        source: std::ffi::NulError,
+    },
+    /// Experimental cache storage is not a model-weight format.
+    #[error("cache-only storage cannot be used for model weights")]
+    CacheOnlyType,
+    /// Native quantization failed after its checked boundary.
+    #[error("native model quantization failed with code {code}")]
+    Native {
+        /// Native nonzero status.
+        code: u32,
+    },
+}
+
+/// Quantize a model with typed validation before native file I/O.
+/// # Errors
+/// Rejects invalid paths, cache-only storage and native quantization failures.
+pub fn try_model_quantize(
+    fname_inp: &str,
+    fname_out: &str,
+    params: &quantize::QuantizeParams,
+) -> std::result::Result<(), ModelQuantizeError> {
+    if params.cache_only_type_requested() {
+        return Err(ModelQuantizeError::CacheOnlyType);
+    }
+    let input =
+        std::ffi::CString::new(fname_inp).map_err(|source| ModelQuantizeError::InvalidPath {
+            field: "input",
+            source,
+        })?;
+    let output =
+        std::ffi::CString::new(fname_out).map_err(|source| ModelQuantizeError::InvalidPath {
+            field: "output",
+            source,
+        })?;
+    let guard = params.to_raw();
+    // SAFETY: owned paths and the parameter guard retain all native borrows
+    // through the synchronous call; native quantization contains exceptions.
+    let code = unsafe {
+        llama_cpp_sys::llama_model_quantize(input.as_ptr(), output.as_ptr(), &raw const guard.raw)
+    };
+    if code == 0 {
+        Ok(())
+    } else {
+        Err(ModelQuantizeError::Native { code })
+    }
+}
+
 /// Quantize a model file using typed [`crate::quantize::QuantizeParams`].
 ///
 /// Returns `Ok(())` on success, or `Err(code)` with the non-zero error code
 /// returned by `llama_model_quantize`.
 ///
-/// # Panics
-///
-/// Panics if either path contains an interior null byte.
-///
 /// # Errors
 ///
 /// Returns `Err(code)` with the non-zero status code from `llama_model_quantize`
-/// when quantization fails.
+/// when quantization fails. Invalid paths and cache-only selections return 1.
+/// Prefer [`try_model_quantize`] for typed diagnostics.
 ///
 /// # Example
 ///
@@ -684,17 +739,10 @@ pub fn model_quantize(
     fname_out: &str,
     params: &quantize::QuantizeParams,
 ) -> std::result::Result<(), u32> {
-    let c_inp = std::ffi::CString::new(fname_inp).expect("input path contains null bytes");
-    let c_out = std::ffi::CString::new(fname_out).expect("output path contains null bytes");
-    let guard = params.to_raw();
-    let rc = unsafe {
-        llama_cpp_sys::llama_model_quantize(c_inp.as_ptr(), c_out.as_ptr(), &raw const guard.raw)
-    };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(rc)
-    }
+    try_model_quantize(fname_inp, fname_out, params).map_err(|error| match error {
+        ModelQuantizeError::Native { code } => code,
+        _ => 1,
+    })
 }
 
 /// Set the native llama.cpp log callback without the managed wrapper.

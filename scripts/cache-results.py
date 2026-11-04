@@ -43,6 +43,9 @@ def benchmark(text):
             "model_bytes": sum(m["model_bytes"] for m in memory),
             "peak_device_bytes": record["device_peak"],
             "model_sha256": record["identity"]["model_sha256"],
+            "corpus_sha256": record.get("corpus_sha256"),
+            "prompt_text_sha256": record.get("prompt_text_sha256"),
+            "codec": record["allocated"]["effective"].get("codec"),
         })
     return rows
 

@@ -104,6 +104,13 @@ impl CacheDiagnostics {
                         GgmlType::Q8_0 if dimension % 32 == 0 => {
                             Some(u64::from(dimension / 32) * 34)
                         }
+                        #[cfg(feature = "turboquant")]
+                        GgmlType::PQ3_0 => effective.pq3.as_ref().and_then(|info| {
+                            (dimension % info.block_values == 0).then(|| {
+                                u64::from(dimension / info.block_values)
+                                    * u64::from(info.block_bytes)
+                            })
+                        }),
                         GgmlType::Q4_0 if dimension % 32 == 0 => {
                             Some(u64::from(dimension / 32) * 18)
                         }
@@ -168,14 +175,33 @@ impl CacheDiagnostics {
     #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         let e = &self.effective;
-        serde_json::json!({
+        #[allow(unused_mut)] // Only the opt-in codec appends its versioned diagnostics.
+        let mut value = serde_json::json!({
             "requested": {"key":self.requested.key.name(),"value":self.requested.value.name(),"swa":format!("{:?}",self.requested.swa),"flash_attention":format!("{:?}",self.requested.flash_attention),"rotation":format!("{:?}",self.requested.rotation),"context_size":self.context_request.context_size,"batch_size":self.context_request.batch_size,"microbatch_size":self.context_request.microbatch_size,"gpu_layers":self.context_request.gpu_layers,"execution":format!("{:?}",self.context_request.execution)},
             "weight_devices":self.weight_devices,
             "effective": {"context_size":e.context_size,"batch_size":e.batch_size,"microbatch_size":e.microbatch_size,"sequences":e.sequences,"flash_attention":e.flash_attention,"offload_kqv":e.offload_kqv,"op_offload":e.op_offload,"inspection_available":e.inspection_available,"arenas":e.arenas.iter().map(|a|serde_json::json!({"kind":format!("{:?}",a.kind),"cells":a.cells,"layers":a.layers,"streams":a.streams,"key_type":format!("{:?}",a.key_type),"value_type":format!("{:?}",a.value_type),"key_rotation":a.key_rotation,"value_rotation":a.value_rotation})).collect::<Vec<_>>()},
             "memory":self.memory.iter().map(|m|serde_json::json!({"buffer":m.buft_name,"model_bytes":m.model,"context_bytes":m.context,"compute_bytes":m.compute})).collect::<Vec<_>>(),
             "kv_payload_estimate_bytes":self.kv_payload_estimate_bytes,
             "gpu_placement":"not_observed", "peak_vram_bytes":null
-        })
+        });
+        #[cfg(feature = "turboquant")]
+        if let Some(codec) = &e.pq3 {
+            value["effective"]["codec"] = serde_json::json!({
+                "name":"pq3_0", "row_version":codec.row_version,
+                "graph_version":codec.graph_version, "transform_version":codec.transform_version,
+                "block_values":codec.block_values, "block_bytes":codec.block_bytes,
+                "execution":format!("{:?}",codec.execution),
+                "observed_attention_paths":codec.observed_paths().map(|p|format!("{p:?}")).collect::<Vec<_>>(),
+                "completed_indexed_writes":codec.indexed_writes,
+                "completed_attention_operations":codec.attention_operations,
+                "state_io":"unsupported", "position_shifting":"unsupported"
+            });
+            if codec.indexed_writes > 0 && codec.attention_operations > 0 {
+                value["gpu_placement"] =
+                    serde_json::json!("pq3_cache_writes_and_attention_observed");
+            }
+        }
+        value
     }
 }
 
@@ -199,6 +225,8 @@ mod tests {
             op_offload: false,
             inspection_available: false,
             arenas: Vec::new(),
+            #[cfg(feature = "turboquant")]
+            pq3: None,
         };
         let report = CacheDiagnostics {
             requested: KvCacheConfig::default(),

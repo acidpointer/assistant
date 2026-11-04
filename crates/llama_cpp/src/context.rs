@@ -600,10 +600,14 @@ impl<'model> LlamaContext<'model> {
     ///
     /// If set to `false`, the model will use non-causal attention, which is
     /// needed for embedding models.
-    pub fn set_causal_attn(&mut self, causal_attn: bool) {
-        unsafe {
-            llama_cpp_sys::llama_set_causal_attn(self.context.as_ptr(), causal_attn);
-        }
+    /// # Errors
+    /// Rejects unsupported codec policy changes and contained native failures.
+    pub fn set_causal_attn(&mut self, causal_attn: bool) -> Result<(), crate::ShimError> {
+        // SAFETY: this exclusive owner retains the native context throughout
+        // the synchronous guarded call; no pointer or policy borrow escapes.
+        crate::shim::check_status(unsafe {
+            llama_cpp_sys::llama_context_set_causal_guarded(self.context.as_ptr(), causal_attn)
+        })
     }
 
     /// Whether the context is currently using causal attention.
@@ -911,12 +915,27 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
+    /// Inspect codec capability without reading cache payload or synchronizing.
+    #[cfg(feature = "turboquant")]
+    fn uses_pq3_cache(&self) -> bool {
+        // SAFETY: this owner retains the context/model/backend, and the query
+        // reads immutable codec capability on the context's calling thread.
+        unsafe { llama_cpp_sys::llama_pq3_context_uses_codec(self.context.as_ptr()) }
+    }
+
     /// Get the size of the full context state in bytes.
     ///
     /// This is the size needed for [`state_get_data`](Self::state_get_data) and
     /// [`state_set_data`](Self::state_set_data).
     #[must_use]
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_get_size(&mut self) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe { llama_cpp_sys::llama_state_get_size(self.context.as_ptr()) }
     }
 
@@ -925,7 +944,14 @@ impl<'model> LlamaContext<'model> {
     /// The buffer must be at least [`state_get_size`](Self::state_get_size) bytes.
     ///
     /// Returns the number of bytes written.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_get_data(&mut self, dst: &mut [u8]) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_get_data(self.context.as_ptr(), dst.as_mut_ptr(), dst.len())
         }
@@ -934,7 +960,14 @@ impl<'model> LlamaContext<'model> {
     /// Restore the full context state from a byte buffer.
     ///
     /// Returns the number of bytes read.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_set_data(&mut self, src: &[u8]) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_set_data(self.context.as_ptr(), src.as_ptr(), src.len())
         }
@@ -947,13 +980,20 @@ impl<'model> LlamaContext<'model> {
     /// # Panics
     ///
     /// Panics if the path contains null bytes.
+    /// Returns false for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_save_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
         tokens: &[LlamaToken],
     ) -> bool {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return false;
+        }
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_save_file(
                 self.context.as_ptr(),
@@ -971,12 +1011,17 @@ impl<'model> LlamaContext<'model> {
     /// # Panics
     ///
     /// Panics if the path contains null bytes.
+    /// Returns false for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_load_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
         tokens_out: &mut Vec<LlamaToken>,
         n_token_capacity: usize,
     ) -> bool {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return false;
+        }
         tokens_out.resize(n_token_capacity, LlamaToken(0));
         let mut n_token_count: usize = 0;
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
@@ -998,14 +1043,28 @@ impl<'model> LlamaContext<'model> {
 
     /// Get the size of a single sequence's state in bytes.
     #[must_use]
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_get_size(&mut self, seq_id: i32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe { llama_cpp_sys::llama_state_seq_get_size(self.context.as_ptr(), seq_id) }
     }
 
     /// Copy a single sequence's state into a byte buffer.
     ///
     /// Returns the number of bytes written.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_get_data(&mut self, dst: &mut [u8], seq_id: i32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_seq_get_data(
                 self.context.as_ptr(),
@@ -1019,7 +1078,14 @@ impl<'model> LlamaContext<'model> {
     /// Restore a single sequence's state from a byte buffer.
     ///
     /// Returns the number of bytes read.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_set_data(&mut self, src: &[u8], dest_seq_id: i32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_seq_set_data(
                 self.context.as_ptr(),
@@ -1037,14 +1103,21 @@ impl<'model> LlamaContext<'model> {
     /// # Panics
     ///
     /// Panics if the path contains null bytes.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_save_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
         seq_id: i32,
         tokens: &[LlamaToken],
     ) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
         let c_path = std::ffi::CString::new(path_str).expect("path contains null bytes");
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_seq_save_file(
                 self.context.as_ptr(),
@@ -1063,6 +1136,7 @@ impl<'model> LlamaContext<'model> {
     /// # Panics
     ///
     /// Panics if the path contains null bytes.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_load_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
@@ -1070,6 +1144,10 @@ impl<'model> LlamaContext<'model> {
         tokens_out: &mut Vec<LlamaToken>,
         n_token_capacity: usize,
     ) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
         tokens_out.resize(n_token_capacity, LlamaToken(0));
         let mut n_token_count: usize = 0;
         let path_str = path.as_ref().to_str().expect("path is not valid UTF-8");
@@ -1200,14 +1278,28 @@ impl<'model> LlamaContext<'model> {
 
     /// Get the size of a single sequence's state with flags.
     #[must_use]
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_get_size_ext(&mut self, seq_id: i32, flags: u32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe { llama_cpp_sys::llama_state_seq_get_size_ext(self.context.as_ptr(), seq_id, flags) }
     }
 
     /// Copy a single sequence's state into a byte buffer with flags.
     ///
     /// Returns the number of bytes written.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_get_data_ext(&mut self, dst: &mut [u8], seq_id: i32, flags: u32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_seq_get_data_ext(
                 self.context.as_ptr(),
@@ -1222,7 +1314,14 @@ impl<'model> LlamaContext<'model> {
     /// Restore a single sequence's state from a byte buffer with flags.
     ///
     /// Returns the number of bytes read.
+    /// Returns 0 for unsupported PQ3 persistence before any allocation or I/O.
     pub fn state_seq_set_data_ext(&mut self, src: &[u8], dest_seq_id: i32, flags: u32) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the live context and all owned buffers/paths outlive this
+        // synchronous call; lengths describe the borrowed Rust storage.
         unsafe {
             llama_cpp_sys::llama_state_seq_set_data_ext(
                 self.context.as_ptr(),

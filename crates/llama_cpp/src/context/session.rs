@@ -1,4 +1,7 @@
-//! utilities for working with session files
+//! Session/state I/O over a live borrowed context on its owner thread. Owned
+//! paths and token buffers outlive each synchronous native call. PQ3 persistence
+//! fails before allocation/I/O until a versioned format exists. Legacy raw-copy
+//! callers retain the documented capacity obligations; bounded reads use slices.
 
 use crate::context::LlamaContext;
 use crate::token::LlamaToken;
@@ -8,6 +11,10 @@ use std::path::{Path, PathBuf};
 /// Failed to save a Session file
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum SaveSessionError {
+    /// Experimental PQ3 cache persistence has no versioned state format yet.
+    #[cfg(feature = "turboquant")]
+    #[error("PQ3 persistence is unsupported; reset and replay instead")]
+    Pq3Unsupported,
     /// llama.cpp failed to save the session file
     #[error("Failed to save session file")]
     FailedToSave,
@@ -24,6 +31,10 @@ pub enum SaveSessionError {
 /// Failed to load a Session file
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LoadSessionError {
+    /// Experimental PQ3 cache persistence has no versioned state format yet.
+    #[cfg(feature = "turboquant")]
+    #[error("PQ3 persistence is unsupported; reset and replay instead")]
+    Pq3Unsupported,
     /// llama.cpp failed to load the session file
     #[error("Failed to load session file")]
     FailedToLoad,
@@ -62,6 +73,10 @@ impl LlamaContext<'_> {
         path_session: impl AsRef<Path>,
         tokens: &[LlamaToken],
     ) -> Result<(), SaveSessionError> {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return Err(SaveSessionError::Pq3Unsupported);
+        }
         let path = path_session.as_ref();
         let path = path
             .to_str()
@@ -99,6 +114,10 @@ impl LlamaContext<'_> {
         path_session: impl AsRef<Path>,
         max_tokens: usize,
     ) -> Result<Vec<LlamaToken>, LoadSessionError> {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return Err(LoadSessionError::Pq3Unsupported);
+        }
         let path = path_session.as_ref();
         let path = path
             .to_str()
@@ -138,6 +157,11 @@ impl LlamaContext<'_> {
     /// and `kv_cache`) - will often be smaller after compacting tokens
     #[must_use]
     pub fn get_state_size(&self) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the context remains live throughout the synchronous size query.
         unsafe { llama_cpp_sys::llama_get_state_size(self.context.as_ptr()) }
     }
 
@@ -149,6 +173,12 @@ impl LlamaContext<'_> {
     ///
     /// Destination needs to have allocated enough memory.
     pub unsafe fn copy_state_data(&self, dest: *mut u8) -> usize {
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the caller guarantees destination capacity and exclusive access
+        // for the complete current native state, as required by this unsafe API.
         unsafe { llama_cpp_sys::llama_copy_state_data(self.context.as_ptr(), dest) }
     }
 
@@ -157,8 +187,17 @@ impl LlamaContext<'_> {
     ///
     /// # Safety
     ///
-    /// help wanted: not entirely sure what the safety requirements are here.
+    /// The bytes must be a complete native state from a compatible context.
+    /// Experimental PQ3 persistence returns zero without reading them.
     pub unsafe fn set_state_data(&mut self, src: &[u8]) -> usize {
-        unsafe { llama_cpp_sys::llama_set_state_data(self.context.as_ptr(), src.as_ptr()) }
+        #[cfg(feature = "turboquant")]
+        if self.uses_pq3_cache() {
+            return 0;
+        }
+        // SAFETY: the input slice bounds every native read and the context is
+        // exclusively borrowed. Keep the legacy unsafe signature for compatibility.
+        unsafe {
+            llama_cpp_sys::llama_state_set_data(self.context.as_ptr(), src.as_ptr(), src.len())
+        }
     }
 }

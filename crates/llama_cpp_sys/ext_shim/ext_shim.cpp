@@ -16,6 +16,9 @@
 #ifdef LLAMA_RS_TURBOQUANT
 #include "ggml-quants.h"
 #include "ggml-cpu.h"
+#ifdef LLAMA_RS_VULKAN
+#include "ggml-vulkan.h"
+#endif
 #include <cmath>
 
 namespace {
@@ -42,6 +45,37 @@ block_pq3_0 read_pq3_block(const uint8_t * input, size_t bytes) {
     }
     return block;
 }
+}
+
+int32_t llama_pq3_graph_inspect_guarded(const llama_context * ctx, llama_pq3_graph_info_v1 * out) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!ctx || !out) return LLAMA_SHIM_INVALID_ARG;
+        llama_pq3_graph_info_v1 result{};
+        result.abi_version = 1;
+        result.row_version = ggml_pq3_reference_abi_v1();
+        result.graph_version = llama_pq3_graph_abi_v1();
+        result.block_values = ggml_blck_size(GGML_TYPE_PQ3_0);
+        result.block_bytes = ggml_type_size(GGML_TYPE_PQ3_0);
+        if (llama_pq3_context_uses_codec(ctx)) {
+            result.transform_version = 1;
+            result.execution = ctx->get_cparams().op_offload ? 2 : 1;
+#if defined(LLAMA_RS_VULKAN) && defined(GGML_PQ3_VULKAN_OBSERVATION_ABI)
+            auto * scheduler = ctx->get_sched();
+            for (int i=0;i<ggml_backend_sched_get_n_backends(scheduler);++i) {
+                auto * backend = ggml_backend_sched_get_backend(scheduler,i);
+                if (!ggml_backend_is_vk(backend)) continue;
+                ggml_pq3_vulkan_observation observed{};
+                if (!ggml_backend_vk_pq3_observe_v1(backend,&observed)) throw std::runtime_error("PQ3 Vulkan observation ABI unavailable");
+                if (UINT64_MAX-result.indexed_writes < observed.indexed_writes || UINT64_MAX-result.attention_operations < observed.attention_operations) throw std::overflow_error("PQ3 observation counters overflow");
+                result.indexed_writes += observed.indexed_writes;
+                result.attention_operations += observed.attention_operations;
+                result.path_mask |= observed.path_mask;
+            }
+#endif
+        }
+        *out=result;
+        return LLAMA_SHIM_OK;
+    });
 }
 
 int32_t llama_pq3_encode_block_guarded(const float * input, size_t count, uint8_t * output, size_t bytes) {
@@ -379,4 +413,15 @@ int32_t llama_quant_tensor_allows_quantization_guarded(
     } catch (...) {
         return -1;
     }
+}
+
+int32_t llama_context_set_causal_guarded(llama_context * ctx, bool causal) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!ctx) return LLAMA_SHIM_INVALID_ARG;
+#ifdef LLAMA_RS_TURBOQUANT
+        if (!causal && llama_pq3_context_uses_codec(ctx)) throw std::invalid_argument("PQ3 requires causal attention");
+#endif
+        ctx->set_causal_attn(causal);
+        return LLAMA_SHIM_OK;
+    });
 }

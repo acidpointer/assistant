@@ -7,6 +7,8 @@ use llama_cpp::{
 };
 use llama_cpp_sys as sys;
 
+static BACKEND_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[derive(Debug)]
 struct MetadataModel(*mut sys::llama_model);
 impl Drop for MetadataModel {
@@ -20,7 +22,8 @@ impl Drop for MetadataModel {
 }
 
 #[test]
-fn live_cache_selection_is_rejected_before_allocation() {
+fn mixed_cache_selection_is_rejected_before_allocation() {
+    let _lock = BACKEND_TEST_LOCK.lock().expect("exclusive test backend");
     let _backend = llama_cpp::llama_backend::LlamaBackend::init().expect("CPU fixture backend");
     let descriptor = sys::llama_quant_model_desc {
         architecture: c"llama".as_ptr(),
@@ -183,4 +186,203 @@ fn tiny_inputs_and_concurrent_calls_are_deterministic() {
     }
     let score = expected.dot_q8(&input).expect("CPU score");
     assert!(score.is_finite() && score > 0.0);
+}
+
+#[test]
+fn cache_policy_rejects_mixed_pairs_opt_outs_and_wrong_heads() {
+    use llama_cpp::context::cache::{
+        AttentionRotation, CacheConfigError, CacheLayerKind, KvCacheConfig, KvCacheType,
+        ModelCacheLayer, ModelCacheTopology,
+    };
+    let valid = KvCacheConfig {
+        key: KvCacheType::PQ3_0,
+        value: KvCacheType::PQ3_0,
+        ..Default::default()
+    };
+    assert!(valid.validate().is_ok());
+    assert!(valid
+        .apply(
+            llama_cpp::context::params::LlamaContextParams::default().with_attn_rot_disabled(true)
+        )
+        .is_err());
+    for invalid in [
+        KvCacheConfig {
+            value: KvCacheType::F16,
+            ..valid
+        },
+        KvCacheConfig {
+            key: KvCacheType::Q8_0,
+            ..valid
+        },
+        KvCacheConfig {
+            rotation: AttentionRotation::Disabled,
+            ..valid
+        },
+    ] {
+        assert!(matches!(
+            invalid.validate(),
+            Err(CacheConfigError::Pq3PolicyUnsupported)
+        ));
+    }
+    let recurrent = ModelCacheLayer {
+        layer: 0,
+        kind: CacheLayerKind::Recurrent,
+        kv_heads: 0,
+        key_head_dim: 0,
+        value_head_dim: 0,
+        window: 0,
+        device_name: "CPU".into(),
+    };
+    let attention = ModelCacheLayer {
+        layer: 1,
+        kind: CacheLayerKind::Sliding,
+        kv_heads: 2,
+        key_head_dim: 128,
+        value_head_dim: 128,
+        window: 256,
+        device_name: "CPU".into(),
+    };
+    let mut topology = ModelCacheTopology {
+        layers: vec![recurrent, attention],
+        requires_equal_kv: false,
+    };
+    assert!(valid.validate_for(&topology).is_ok());
+    topology.layers[1].value_head_dim = 256;
+    assert!(valid.validate_for(&topology).is_err());
+    topology.layers.pop();
+    assert!(valid.validate_for(&topology).is_err());
+}
+
+#[test]
+fn cache_only_weight_overrides_fail_before_file_io() {
+    use llama_cpp::quantize::{LlamaFtype, QuantizeParams, TensorTypeOverride};
+    for params in [
+        QuantizeParams::new(LlamaFtype::MostlyQ4KM).with_output_tensor_type(GgmlType::PQ3_0),
+        QuantizeParams::new(LlamaFtype::MostlyQ4KM).with_token_embedding_type(GgmlType::PQ3_0),
+        QuantizeParams::new(LlamaFtype::MostlyQ4KM).with_tensor_type_override(
+            TensorTypeOverride::new(".*", GgmlType::PQ3_0).expect("fixed pattern"),
+        ),
+    ] {
+        assert!(matches!(
+            llama_cpp::try_model_quantize("missing-input.gguf", "unused-output.gguf", &params),
+            Err(llama_cpp::ModelQuantizeError::CacheOnlyType)
+        ));
+    }
+}
+
+#[test]
+fn required_model_uses_pq3_and_rejects_state_and_shifts() {
+    use llama_cpp::{
+        context::{
+            cache::{KvCacheConfig, KvCacheType, Pq3Execution},
+            kv_cache::KvCacheConversionError,
+            params::LlamaContextParams,
+        },
+        llama_batch::LlamaBatch,
+        model::{params::LlamaModelParams, AddBos, LlamaModel},
+    };
+    let Some(path) = std::env::var_os("LLAMA_CPP_PQ3_TEST_MODEL") else {
+        assert!(
+            std::env::var_os("LLAMA_CPP_PQ3_REQUIRE_MODEL").is_none()
+                && std::env::var_os("LLAMA_CPP_PQ3_REQUIRE_VULKAN").is_none(),
+            "required PQ3 fixture missing"
+        );
+        eprintln!("SKIP: set LLAMA_CPP_PQ3_TEST_MODEL for real cache inference");
+        return;
+    };
+    let _lock = BACKEND_TEST_LOCK.lock().expect("exclusive test backend");
+    let backend = llama_cpp::llama_backend::LlamaBackend::init().expect("model fixture backend");
+    let gpu = std::env::var_os("LLAMA_CPP_PQ3_REQUIRE_VULKAN").is_some();
+    assert!(
+        !gpu || cfg!(feature = "vulkan"),
+        "required Vulkan feature missing"
+    );
+    let params = LlamaModelParams::default().with_n_gpu_layers(if gpu { 1000 } else { 0 });
+    let model = LlamaModel::load_from_file(&backend, path, &params).expect("PQ3 fixture model");
+    let policy = KvCacheConfig {
+        key: KvCacheType::PQ3_0,
+        value: KvCacheType::PQ3_0,
+        ..Default::default()
+    };
+    policy
+        .validate_for(&model.cache_topology().expect("fixture topology"))
+        .expect("supported geometry");
+    let params = policy
+        .apply(
+            LlamaContextParams::default()
+                .with_n_ctx(std::num::NonZeroU32::new(1024))
+                .with_n_batch(128)
+                .with_n_ubatch(128)
+                .with_offload_kqv(gpu)
+                .with_op_offload(gpu)
+                .with_n_threads(4)
+                .with_n_threads_batch(4),
+        )
+        .expect("PQ3 parameters");
+    let mut context = model
+        .new_context(&backend, params)
+        .expect("live PQ3 context");
+    let tokens = model
+        .str_to_token("The local assistant writes a short note.", AddBos::Always)
+        .expect("fixture tokens");
+    let mut batch = LlamaBatch::new(tokens.len(), 1).expect("fixture batch");
+    for (position, token) in tokens.iter().enumerate() {
+        batch
+            .add(
+                *token,
+                i32::try_from(position).expect("small position"),
+                &[0],
+                position + 1 == tokens.len(),
+            )
+            .expect("bounded batch entry");
+    }
+    context.decode(&mut batch).expect("PQ3 decode");
+    assert!(context.get_logits().iter().all(|value| value.is_finite()));
+    let report = context.cache_info().expect("owned codec inspection");
+    let codec = report.pq3.expect("PQ3 identity present");
+    assert_eq!(
+        (
+            codec.block_values,
+            codec.block_bytes,
+            codec.transform_version
+        ),
+        (128, 50, 1)
+    );
+    assert!(report
+        .arenas
+        .iter()
+        .all(|arena| arena.key_type == GgmlType::PQ3_0
+            && arena.value_type == GgmlType::PQ3_0
+            && arena.key_rotation == 128
+            && arena.value_rotation == 128));
+    assert_eq!(
+        codec.execution,
+        if gpu {
+            Pq3Execution::VulkanRequired
+        } else {
+            Pq3Execution::CpuReference
+        }
+    );
+    if gpu {
+        assert!(
+            codec.indexed_writes > 0
+                && codec.attention_operations > 0
+                && codec.observed_paths().next().is_some()
+        );
+    }
+    assert_eq!(
+        context.kv_cache_seq_add(0, None, None, 1),
+        Err(KvCacheConversionError::Pq3PositionShiftUnsupported)
+    );
+    assert!(context.set_causal_attn(false).is_err());
+    assert!(context.causal_attn());
+    let mut buffer = [0xa5; 128];
+    assert_eq!(context.state_get_size(), 0);
+    assert_eq!(context.state_get_data(&mut buffer), 0);
+    assert_eq!(context.state_set_data(&buffer), 0);
+    assert_eq!(buffer, [0xa5; 128]);
+    assert!(matches!(
+        context.load_session_file("unused-session", usize::MAX),
+        Err(llama_cpp::context::session::LoadSessionError::Pq3Unsupported)
+    ));
 }

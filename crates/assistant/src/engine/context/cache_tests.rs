@@ -106,18 +106,35 @@ fn required_representative_text_quality() {
     .expect("bounded stride");
     let engine = test_engine();
     let mut references: Vec<Vec<Vec<f32>>> = Vec::new();
-    for (profile, swa, repeat) in [
+    #[allow(unused_mut)]
+    let mut profiles = vec![
         (KvCacheType::F16, SwaCacheMode::Full, 0),
         (KvCacheType::F16, SwaCacheMode::Full, 1),
         (KvCacheType::F16, SwaCacheMode::Compact, 0),
         (KvCacheType::Q8_0, SwaCacheMode::Compact, 0),
         (KvCacheType::Q4_0, SwaCacheMode::Compact, 0),
-    ] {
+    ];
+    if std::env::var_os("ASSISTANT_QUALITY_INCLUDE_PQ3").is_some() {
+        #[cfg(feature = "turboquant")]
+        profiles.extend([
+            (KvCacheType::PQ3_0, SwaCacheMode::Full, 0),
+            (KvCacheType::PQ3_0, SwaCacheMode::Compact, 0),
+        ]);
+        #[cfg(not(feature = "turboquant"))]
+        panic!("PQ3 numerical evaluation requires the turboquant feature");
+    }
+    for (profile, swa, repeat) in profiles {
         let mut config = LLMConfig::new(path.clone());
         config.max_new_tokens = 8;
         config.cache.key = profile;
         config.cache.value = profile;
         config.cache.swa = swa;
+        #[cfg(feature = "turboquant")]
+        if profile == KvCacheType::PQ3_0
+            && std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some()
+        {
+            config.execution = crate::engine::ExecutionMode::RequireVulkan;
+        }
         let model = engine.load_llm(config).expect("text profile model");
         let mut context = model.new_context().expect("text profile context");
         if std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some() {
@@ -178,9 +195,31 @@ fn required_representative_text_quality() {
                     &logits,
                     usize::try_from(tokens[count].0).expect("target token"),
                 );
+                #[allow(unused_mut)]
+                let mut pq3_observation = serde_json::Value::Null;
+                #[cfg(feature = "turboquant")]
+                if profile == KvCacheType::PQ3_0 {
+                    let observed = context
+                        .native
+                        .cache_info()
+                        .expect("PQ3 numerical snapshot")
+                        .pq3
+                        .expect("PQ3 identity");
+                    if std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some() {
+                        assert!(
+                            observed.execution
+                                == llama_cpp::context::cache::Pq3Execution::VulkanRequired
+                                && observed.indexed_writes > 0
+                                && observed.attention_operations > 0
+                                && observed.observed_paths().next().is_some(),
+                            "required numerical PQ3 GPU execution"
+                        );
+                    }
+                    pq3_observation = serde_json::json!({"execution":format!("{:?}",observed.execution),"completed_indexed_writes":observed.indexed_writes,"completed_attention_operations":observed.attention_operations,"observed_paths":observed.observed_paths().map(|p|format!("{p:?}")).collect::<Vec<_>>()});
+                }
                 eprintln!(
                     "CACHE_TEXT_QUALITY {}",
-                    serde_json::json!({"stage":"baseline","profile":profile.name(),"swa":format!("{swa:?}"),"repeat":repeat,"corpus":item["id"],"tokens":count,"token_stream_fnv1a64":format!("{token_hash:016x}"),"metrics":metrics})
+                    serde_json::json!({"stage":if profile.name()=="pq3_0" {"candidate"} else {"baseline"},"profile":profile.name(),"swa":format!("{swa:?}"),"repeat":repeat,"corpus":item["id"],"tokens":count,"token_stream_fnv1a64":format!("{token_hash:016x}"),"metrics":metrics,"pq3_observation":pq3_observation})
                 );
             }
             if profile == KvCacheType::F16 && swa == SwaCacheMode::Full && repeat == 0 {

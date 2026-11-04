@@ -66,6 +66,18 @@ impl LLMConfig {
     /// Returns a description of an invalid field or combination.
     pub fn validate(&self) -> EngineResult<()> {
         self.cache.validate()?;
+        if self.execution == ExecutionMode::RequireVulkan {
+            #[cfg(not(all(feature = "vulkan", feature = "turboquant")))]
+            return Err(EngineError::Configuration(
+                "required Vulkan codec validation needs vulkan and turboquant features",
+            ));
+            #[cfg(all(feature = "vulkan", feature = "turboquant"))]
+            if self.gpu_layers == 0 || self.cache.key != super::KvCacheType::PQ3_0 {
+                return Err(EngineError::Configuration(
+                    "required Vulkan mode currently validates PQ3/PQ3 with GPU attention placement",
+                ));
+            }
+        }
         if self
             .microbatch_size
             .is_some_and(|size| size.get() > self.batch_size)
@@ -110,6 +122,8 @@ pub enum ExecutionMode {
     /// Allow native operator/KQV offloading independently of weight placement.
     #[default]
     Auto,
+    /// Require the experimental PQ3 Vulkan path, including native device preflight.
+    RequireVulkan,
     /// Disable operator and KQV offloading; requires zero GPU weight layers.
     Cpu,
 }

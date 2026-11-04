@@ -225,6 +225,14 @@ async fn evaluate_profile(
             config.cache.key = KvCacheType::Q4_0;
             config.cache.value = KvCacheType::Q4_0;
         }
+        #[cfg(feature = "turboquant")]
+        "pq3" => {
+            config.cache.key = KvCacheType::PQ3_0;
+            config.cache.value = KvCacheType::PQ3_0;
+            if std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some() {
+                config.execution = assistant::engine::ExecutionMode::RequireVulkan;
+            }
+        }
         _ => anyhow::bail!("unsupported reference profile"),
     }
     let runtime = AssistantRuntime::builder(engine)
@@ -250,11 +258,19 @@ async fn evaluate_profile(
             let correct_answer=case.expected.as_ref().is_none_or(|expected| if case.kind == "retrieval" || case.kind == "answer" { exact_answer(response.text(), expected) } else { response.text().contains(expected) }) && case.integer.is_none_or(|expected|integer_in(response.text(),expected));
             let correct_value=case.integer.is_none_or(|expected|response.tools.iter().any(|r|r.call.name=="calculate" && r.result["ok"]==true && r.result["result"]["value"]==expected));
             let passed=correct_tools && correct_answer && (case.tools.is_empty() || correct_value);
-            eprintln!("CACHE_TASK_QUALITY {}",json!({"stage":"baseline","profile":profile,"swa":format!("{swa:?}"),"case":case.id,"kind":case.kind,"passed":passed,"answer":response.text(),"successful_tools":successful,"input_tokens":response.usage.input_tokens,"generated_tokens":response.usage.generated_tokens}));
+            eprintln!("CACHE_TASK_QUALITY {}",json!({"stage":if profile=="pq3" {"candidate"} else {"baseline"},"profile":profile,"swa":format!("{swa:?}"),"case":case.id,"kind":case.kind,"passed":passed,"answer":response.text(),"successful_tools":successful,"input_tokens":response.usage.input_tokens,"generated_tokens":response.usage.generated_tokens}));
         }
         let diagnostics=runtime.cache_diagnostics().await?;
         let contexts=&diagnostics["quality"].contexts;
         if std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some() {anyhow::ensure!(contexts.iter().any(|c|c.weight_devices.iter().any(|d|d.starts_with("Vulkan"))),"required Vulkan quality coverage unavailable");}
+        #[cfg(feature = "turboquant")]
+        if profile=="pq3" && std::env::var_os("ASSISTANT_QUALITY_REQUIRE_VULKAN").is_some() {
+            anyhow::ensure!(!contexts.is_empty(),"required PQ3 context missing");
+            for context in contexts {
+                let observed=context.effective.pq3.as_ref().ok_or_else(||anyhow::anyhow!("PQ3 identity missing"))?;
+                anyhow::ensure!(observed.execution==llama_cpp::context::cache::Pq3Execution::VulkanRequired && observed.indexed_writes>0 && observed.attention_operations>0 && observed.observed_paths().next().is_some(),"required PQ3 GPU operations were not observed");
+            }
+        }
         eprintln!("CACHE_QUALITY_CONFIG {}",json!({"profile":profile,"swa":format!("{swa:?}"),"diagnostics":diagnostics["quality"].to_json()}));
         Ok::<_,anyhow::Error>(())
     }.await;
@@ -300,12 +316,20 @@ async fn required_cache_task_quality_characterization() {
         "CACHE_QUALITY_IDENTITY {}",
         json!({"model_sha256":checksum,"fixture_fnv1a64":fnv(DATA.as_bytes()),"vocabulary_size":tokenizer.n_vocab(),"full":full,"task_count":cases.len(),"acceptance":data["acceptance"]})
     );
-    for (profile, swa) in [
+    #[allow(unused_mut)]
+    let mut profiles = vec![
         ("f16", SwaCacheMode::Full),
         ("f16", SwaCacheMode::Compact),
         ("q8", SwaCacheMode::Compact),
         ("q4", SwaCacheMode::Compact),
-    ] {
+    ];
+    if std::env::var_os("ASSISTANT_QUALITY_INCLUDE_PQ3").is_some() {
+        #[cfg(feature = "turboquant")]
+        profiles.extend([("pq3", SwaCacheMode::Full), ("pq3", SwaCacheMode::Compact)]);
+        #[cfg(not(feature = "turboquant"))]
+        panic!("PQ3 candidate evaluation requires the turboquant feature");
+    }
+    for (profile, swa) in profiles {
         evaluate_profile(engine, &path, &data, &cases, profile, swa)
             .await
             .expect("evaluation must execute; accuracy is recorded per case");

@@ -55,6 +55,9 @@ struct Args {
     /// Force CPU weights, attention and operators for reference measurements.
     #[arg(long)]
     cpu: bool,
+    /// Require validated Vulkan cache execution (experimental PQ3/PQ3).
+    #[arg(long, conflicts_with = "cpu")]
+    require_vulkan: bool,
     /// Emit owned native cache/memory snapshots to stderr after each interaction.
     #[arg(long)]
     diagnostics: bool,
@@ -83,6 +86,9 @@ enum CacheType {
     Q8,
     #[value(name = "q4_0")]
     Q4,
+    #[cfg(feature = "turboquant")]
+    #[value(name = "pq3_0")]
+    Pq3,
 }
 impl From<CacheType> for KvCacheType {
     fn from(value: CacheType) -> Self {
@@ -90,6 +96,8 @@ impl From<CacheType> for KvCacheType {
             CacheType::F16 => Self::F16,
             CacheType::Q8 => Self::Q8_0,
             CacheType::Q4 => Self::Q4_0,
+            #[cfg(feature = "turboquant")]
+            CacheType::Pq3 => Self::PQ3_0,
         }
     }
 }
@@ -225,6 +233,8 @@ fn model_config(args: &Args) -> assistant::engine::EngineResult<LLMConfig> {
     config.gpu_layers = if args.cpu { 0 } else { args.gpu_layers };
     config.execution = if args.cpu {
         ExecutionMode::Cpu
+    } else if args.require_vulkan {
+        ExecutionMode::RequireVulkan
     } else {
         ExecutionMode::Auto
     };

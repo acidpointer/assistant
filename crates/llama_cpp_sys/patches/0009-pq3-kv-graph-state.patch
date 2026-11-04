@@ -1,0 +1,913 @@
+Subject: Add explicit CPU PQ3 cache graphs with signed-Hadamard transforms and fail-closed state policy
+Base: llama.cpp a34de8618b25dfc32ee43749db47d767a9f0a25d (b12015), after 0003-0008
+License: MIT; pinned upstream LICENSE and earlier PQ3 donor attribution retained
+
+Why: type traits alone do not define cache graph transforms or persistence.
+Graph ABI v1 composes D then plain normalized H128 for Q/K/V, H128 then D
+on attention output. Fixed masks and bit order are tested; only plain H receives
+the GGML Hadamard hint. Ordinary and hybrid full/SWA graphs use the same policy.
+Explicit CPU-only, causal, single-sequence Llama/LFM3 PQ3/PQ3 contexts are allowed;
+other policies fail before allocation. No GPU scheduler fallback is advertised.
+Prototype state I/O and positional shifts fail before IO or hybrid mutation.
+No context-parameter or PQ3 row-layout change. Internal memory vtables gain a
+codec capability; all native consumers/shims must use the composed headers.
+Separate graph ABI symbols prevent confusing row-only builds with live graphs.
+Tests: test-pq3-graph plus CPU model smoke/lifecycle and guarded binding tests.
+
+diff --git a/include/llama.h b/include/llama.h
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -377,6 +377,10 @@
+     // link time instead of silently disabling the decode hooks.
+     LLAMA_API int llama_cpp_rs_decode_hooks_abi_v1(void);
+     LLAMA_API int llama_cpp_rs_runtime_safety_abi_v1(void);
++    // PQ3 graph v1: CPU-only, T=H128*D, no persistence, position shift or shared cache.
++    LLAMA_API uint32_t llama_pq3_graph_abi_v1(void);
++    LLAMA_API bool llama_pq3_context_uses_codec(const struct llama_context * ctx);
++    LLAMA_API bool llama_pq3_memory_uses_codec(llama_memory_t mem);
+ 
+     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
+     //       https://github.com/ggml-org/llama.cpp/pull/7544
+diff --git a/src/llama-memory.h b/src/llama-memory.h
+--- a/src/llama-memory.h
++++ b/src/llama-memory.h
+@@ -113,6 +113,10 @@
+ 
+     virtual ~llama_memory_i() = default;
+ 
++    // Internal capability, propagated by hybrid memory before any mutation.
++    // Kept separate from shift support: other architectures have their own limits.
++    virtual bool uses_pq3() const { return false; }
++
+     // split the input batch into a set of ubatches and verify that they can fit into the cache
+     // return a context object containing the ubatches and memory state required to process them
+     // check the llama_memory_context_i::get_status() for the result
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -132,6 +132,7 @@
+     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+ 
+     bool get_can_shift() const override;
++    bool uses_pq3() const override { return pq3; }
+ 
+     void clear(bool data) override;
+ 
+@@ -227,6 +228,7 @@
+ 
+     std::vector<ggml_tensor *> get_k_rot() const;
+     std::vector<ggml_tensor *> get_v_rot() const;
++    std::vector<ggml_tensor *> get_pq3_signs() const;
+ 
+     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+@@ -264,7 +266,10 @@
+ 
+         ggml_tensor * k_rot = nullptr;
+         ggml_tensor * v_rot = nullptr;
++        ggml_tensor * pq3_signs = nullptr;
+     };
++
++    bool pq3 = false; // immutable after construction; also valid for an empty arena
+ 
+     bool v_trans = true;  // the value tensor is transposed
+ 
+@@ -426,6 +431,7 @@
+ 
+     std::vector<ggml_tensor *> get_k_rot() const;
+     std::vector<ggml_tensor *> get_v_rot() const;
++    std::vector<ggml_tensor *> get_pq3_signs() const;
+ 
+     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+diff --git a/src/llama-kv-cache-iswa.h b/src/llama-kv-cache-iswa.h
+--- a/src/llama-kv-cache-iswa.h
++++ b/src/llama-kv-cache-iswa.h
+@@ -64,6 +64,7 @@
+     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+ 
+     bool get_can_shift() const override;
++    bool uses_pq3() const override { return kv_base->uses_pq3() || kv_swa->uses_pq3(); }
+ 
+     void clear(bool data) override;
+ 
+diff --git a/src/llama-memory-hybrid.h b/src/llama-memory-hybrid.h
+--- a/src/llama-memory-hybrid.h
++++ b/src/llama-memory-hybrid.h
+@@ -57,6 +57,7 @@
+     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+ 
+     bool get_can_shift() const override;
++    bool uses_pq3() const override { return mem_attn->uses_pq3(); }
+ 
+     void clear(bool data) override;
+ 
+diff --git a/src/llama-memory-hybrid-iswa.h b/src/llama-memory-hybrid-iswa.h
+--- a/src/llama-memory-hybrid-iswa.h
++++ b/src/llama-memory-hybrid-iswa.h
+@@ -57,6 +57,7 @@
+     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+ 
+     bool get_can_shift() const override;
++    bool uses_pq3() const override { return mem_attn->uses_pq3(); }
+ 
+     void clear(bool data) override;
+ 
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -289,6 +289,11 @@
+                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+     }
+ 
++    pq3 = type_k == GGML_TYPE_PQ3_0 || type_v == GGML_TYPE_PQ3_0;
++    if (mem_other && (pq3 || mem_other->uses_pq3())) {
++        throw std::runtime_error("PQ3 shared cache ownership is unsupported");
++    }
++
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         n_embd_head_k_all = other->n_embd_head_k_all;
+@@ -326,6 +331,10 @@
+             n_embd_head_v_all > 0 &&
+             ggml_is_quantized(type_v) &&
+             hparams.n_embd_head_v() % 64 == 0;
++
++        if (pq3 && (attn_rot_disable || n_embd_head_k_all != 128 || n_embd_head_v_all != 128)) {
++            throw std::runtime_error("PQ3 requires enabled 128-dimensional K/V transforms");
++        }
+ 
+         if (attn_rot_k) {
+             n_rot_k = 64;
+@@ -346,6 +355,9 @@
+         }
+     }
+ 
++    // PQ3's codebook is defined for the full 128-coordinate head, including V.
++    if (pq3) { n_rot_k = 128; n_rot_v = 128; }
++
+     LLAMA_LOG_INFO("%s: n_rot_k = %u, n_embd_head_k_all = %d\n", __func__, n_rot_k, n_embd_head_k_all);
+     LLAMA_LOG_INFO("%s: n_rot_v = %u, n_embd_head_k_all = %d\n", __func__, n_rot_v, n_embd_head_v_all);
+ 
+@@ -392,7 +404,7 @@
+             const auto buft = ggml_backend_buffer_get_type(cache->buffer);
+             auto & ctx = ctx_map[buft];
+             if (!ctx) {
+-                ggml_init_params params = { 2*layers.size()*ggml_tensor_overhead(), nullptr, true };
++                ggml_init_params params = { (pq3 ? 3 : 2)*layers.size()*ggml_tensor_overhead(), nullptr, true };
+                 ctx.reset(ggml_init(params));
+                 if (!ctx) {
+                     throw std::runtime_error("failed to create ggml context for rotation matrices");
+@@ -402,6 +414,10 @@
+             auto * rot = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, n_rot, n_rot);
+             ggml_format_name(rot, "cache_%s%s_rot_l%d", name_tag, is_k ? "k" : "v", layer.il);
+             (is_k ? layer.k_rot : layer.v_rot) = rot;
++            if (pq3 && is_k) {
++                layer.pq3_signs = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 128);
++                ggml_format_name(layer.pq3_signs, "cache_%spq3_signs_l%d", name_tag, layer.il);
++            }
+         }
+     }
+ 
+@@ -414,6 +430,11 @@
+ 
+     if (!attn_rot_bufs.no_alloc) {
+         for (const auto & layer : layers) {
++            if (layer.pq3_signs) {
++                float signs[128];
++                for (int i = 0; i < 128; ++i) { signs[i] = llama_pq3_sign(i); }
++                ggml_backend_tensor_set(layer.pq3_signs, signs, 0, sizeof(signs));
++            }
+             for (auto * t : { layer.k_rot, layer.v_rot }) {
+                 if (t) {
+                     ggml_backend_tensor_set(t, attn_rot_hadamard.at(t->ne[0]).data(), 0, ggml_nbytes(t));
+@@ -625,6 +646,7 @@
+ }
+ 
+ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -675,6 +697,7 @@
+ }
+ 
+ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -1237,6 +1260,7 @@
+ }
+ 
+ bool llama_kv_cache::get_can_shift() const {
++    if (pq3) { return false; }
+     // Step35 uses per-layer RoPE dims; K-shift assumes a single global n_rot.
+     if (model.arch == LLM_ARCH_STEP35) {
+         return false;
+@@ -1500,6 +1524,12 @@
+     for (const auto & [il, idx] : map_layer_ids) {
+         res[il] = layers[idx].k_rot;
+     }
++    return res;
++}
++
++std::vector<ggml_tensor *> llama_kv_cache::get_pq3_signs() const {
++    std::vector<ggml_tensor *> res(hparams.n_layer_all, nullptr);
++    for (const auto & item : map_layer_ids) { res[item.first] = layers[item.second].pq3_signs; }
+     return res;
+ }
+ 
+@@ -2922,6 +2952,10 @@
+     return kv->get_k_rot();
+ }
+ 
++std::vector<ggml_tensor *> llama_kv_cache_context::get_pq3_signs() const {
++    return kv->get_pq3_signs();
++}
++
+ std::vector<ggml_tensor *> llama_kv_cache_context::get_v_rot() const {
+     return kv->get_v_rot();
+ }
+diff --git a/src/llama-kv-cache-iswa.cpp b/src/llama-kv-cache-iswa.cpp
+--- a/src/llama-kv-cache-iswa.cpp
++++ b/src/llama-kv-cache-iswa.cpp
+@@ -130,11 +130,13 @@
+ }
+ 
+ void llama_kv_cache_iswa::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     kv_base->seq_add(seq_id, p0, p1, shift);
+     kv_swa ->seq_add(seq_id, p0, p1, shift);
+ }
+ 
+ void llama_kv_cache_iswa::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     kv_base->seq_div(seq_id, p0, p1, d);
+     kv_swa ->seq_div(seq_id, p0, p1, d);
+ }
+diff --git a/src/llama-memory-hybrid.cpp b/src/llama-memory-hybrid.cpp
+--- a/src/llama-memory-hybrid.cpp
++++ b/src/llama-memory-hybrid.cpp
+@@ -161,11 +161,13 @@
+ }
+ 
+ void llama_memory_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     mem_attn->seq_add(seq_id, p0, p1, shift);
+     mem_recr->seq_add(seq_id, p0, p1, shift);
+ }
+ 
+ void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     mem_attn->seq_div(seq_id, p0, p1, d);
+     mem_recr->seq_div(seq_id, p0, p1, d);
+ }
+diff --git a/src/llama-memory-hybrid-iswa.cpp b/src/llama-memory-hybrid-iswa.cpp
+--- a/src/llama-memory-hybrid-iswa.cpp
++++ b/src/llama-memory-hybrid-iswa.cpp
+@@ -166,11 +166,13 @@
+ }
+ 
+ void llama_memory_hybrid_iswa::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     mem_attn->seq_add(seq_id, p0, p1, shift);
+     mem_recr->seq_add(seq_id, p0, p1, shift);
+ }
+ 
+ void llama_memory_hybrid_iswa::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
++    if (uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     mem_attn->seq_div(seq_id, p0, p1, d);
+     mem_recr->seq_div(seq_id, p0, p1, d);
+ }
+diff --git a/src/llama-impl.h b/src/llama-impl.h
+--- a/src/llama-impl.h
++++ b/src/llama-impl.h
+@@ -70,6 +70,24 @@
+     }
+ }
+ 
++// PQ3 graph transform v1: fixed bit convention, no PRNG or environment state.
++static inline float llama_pq3_sign(uint32_t i) {
++    static constexpr uint32_t words[4] = { 0x40f54e8c, 0x6587b7b0, 0xc31220ea, 0x32f6449b };
++    return ((words[(i % 128)/32] >> (i % 32)) & 1) ? -1.0f : 1.0f;
++}
++
++// Apply D without changing coordinate/head order. H remains the existing hinted
++// operation; forward is H(D*x), inverse is D(H*x). Never hint HD as plain H.
++static inline ggml_tensor * llama_pq3_apply_signs(
++        ggml_context * ctx, ggml_tensor * cur, ggml_tensor * signs) {
++    if (!signs) { return cur; }
++    ggml_tensor * shaped = ggml_is_contiguous(cur)
++        ? ggml_reshape_2d(ctx, cur, 128, ggml_nelements(cur)/128)
++        : ggml_cont_2d(ctx, cur, 128, ggml_nelements(cur)/128);
++    ggml_tensor * res = ggml_mul(ctx, shaped, signs);
++    return ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
++}
++
+ static inline ggml_tensor * llama_mul_mat_hadamard(
+         ggml_context * ctx,
+         ggml_tensor * cur,
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -367,6 +367,7 @@
+     // note: assumes v_rot^2 == I
+     std::vector<ggml_tensor *> self_k_rot;
+     std::vector<ggml_tensor *> self_v_rot;
++    std::vector<ggml_tensor *> self_pq3_signs;
+ 
+     // note: these have to be copies because in order to be able to reuse a graph, its inputs
+     //       need to carry these parameters with them. otherwise, they can point to freed
+@@ -536,9 +537,11 @@
+ 
+     std::vector<ggml_tensor *> self_k_rot;
+     std::vector<ggml_tensor *> self_v_rot;
++    std::vector<ggml_tensor *> self_pq3_signs;
+ 
+     std::vector<ggml_tensor *> self_k_rot_swa;
+     std::vector<ggml_tensor *> self_v_rot_swa;
++    std::vector<ggml_tensor *> self_pq3_signs_swa;
+ 
+     const llama_hparams hparams;
+     const llama_cparams cparams;
+diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
+--- a/src/llama-graph.cpp
++++ b/src/llama-graph.cpp
+@@ -3143,6 +3143,7 @@
+ 
+     inp->self_k_rot = mctx_cur->get_k_rot();
+     inp->self_v_rot = mctx_cur->get_v_rot();
++    inp->self_pq3_signs = mctx_cur->get_pq3_signs();
+ 
+     return inp;
+ }
+@@ -3170,6 +3171,11 @@
+             int       il) const {
+     GGML_ASSERT(v_mla == nullptr);
+ 
++    auto * pq3_signs = inp->self_pq3_signs[il];
++    q_cur = llama_pq3_apply_signs(ctx0, q_cur, pq3_signs);
++    k_cur = llama_pq3_apply_signs(ctx0, k_cur, pq3_signs);
++    v_cur = llama_pq3_apply_signs(ctx0, v_cur, pq3_signs);
++
+     if (inp->self_k_rot[il]) {
+         q_cur = llama_mul_mat_hadamard(ctx0, q_cur, inp->self_k_rot[il]);
+         k_cur = llama_mul_mat_hadamard(ctx0, k_cur, inp->self_k_rot[il]);
+@@ -3217,6 +3223,7 @@
+ 
+     if (inp->self_v_rot[il]) {
+         cur = llama_mul_mat_hadamard(ctx0, cur, inp->self_v_rot[il]);
++        cur = llama_pq3_apply_signs(ctx0, cur, pq3_signs);
+     }
+ 
+     if (wo) {
+@@ -3451,6 +3458,10 @@
+ 
+     auto * k_rot = is_swa ? inp->self_k_rot_swa[il] : inp->self_k_rot[il];
+     auto * v_rot = is_swa ? inp->self_v_rot_swa[il] : inp->self_v_rot[il];
++    auto * pq3_signs = is_swa ? inp->self_pq3_signs_swa[il] : inp->self_pq3_signs[il];
++    q_cur = llama_pq3_apply_signs(ctx0, q_cur, pq3_signs);
++    if (k_cur) { k_cur = llama_pq3_apply_signs(ctx0, k_cur, pq3_signs); }
++    if (v_cur) { v_cur = llama_pq3_apply_signs(ctx0, v_cur, pq3_signs); }
+ 
+     if (k_rot) {
+         q_cur = llama_mul_mat_hadamard(ctx0, q_cur, k_rot);
+@@ -3512,6 +3523,7 @@
+ 
+     if (v_rot) {
+         cur = llama_mul_mat_hadamard(ctx0, cur, v_rot);
++        cur = llama_pq3_apply_signs(ctx0, cur, pq3_signs);
+     }
+ 
+     if (wo) {
+@@ -3733,6 +3745,7 @@
+ 
+     inp->self_k_rot = mctx_base->get_k_rot();
+     inp->self_v_rot = mctx_base->get_v_rot();
++    inp->self_pq3_signs = mctx_base->get_pq3_signs();
+ 
+     if (msa_enabled) {
+         inp->self_k_idxs_idx = mctx_idx->build_input_k_idxs(ctx0, ubatch);
+@@ -3769,9 +3782,11 @@
+ 
+     inp->self_k_rot = mctx_cur->get_base()->get_k_rot();
+     inp->self_v_rot = mctx_cur->get_base()->get_v_rot();
++    inp->self_pq3_signs = mctx_cur->get_base()->get_pq3_signs();
+ 
+     inp->self_k_rot_swa = mctx_cur->get_swa()->get_k_rot();
+     inp->self_v_rot_swa = mctx_cur->get_swa()->get_v_rot();
++    inp->self_pq3_signs_swa = mctx_cur->get_swa()->get_pq3_signs();
+ 
+     return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
+ }
+@@ -4013,9 +4028,11 @@
+ 
+     inp_attn->self_k_rot = attn_ctx->get_base()->get_k_rot();
+     inp_attn->self_v_rot = attn_ctx->get_base()->get_v_rot();
++    inp_attn->self_pq3_signs = attn_ctx->get_base()->get_pq3_signs();
+ 
+     inp_attn->self_k_rot_swa = attn_ctx->get_swa()->get_k_rot();
+     inp_attn->self_v_rot_swa = attn_ctx->get_swa()->get_v_rot();
++    inp_attn->self_pq3_signs_swa = attn_ctx->get_swa()->get_pq3_signs();
+ 
+     auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);
+ 
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -679,6 +679,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_MXFP4:
+         case GGML_TYPE_NVFP4:
+@@ -1136,6 +1137,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_Q8_1:
+         case GGML_TYPE_MXFP4:
+@@ -1268,6 +1270,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_Q8_1:
+         case GGML_TYPE_MXFP4:
+@@ -4813,6 +4816,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_MXFP4:
+         case GGML_TYPE_NVFP4:
+@@ -5138,6 +5142,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_Q8_1:
+         case GGML_TYPE_MXFP4:
+@@ -5364,6 +5369,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_Q8_1:
+         case GGML_TYPE_MXFP4:
+@@ -6125,6 +6131,7 @@
+         case GGML_TYPE_Q4_1:
+         case GGML_TYPE_Q5_0:
+         case GGML_TYPE_Q5_1:
++        case GGML_TYPE_PQ3_0:
+         case GGML_TYPE_Q8_0:
+         case GGML_TYPE_Q8_1:
+         case GGML_TYPE_MXFP4:
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -1383,6 +1383,7 @@
+ }
+ 
+ void llama_context::set_causal_attn(bool value) {
++    if (memory && memory->uses_pq3() && !value) { LLAMA_LOG_ERROR("%s: PQ3 operation is unsupported\n", __func__); return; }
+     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+ 
+     if (cparams.causal_attn == value) {
+@@ -3441,6 +3442,7 @@
+ };
+ 
+ size_t llama_context::state_get_size() {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_io_write_dummy io(false);
+     try {
+         return state_write_data(io);
+@@ -3451,6 +3453,7 @@
+ }
+ 
+ size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_io_write_host io(dst, size);
+     try {
+         return state_write_data(io);
+@@ -3461,6 +3464,7 @@
+ }
+ 
+ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_io_read_host io(src, size);
+     try {
+         return state_read_data(io);
+@@ -3474,6 +3478,7 @@
+ static constexpr uint32_t io_magic = 0xaf143cd8;
+ 
+ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
+     try {
+         io.write(&io_magic, sizeof(io_magic));
+@@ -3487,6 +3492,7 @@
+ }
+ 
+ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     std::unique_ptr<llama_io_write_i> io;
+     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
+@@ -3506,6 +3512,7 @@
+ }
+ 
+ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     std::unique_ptr<llama_io_read_i> io;
+     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+         // create a temporary io to read the magic and the src seq_id
+@@ -3546,6 +3553,7 @@
+ }
+ 
+ bool llama_context::state_load_file(const char * filepath, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return false; }
+     llama_file file(filepath, "rb");
+ 
+     // sanity checks
+@@ -3589,6 +3597,7 @@
+ }
+ 
+ bool llama_context::state_save_file(const char * filepath, const llama_token * tokens, size_t n_token_count) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return false; }
+     llama_file file(filepath, "wb");
+ 
+     file.write_u32(LLAMA_SESSION_MAGIC);
+@@ -3606,6 +3615,7 @@
+ }
+ 
+ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * filepath, llama_token * tokens_out, size_t n_token_capacity, size_t * n_token_count_out) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_file file(filepath, "rb");
+ 
+     // version checks
+@@ -3660,6 +3670,7 @@
+ }
+ 
+ size_t llama_context::state_seq_save_file(llama_seq_id seq_id, const char * filepath, const llama_token * tokens, size_t n_token_count) {
++    if (memory && memory->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 persistence is unsupported\n", __func__); return 0; }
+     llama_file file(filepath, "wb");
+ 
+     file.write_u32(LLAMA_STATE_SEQ_MAGIC);
+@@ -3680,6 +3691,7 @@
+ }
+ 
+ size_t llama_context::state_write_data(llama_io_write_i & io) {
++    if (memory && memory->uses_pq3()) { throw std::runtime_error("PQ3 persistence is unsupported"); }
+     LLAMA_LOG_DEBUG("%s: writing state\n", __func__);
+ 
+     // write model info
+@@ -3700,6 +3712,7 @@
+ }
+ 
+ size_t llama_context::state_read_data(llama_io_read_i & io) {
++    if (memory && memory->uses_pq3()) { throw std::runtime_error("PQ3 persistence is unsupported"); }
+     LLAMA_LOG_DEBUG("%s: reading state\n", __func__);
+ 
+     // read model info
+@@ -3726,6 +3739,7 @@
+ }
+ 
+ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
++    if (memory && memory->uses_pq3()) { throw std::runtime_error("PQ3 persistence is unsupported"); }
+     if (memory) {
+         memory->state_write(io, seq_id, flags);
+     }
+@@ -3734,6 +3748,7 @@
+ }
+ 
+ size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
++    if (memory && memory->uses_pq3()) { throw std::runtime_error("PQ3 persistence is unsupported"); }
+     if (memory) {
+         memory->state_read(io, seq_id, flags);
+     }
+@@ -3823,6 +3838,7 @@
+ }
+ 
+ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params lopt_params) {
++    if (memory && memory->uses_pq3() && true) { LLAMA_LOG_ERROR("%s: PQ3 operation is unsupported\n", __func__); return; }
+     GGML_ASSERT(!opt_ctx);
+     model->hparams.n_ctx_train = lopt_params.n_ctx_train > 0 ? lopt_params.n_ctx_train : n_ctx();
+     const uint32_t n_batch     = std::min(this->n_batch(),  model->hparams.n_ctx_train);
+@@ -4103,9 +4119,36 @@
+         return nullptr;
+     }
+ 
+-    if (params.type_k == GGML_TYPE_PQ3_0 || params.type_v == GGML_TYPE_PQ3_0) {
+-        LLAMA_LOG_ERROR("%s: PQ3 is CPU-reference-only; cache graph/attention support is not enabled\n", __func__);
+-        return nullptr;
++    const bool pq3 = params.type_k == GGML_TYPE_PQ3_0 || params.type_v == GGML_TYPE_PQ3_0;
++    if (pq3) {
++        const auto & hp = model->hparams;
++        const char * env = getenv("LLAMA_ATTN_ROT_DISABLE");
++        if (params.type_k != GGML_TYPE_PQ3_0 || params.type_v != GGML_TYPE_PQ3_0 ||
++                (model->arch != LLM_ARCH_LLAMA && model->arch != LLM_ARCH_LFM3) ||
++                params.n_seq_max != 1 || params.ctx_other || params.ctx_type != LLAMA_CONTEXT_TYPE_DEFAULT ||
++                params.embeddings || !hp.causal_attn || params.attention_type == LLAMA_ATTENTION_TYPE_NON_CAUSAL ||
++                params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED || !model->attn_rot ||
++                params.attn_rot_disabled || (env && atoi(env) != 0)) {
++            LLAMA_LOG_ERROR("%s: unsupported PQ3 pair, model, context or rotation/flash policy\n", __func__);
++            return nullptr;
++        }
++        // Graph v1 is an explicit CPU reference. A later patch adds actual GPU
++        // operations and their device preflight; no implicit scheduler fallback.
++        if (params.offload_kqv || params.op_offload || model->n_gpu_layers() != 0) {
++            LLAMA_LOG_ERROR("%s: PQ3 graph v1 requires explicit CPU placement\n", __func__);
++            return nullptr;
++        }
++        bool attention = false;
++        for (uint32_t il = 0; il < hp.n_layer(); ++il) {
++            if (!hp.has_kv(il) || hp.is_recr(il) || hp.n_head_kv(il) == 0) { continue; }
++            attention = true;
++            if (hp.n_embd_head_k(il) != 128 || hp.n_embd_head_v(il) != 128) {
++                LLAMA_LOG_ERROR("%s: PQ3 requires 128-dimensional K/V heads in every attention layer\n", __func__);
++                return nullptr;
++            }
++        }
++        if (!attention) { LLAMA_LOG_ERROR("%s: PQ3 model has no attention layers\n", __func__); return nullptr; }
++        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+     }
+ 
+     if (params.n_batch == 0 && params.n_ubatch == 0) {
+@@ -4513,6 +4556,7 @@
+              llama_pos p0,
+              llama_pos p1,
+              llama_pos delta) {
++    if (mem && mem->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     if (!mem) {
+         return;
+     }
+@@ -4526,6 +4570,7 @@
+              llama_pos p0,
+              llama_pos p1,
+                    int d) {
++    if (mem && mem->uses_pq3()) { LLAMA_LOG_ERROR("%s: PQ3 position shifting is unsupported\n", __func__); return; }
+     if (!mem) {
+         return;
+     }
+@@ -4702,6 +4747,14 @@
+ 
+     return ret;
+ }
++
++uint32_t llama_pq3_graph_abi_v1(void) { return 1; }
++
++bool llama_pq3_context_uses_codec(const llama_context * ctx) {
++    return ctx && ctx->get_memory() && ctx->get_memory()->uses_pq3();
++}
++
++bool llama_pq3_memory_uses_codec(llama_memory_t mem) { return mem && mem->uses_pq3(); }
+ 
+ int llama_cpp_rs_runtime_safety_abi_v1(void) {
+     return 1;
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -2869,6 +2869,10 @@
+ // initialization of the speculative decoding system
+ //
+ common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
++    if (llama_pq3_context_uses_codec(params.draft.ctx_tgt) || llama_pq3_context_uses_codec(params.draft.ctx_dft)) {
++        LOG_ERR("%s: PQ3 speculative decoding is unsupported\n", __func__);
++        return nullptr;
++    }
+     // Compute the implementations to use based on the config and their order of preference
+     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
+     {
+diff --git a/tests/test-pq3-graph.cpp b/tests/test-pq3-graph.cpp
+--- /dev/null
++++ b/tests/test-pq3-graph.cpp
+@@ -0,0 +1,206 @@
++// SPDX-License-Identifier: MIT
++// Numerical CPU operations and optional real-model PQ3 lifecycle verification.
++#include "llama.h"
++#include "llama-impl.h"
++#include "ggml.h"
++#include "ggml-cpu.h"
++#include "ggml-quants.h"
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdio>
++#include <cstring>
++#include <memory>
++#include <stdexcept>
++#include <vector>
++#include <cstdlib>
++#include <fstream>
++#include <filesystem>
++#include <chrono>
++
++static void require(bool value, const char * why) { if (!value) throw std::runtime_error(why); }
++struct arena {
++    ggml_context * p = nullptr;
++    arena() : p(ggml_init({32*1024*1024, nullptr, false})) { require(p != nullptr, "graph arena"); }
++    ~arena() { ggml_free(p); }
++    arena(const arena &) = delete;
++};
++static void compute(arena & a, ggml_tensor * result) {
++    auto * graph = ggml_new_graph(a.p);
++    ggml_build_forward_expand(graph, result);
++    require(ggml_graph_compute_with_ctx(a.p, graph, 2) == GGML_STATUS_SUCCESS, "CPU graph execution");
++}
++static int parity(unsigned n) { int p=0; for (;n;n>>=1) p^=(n&1); return p; }
++static void transform_test() {
++    arena a;
++    auto * h=ggml_new_tensor_2d(a.p,GGML_TYPE_F32,128,128);
++    auto * signs=ggml_new_tensor_1d(a.p,GGML_TYPE_F32,128);
++    auto * basis=ggml_new_tensor_2d(a.p,GGML_TYPE_F32,128,128);
++    auto * hp=(float *) h->data; auto * bp=(float *) basis->data;
++    std::fill(bp,bp+128*128,0.0f);
++    const uint32_t masks[4]={0x40f54e8c,0x6587b7b0,0xc31220ea,0x32f6449b};
++    for(unsigned j=0;j<128;++j) {
++        bp[j*128+j]=1.0f;
++        ((float *) signs->data)[j]=((masks[j/32]>>(j%32))&1) ? -1.0f:1.0f;
++        for(unsigned i=0;i<128;++i) hp[j*128+i]=(parity(i&j)?-1.0f:1.0f)/std::sqrt(128.0f);
++    }
++    auto * forward=llama_mul_mat_hadamard(a.p,llama_pq3_apply_signs(a.p,basis,signs),h);
++    auto * inverse=llama_pq3_apply_signs(a.p,llama_mul_mat_hadamard(a.p,forward,h),signs);
++    compute(a,inverse);
++    for(unsigned j=0;j<128;++j) for(unsigned i=0;i<128;++i) {
++        const float expected=(parity(i&j)?-1.0f:1.0f)/std::sqrt(128.0f)*((float *) signs->data)[j];
++        require(std::fabs(((float *)forward->data)[j*128+i]-expected)<2e-6f,"basis sign/order/normalization");
++        require(std::fabs(((float *)inverse->data)[j*128+i]-bp[j*128+i])<2e-5f,"T inverse T");
++    }
++    require(llama_pq3_sign(2)==-1.0f && llama_pq3_sign(0)==1.0f,"sign bit convention");
++}
++static void writes_test(bool half, bool wide_index) {
++    arena a;
++    auto * src=ggml_new_tensor_2d(a.p,half?GGML_TYPE_F16:GGML_TYPE_F32,256,3);
++    auto * dst=ggml_new_tensor_2d(a.p,GGML_TYPE_PQ3_0,256,5);
++    auto * idx=ggml_new_tensor_1d(a.p,wide_index?GGML_TYPE_I64:GGML_TYPE_I32,3);
++    const int indices[3]={2,0,4};
++    for(int i=0;i<3;++i) { if(wide_index) ((int64_t *)idx->data)[i]=indices[i]; else ((int32_t *)idx->data)[i]=indices[i]; }
++    std::array<float,768> input{};
++    for(int i=0;i<768;++i) {
++        float x=std::sin(float(i)*0.041f)*0.4f;
++        input[i]=half?ggml_fp16_to_fp32(ggml_fp32_to_fp16(x)):x;
++        if(half) ((ggml_fp16_t *)src->data)[i]=ggml_fp32_to_fp16(x); else ((float *)src->data)[i]=x;
++    }
++    std::memset(dst->data,0xa5,ggml_nbytes(dst));
++    compute(a,ggml_set_rows(a.p,dst,src,idx));
++    block_pq3_0 expected[6];quantize_row_pq3_0_ref(input.data(),expected,input.size());
++    for(int i=0;i<3;++i) require(std::memcmp((char *)dst->data+indices[i]*100,expected+2*i,100)==0,"indexed row bytes and head boundaries");
++    for(int row:{1,3}) for(int j=0;j<100;++j) require(((uint8_t *)dst->data)[row*100+j]==0xa5,"unwritten rows unchanged");
++    // Exercise generic quantized copy/decode separately on valid initialized data.
++    auto * encoded=ggml_cast(a.p,src,GGML_TYPE_PQ3_0);
++    auto * decoded=ggml_cast(a.p,encoded,GGML_TYPE_F32); compute(a,decoded);
++    std::array<float,768> reference{};dequantize_row_pq3_0(expected,reference.data(),reference.size());
++    for(int i=0;i<768;++i) require(((float *)decoded->data)[i]==reference[i],"quantized copy/decode");
++}
++static void attention_test(bool permuted) {
++    arena a;
++    auto * q=ggml_new_tensor_3d(a.p,GGML_TYPE_F32,128,2,4);
++    auto * k=ggml_new_tensor_3d(a.p,GGML_TYPE_PQ3_0,128,3,2);
++    auto * v=ggml_new_tensor_3d(a.p,GGML_TYPE_PQ3_0,128,3,2);
++    auto * mask=ggml_new_tensor_2d(a.p,GGML_TYPE_F16,3,2);
++    float keys[768], values[768], kd[768], vd[768];
++    for(int i=0;i<1024;++i) ((float *)q->data)[i]=0.3f*std::sin(float(i)*0.03f);
++    for(int i=0;i<768;++i) {keys[i]=0.5f*std::cos(float(i)*0.07f);values[i]=0.6f*std::sin(float(i)*0.019f);}
++    quantize_row_pq3_0_ref(keys,(block_pq3_0 *)k->data,768);quantize_row_pq3_0_ref(values,(block_pq3_0 *)v->data,768);
++    dequantize_row_pq3_0((block_pq3_0 *)k->data,kd,768);dequantize_row_pq3_0((block_pq3_0 *)v->data,vd,768);
++    if(permuted) {
++        for(int head=0;head<2;++head) {
++            std::swap(((block_pq3_0 *)k->data)[3*head],((block_pq3_0 *)k->data)[3*head+1]);
++            std::swap(((block_pq3_0 *)v->data)[3*head],((block_pq3_0 *)v->data)[3*head+1]);
++        }
++        // The independent oracle uses the same permutation of logical rows.
++        dequantize_row_pq3_0((block_pq3_0 *)k->data,kd,768);dequantize_row_pq3_0((block_pq3_0 *)v->data,vd,768);
++    }
++    for(int i=0;i<6;++i) ((ggml_fp16_t *)mask->data)[i]=ggml_fp32_to_fp16(i<2?0.0f:-INFINITY);
++    auto * result=ggml_flash_attn_ext(a.p,q,k,v,mask,1.0f/std::sqrt(128.0f),0.0f,0.0f);compute(a,result);
++    for(int head=0;head<4;++head) for(int qi=0;qi<2;++qi) {
++        float query[128];block_q8_0 q8[4];
++        quantize_row_q8_0_ref((float *)q->data+128*(qi+2*head),q8,128);dequantize_row_q8_0(q8,query,128);
++        double scores[2]={0,0};
++        for(int t=0;t<2;++t) for(int d=0;d<128;++d) scores[t]+=double(query[d])*kd[128*(t+3*(head/2))+d]/std::sqrt(128.0);
++        const double m=std::max(scores[0],scores[1]); const double e0=std::exp(scores[0]-m),e1=std::exp(scores[1]-m);
++        for(int d=0;d<128;++d) {
++            const double expected=qi?0.0:(e0*vd[128*3*(head/2)+d]+e1*vd[128*(1+3*(head/2))+d])/(e0+e1);
++            const float actual=((float *)result->data)[d+128*(head+4*qi)];
++            require(std::isfinite(actual)&&std::fabs(actual-expected)<3e-5,"GQA/masked attention vs decoded F64 oracle");
++        }
++    }
++}
++struct model_free { void operator()(llama_model * p) const {llama_model_free(p);} };
++struct context_free { void operator()(llama_context * p) const {llama_free(p);} };
++static void model_test(const char * path) {
++    auto mp=llama_model_default_params();mp.n_gpu_layers=0;
++    std::unique_ptr<llama_model,model_free> model(llama_model_load_from_file(path,mp)); require(bool(model),"load model");
++    std::vector<float> wrap_reference;
++    for(bool full:{true,false}) {
++        auto cp=llama_context_default_params();cp.type_k=cp.type_v=GGML_TYPE_PQ3_0;cp.n_ctx=1024;cp.n_batch=256;cp.n_ubatch=128;
++        const char * baseline=std::getenv("PQ3_WRAP_BASELINE");
++        if(baseline) cp.type_k=cp.type_v=std::strcmp(baseline,"f16")==0?GGML_TYPE_F16:GGML_TYPE_Q8_0;
++        cp.n_threads=cp.n_threads_batch=4;cp.offload_kqv=cp.op_offload=false;cp.swa_full=full;
++        std::unique_ptr<llama_context,context_free> ctx(llama_init_from_model(model.get(),cp));require(bool(ctx),"PQ3 CPU context");
++        require(llama_pq3_context_uses_codec(ctx.get())==!baseline,"codec graph capability");
++        auto * memory=llama_get_memory(ctx.get());if(!baseline) require(!llama_memory_can_shift(memory),"PQ3 shift disabled");
++        const auto * vocab=llama_model_get_vocab(model.get());
++        std::vector<llama_token> tokens(4096); const char * prompt="The local assistant stores a short note. Answer briefly: what is two plus two?";
++        int n=llama_tokenize(vocab,prompt,int(std::strlen(prompt)),tokens.data(),tokens.size(),true,true);require(n>0,"tokenization");tokens.resize(n);
++        auto batch=llama_batch_get_one(tokens.data(),tokens.size());require(llama_decode(ctx.get(),batch)==0,"PQ3 prefill");
++        const int nv=llama_vocab_n_tokens(vocab);auto * logits=llama_get_logits_ith(ctx.get(),-1);require(logits!=nullptr,"logits");
++        for(int i=0;i<nv;++i) require(std::isfinite(logits[i]),"finite logits");
++        for(int t=0;t<8;++t) {
++            llama_token next=std::max_element(logits,logits+nv)-logits;
++            char text[256];int count=llama_token_to_piece(vocab,next,text,sizeof(text),0,true);
++            if(count>0) std::fwrite(text,1,count,stdout);
++            auto one=llama_batch_get_one(&next,1);require(llama_decode(ctx.get(),one)==0,"PQ3 append");logits=llama_get_logits_ith(ctx.get(),-1);
++        }
++        std::puts("");
++        if (std::getenv("PQ3_TEST_WRAP")) {
++            llama_memory_clear(memory,true);
++            std::vector<llama_token> long_tokens(900);
++            for(size_t i=0;i<long_tokens.size();++i) long_tokens[i]=tokens[i%tokens.size()];
++            for(size_t start=0;start<long_tokens.size();start+=128) {
++                const int count=int(std::min(size_t(128),long_tokens.size()-start));
++                auto part=llama_batch_get_one(long_tokens.data()+start,count);
++                require(llama_decode(ctx.get(),part)==0,"repeated SWA wrap prefill");
++            }
++            logits=llama_get_logits_ith(ctx.get(),-1);
++            if(full) wrap_reference.assign(logits,logits+nv);
++            else {
++                float maximum=0.0f;
++                for(int i=0;i<nv;++i) {require(std::isfinite(logits[i]),"finite wrapped logits");maximum=std::max(maximum,std::fabs(logits[i]-wrap_reference[i]));}
++                std::printf("PQ3 full/compact wrap maximum logit difference: %.9g\n",maximum);
++                // Cross-layout reductions reorder physical KV rows; even the
++                // FP16 control diverges over 900 recurrent steps. Retain that
++                // characterization, and verify recovery against the same layout.
++                std::vector<float> compact_reference(logits,logits+nv);
++                llama_memory_clear(memory,true);
++                for(size_t start=0;start<long_tokens.size();start+=128) {
++                    auto part=llama_batch_get_one(long_tokens.data()+start,int(std::min(size_t(128),long_tokens.size()-start)));
++                    require(llama_decode(ctx.get(),part)==0,"compact reset/replay across repeated wraps");
++                }
++                logits=llama_get_logits_ith(ctx.get(),-1);
++                for(int i=0;i<nv;++i) require(std::fabs(logits[i]-compact_reference[i])<2e-5f,"same-layout replay agreement");
++            }
++        }
++        if(baseline) continue;
++        const auto pos=llama_memory_seq_pos_max(memory,0);
++        std::array<uint8_t,128> bytes;bytes.fill(0xa5);
++        require(llama_state_get_size(ctx.get())==0,"state size rejected");
++        require(llama_state_seq_get_size(ctx.get(),0)==0,"sequence size rejected");
++        require(llama_state_seq_get_size_ext(ctx.get(),0,LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY)==0,"partial size rejected");
++        require(llama_state_get_data(ctx.get(),bytes.data(),bytes.size())==0,"state export rejected");
++        require(llama_state_set_data(ctx.get(),bytes.data(),bytes.size())==0,"state import rejected");
++        require(llama_state_seq_get_data_ext(ctx.get(),bytes.data(),bytes.size(),0,LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)==0,"device state rejected before buffer access");
++        require(llama_state_seq_set_data_ext(ctx.get(),bytes.data(),bytes.size(),0,LLAMA_STATE_SEQ_FLAGS_ON_DEVICE)==0,"device restore rejected before parsing");
++        for(auto b:bytes) require(b==0xa5,"state buffers unchanged");
++        const auto file=std::filesystem::temp_directory_path()/std::filesystem::path("pq3-state-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
++        {std::ofstream out(file);out<<"unchanged";require(bool(out),"state sentinel file");}
++        size_t count=123;llama_token token=456;
++        require(!llama_state_save_file(ctx.get(),file.string().c_str(),tokens.data(),tokens.size()),"file save rejected");
++        require(!llama_state_load_file(ctx.get(),file.string().c_str(),&token,1,&count),"file load rejected");
++        require(llama_state_seq_save_file(ctx.get(),file.string().c_str(),0,tokens.data(),tokens.size())==0,"sequence file save rejected");
++        require(llama_state_seq_load_file(ctx.get(),file.string().c_str(),0,&token,1,&count)==0,"sequence file load rejected");
++        {std::ifstream in(file);std::string contents;in>>contents;std::filesystem::remove(file);require(contents=="unchanged","state file unchanged");}
++        require(count==123&&token==456,"file failure leaves token outputs unchanged");
++        llama_memory_seq_add(memory,0,0,-1,2);llama_memory_seq_div(memory,0,0,-1,2);
++        require(llama_memory_seq_pos_max(memory,0)==pos,"shift rejection leaves all memory unchanged");
++        llama_memory_clear(memory,true);
++        require(llama_decode(ctx.get(),batch)==0,"PQ3 reset/replay");
++    }
++}
++int main(int argc,char ** argv) {
++    llama_backend_init();
++    int result=0;
++    try {
++        require(llama_pq3_graph_abi_v1()==1,"graph ABI");
++        transform_test(); for(bool half:{false,true}) for(bool wide:{false,true}) writes_test(half,wide);attention_test(false);attention_test(true);
++        if(argc>1) model_test(argv[1]);
++        std::puts("PQ3 CPU graphs passed");
++    } catch(const std::exception & e) {std::fprintf(stderr,"PQ3 graph test failed: %s\n",e.what());result=1;}
++    llama_backend_free();return result;
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -423,5 +423,7 @@
+ # Added only by the opt-in PQ3 reference patch. Uses internal block declarations.
+ llama_build_and_test(test-pq3-reference.cpp LABEL "behavior cpu" LINK ggml ggml-cpu)
+ target_include_directories(test-pq3-reference PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+-
+-
++llama_build_and_test(test-pq3-graph.cpp LABEL "behavior cpu" LINK llama ggml ggml-cpu)
++target_include_directories(test-pq3-graph PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/ggml/src)
++
++

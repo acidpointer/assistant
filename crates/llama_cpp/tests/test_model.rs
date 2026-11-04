@@ -598,8 +598,9 @@ fn test_context_set_causal_attn() {
     }
     let ctx_params = llama_cpp::context::params::LlamaContextParams::default();
     let mut ctx = model.new_context(backend, ctx_params).unwrap();
-    ctx.set_causal_attn(true);
-    ctx.set_causal_attn(false);
+    ctx.set_causal_attn(true).expect("supported causal policy");
+    ctx.set_causal_attn(false)
+        .expect("supported non-causal policy");
 }
 
 #[test]

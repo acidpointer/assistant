@@ -1,0 +1,4147 @@
+{
+  "schema": 1,
+  "recorded_local_date": "2026-11-04",
+  "purpose": "Experimental PQ3 inference, memory, speed and placement evidence; no promotion",
+  "hardware": {
+    "gpu": "NVIDIA RTX A500 Laptop GPU",
+    "driver": "615.78.08",
+    "vram_bytes": 4294967296,
+    "cpu": "13th Gen Intel Core i7-1370P",
+    "platform": "Linux x86_64"
+  },
+  "identity": {
+    "build_profile": "release",
+    "build_rustflags": null,
+    "corpus": "selected_in_record",
+    "environment": {},
+    "executable_sha256": "eefe13b48eb3cbba3cbb0ddf3d8b1e2531b4cb8398cbfd4757a4ab363483af3d",
+    "features": {
+      "turboquant": true,
+      "vulkan": true
+    },
+    "gpu_driver_nvidia_smi": "NVIDIA RTX A500 Laptop GPU, 615.78.08",
+    "model_bytes": 1427637536,
+    "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+    "native_revision": "a34de8618b25dfc32ee43749db47d767a9f0a25d",
+    "patches": [
+      {
+        "name": "0003-exact-speculative-state.patch",
+        "sha256": "5f893126ddad279ee1d65bbf3640d5a036c64c85cf5921235f5b001d5a721c90"
+      },
+      {
+        "name": "0004-exact-decode-lifecycle-hooks.patch",
+        "sha256": "ffd47640cf6aa6e8607301f28e66a1897d4f632835694c2e17070b9bb172eedb"
+      },
+      {
+        "name": "0005-fail-closed-eagle3-process.patch",
+        "sha256": "b30050c988774508bf0ca12e4921862ec33e1880e6d0f85835fc1bc613272b1b"
+      },
+      {
+        "name": "0006-runtime-state-safety.patch",
+        "sha256": "7aa9e9f1d172088a102744b13fc252a318623010087a1a816705d4c2077293e3"
+      },
+      {
+        "name": "0007-vulkan-resource-lifecycle.patch",
+        "sha256": "38b18acc9717a3836f2a40fab5d2cdda00eddb435fa38dd3330f806a36be3f2a"
+      },
+      {
+        "name": "0008-pq3-cpu-format.patch",
+        "sha256": "fb24b3b5574112fa0eef4e587d88c7fe77dc2e6d32051c8b9560cfb3948beec7"
+      },
+      {
+        "name": "0009-pq3-kv-graph-state.patch",
+        "sha256": "029503cd5ecf8cbb54c19ade3d054a39d773faa2c2f433dc111ec3551cb28ca9"
+      },
+      {
+        "name": "0010-pq3-vulkan-cache-attention.patch",
+        "sha256": "dc2d7839c78ca2e87a5bbff689a71cb47cb17abadb5509553c69324b62f6198e"
+      }
+    ],
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "source_files": [
+      {
+        "path": "Cargo.lock",
+        "sha256": "39f69a3ecbdbbb023dee4707e51e6412cb5988731ada8e884643fb3981d1e606"
+      },
+      {
+        "path": "Cargo.toml",
+        "sha256": "f8c8ce18e7a1e46b01807fab8f6311149bc38c246d79fea847739913c6390c0a"
+      },
+      {
+        "path": "crates/assistant/Cargo.toml",
+        "sha256": "6d9612472c08c947ee00f5f8284917f218ab48e628284a1ca4ad2bfc5460887b"
+      },
+      {
+        "path": "crates/assistant/examples/cache_bench.rs",
+        "sha256": "2361b2265f50627a9da598def469c70995ec33c62d5135f7137a80af706cfaf3"
+      },
+      {
+        "path": "crates/assistant/src/chat/mod.rs",
+        "sha256": "1a38b93ede72d1517e7758130eee9bc9acfef4ed64a9919906bd325d32760287"
+      },
+      {
+        "path": "crates/assistant/src/chat/runner.rs",
+        "sha256": "788097bdafc3024cc2e4114d528651f94b5912abe4009972b58fe12f7f691eab"
+      },
+      {
+        "path": "crates/assistant/src/chat/tests.rs",
+        "sha256": "145631073b61b0b6a9eb94ea818dff74ac8022267b01a4a06516a037928313db"
+      },
+      {
+        "path": "crates/assistant/src/chat/types.rs",
+        "sha256": "099f8f284f90116717418435c69b5ab1eee6151ac0e66c90936b6c78c159a093"
+      },
+      {
+        "path": "crates/assistant/src/engine/context.rs",
+        "sha256": "34add684f79cd5b23cfed38106bf03e0069bcc83b16a24a8f5209f895c781488"
+      },
+      {
+        "path": "crates/assistant/src/engine/context/cache_tests.rs",
+        "sha256": "fa43b71a02e61c46cfce25df005cd961a863d6a5cd1b8f40e3a366b02d02e2d8"
+      },
+      {
+        "path": "crates/assistant/src/engine/context/tests.rs",
+        "sha256": "78b09966f126882e44b925c2c35aaf56994e46ab1dc5a518c683643bcf7527c1"
+      },
+      {
+        "path": "crates/assistant/src/engine/diagnostics.rs",
+        "sha256": "fda6c5a16873747edf4f4e3bccfc99fd7c771fa1f7cbf25354bbdf702031bb08"
+      },
+      {
+        "path": "crates/assistant/src/engine/engine.rs",
+        "sha256": "92ddf9bcb1e807f3f5fc974de23a188a8597cb894e4b6f860a2fdd597ae26e7d"
+      },
+      {
+        "path": "crates/assistant/src/engine/errors.rs",
+        "sha256": "81eec0148b2cba7792d72aa6ea414ddbcd7f8146b11769490a27b287c275645f"
+      },
+      {
+        "path": "crates/assistant/src/engine/helpers.rs",
+        "sha256": "6fd0110c5a5b29ea2cc19ee541fabb8311fcc9bfc15b2ba24a834b665594c2c1"
+      },
+      {
+        "path": "crates/assistant/src/engine/llm.rs",
+        "sha256": "35d2b34a29147ae03966a5a7b98a3c185c78818f2096311ab3926bba091455ac"
+      },
+      {
+        "path": "crates/assistant/src/engine/mod.rs",
+        "sha256": "38834fe77c69611a34dba51c925ad1fb0368bd467fd2d5417745be18c49cde6d"
+      },
+      {
+        "path": "crates/assistant/src/example.rs",
+        "sha256": "bd237e0943ccfce471ba9d1a0cb70fd21046a55a0300e2ba9ceb93c90e1760be"
+      },
+      {
+        "path": "crates/assistant/src/lib.rs",
+        "sha256": "dd6921579b455501466d091ab17196cb4ac74b54b723d1a4756ed0a676823b65"
+      },
+      {
+        "path": "crates/assistant/src/main.rs",
+        "sha256": "edf111e16011b0f91be7ab50b51afe82f194267cb235d0046dc916a6b207cbd6"
+      },
+      {
+        "path": "crates/assistant/src/pipeline/mod.rs",
+        "sha256": "173ca3721b8628464a4bd27a6cc10a74ff4e1b61b13dcc15ce0441982f487678"
+      },
+      {
+        "path": "crates/assistant/src/pipeline/tests.rs",
+        "sha256": "4ca18fd418d7ae68b4c0998ad14a3c98ea36411d055dfe00d7f93c204ca4d389"
+      },
+      {
+        "path": "crates/assistant/src/runtime/mod.rs",
+        "sha256": "cea538a44f436aaab90ec23a7c8d2649b77d8a9e4ef6f73dbdb0e675d9b77967"
+      },
+      {
+        "path": "crates/assistant/src/runtime/tests.rs",
+        "sha256": "188bd186194d9b46d7a2a43b7aa3cd5036eb1f13cff10d82c6a467e3141f2512"
+      },
+      {
+        "path": "crates/assistant/src/runtime/worker.rs",
+        "sha256": "d63f52d6617d59695ad8bf691a30cbd771acc04a0ec0dfc9a152447655719150"
+      },
+      {
+        "path": "crates/assistant/src/tools/builtin.rs",
+        "sha256": "05febdc1580f92766fbd3e2a6c7c845b6930f29474c0904625f5e2ec8895dc4b"
+      },
+      {
+        "path": "crates/assistant/src/tools/mod.rs",
+        "sha256": "6a86eba38f867a565c6fba37cfae36a1d72d4af69b582de61765c302151bd6e4"
+      },
+      {
+        "path": "crates/assistant/src/tools/tests.rs",
+        "sha256": "805f72e6fb67e1cf2d859c034cfc68c9256734ae9952773c1af77cf2184ec287"
+      },
+      {
+        "path": "crates/assistant/tests/cache_quality.rs",
+        "sha256": "f6eb44e4be305480d8e903ff434bc13833489e702df9401485f63988806e0ca8"
+      },
+      {
+        "path": "crates/assistant/tests/inference.rs",
+        "sha256": "f4681511ada151cacc6d55129b6522b0940ca151c7fd0239cc35eed1e62396f6"
+      },
+      {
+        "path": "crates/llama_cpp/Cargo.toml",
+        "sha256": "97dc3570f7a1b9077e7c2f238e50a2be1311da2d6306644a2824c728df5222f5"
+      },
+      {
+        "path": "crates/llama_cpp/benches/decode_hooks.rs",
+        "sha256": "0661a9a864b1ea13e8838149664265f5d5e29d851b852a77f616efe6285ed912"
+      },
+      {
+        "path": "crates/llama_cpp/benches/tensor_transactions.rs",
+        "sha256": "6c3d610c0be8adf248e16fdfb23a946d5c4cc3f40a24693c996a2bef8cfc8d6b"
+      },
+      {
+        "path": "crates/llama_cpp/src/cfile.rs",
+        "sha256": "d466b801f5ff37538c117a983d1950e88e3e836375d5447f77527af8cc471d95"
+      },
+      {
+        "path": "crates/llama_cpp/src/chat.rs",
+        "sha256": "26ce14bd437d9ec0bb8afba9faff50eddc2b5bce238a375a33a1723ff162b14a"
+      },
+      {
+        "path": "crates/llama_cpp/src/common.rs",
+        "sha256": "e5bdf7100c07a7f57764d811b2fe6f3c145b63b640756ffd4986b5268fe4aeb5"
+      },
+      {
+        "path": "crates/llama_cpp/src/common_sampler.rs",
+        "sha256": "a4972430d8fadef093b8f25bcaa306523efec0dc1f6409072d003d23adc2270f"
+      },
+      {
+        "path": "crates/llama_cpp/src/context.rs",
+        "sha256": "1881ce94b8262135c4480a863ade0d081cba803b0365b4b22fd9aa339b51815b"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/cache.rs",
+        "sha256": "fb0388c5b39a7dd187822a121c42e6332df86982afe10f8c4d2202cea9c5a2cc"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/kv_cache.rs",
+        "sha256": "d61c2aa0aa0b83292ac59519544ee51c2be88e43b2117b7d28ab61ac7da70f9d"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/memory_breakdown.rs",
+        "sha256": "9ed905c159f7d84c3251e2f948d12417378979e49c6821f310deaf627d292903"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/params/advanced.rs",
+        "sha256": "090603197360401c83e9928d8022ed584008074065d911753b5d6542575b1142"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/params/mod.rs",
+        "sha256": "a80235b0b4d88887b55226c3287c22d6be2f048b5efea5f21125f5baf4f3de9b"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/params/types.rs",
+        "sha256": "cb234578e7d4ae6457b5fc3d4c4969f2d2f3356b1ac34686515ac0816c05e816"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/perf.rs",
+        "sha256": "a79da307a9d329e541aa9bb18bb0308eea8faa232cd8ec5e36e23a179abc3f1d"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/session.rs",
+        "sha256": "a7da3cbf4f8cb2d1df9a4af1237c8595dcd87f9642717ea5568f9fdd4b8734e1"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/tensor_capture.rs",
+        "sha256": "eb1b16cfdc69463d4c11ddabd1dcc78cd449e2cc3fc5477caaa807b6142ed552"
+      },
+      {
+        "path": "crates/llama_cpp/src/context/tensor_transaction.rs",
+        "sha256": "7e21646d5590bfa9f77a617efb1a9179a64ba8edeeb04b0f88d813cbacbf0e35"
+      },
+      {
+        "path": "crates/llama_cpp/src/eagle.rs",
+        "sha256": "b8689de0f036d47ef8dc741e96b79d64be43db3d73c5d55654699c1e880a494e"
+      },
+      {
+        "path": "crates/llama_cpp/src/fit.rs",
+        "sha256": "8f452bb95677adbc7c597b8fac20f664684d9280f09af82c0ad425e9a10e25d1"
+      },
+      {
+        "path": "crates/llama_cpp/src/ggml.rs",
+        "sha256": "90d035558fff13f1448ae8bc3fbca408ec2d510bd0a1fdbf2059638ddc77ad7d"
+      },
+      {
+        "path": "crates/llama_cpp/src/grammar/tests.rs",
+        "sha256": "66e8207fcfbfc83a600be6f2a5f17f5d8d8ad3e20e09a879312fd934ffd61ddb"
+      },
+      {
+        "path": "crates/llama_cpp/src/lib.rs",
+        "sha256": "74af8a8d79272e0ba497dd709052e29ee7d8121da0e3cc0ebba1d0be44c1e77c"
+      },
+      {
+        "path": "crates/llama_cpp/src/llama_backend.rs",
+        "sha256": "592b8751ccc14eeeb9cbf963faddf8eb33290cd1435897da213c3f360bca66fe"
+      },
+      {
+        "path": "crates/llama_cpp/src/llama_batch.rs",
+        "sha256": "42832c3716e2d2889bb34e44088bc34b3ce87e37436aa80b2664c9a01fa76721"
+      },
+      {
+        "path": "crates/llama_cpp/src/llama_batch_ext.rs",
+        "sha256": "0eafd6e21a06fc890b1d2b19788f5791268c66100c6b9c2f58d96930879831dc"
+      },
+      {
+        "path": "crates/llama_cpp/src/logging.rs",
+        "sha256": "0d7aaa75e1984adddbfd8088b5a67adfd62b260484a28938724d457a9c1590b3"
+      },
+      {
+        "path": "crates/llama_cpp/src/model.rs",
+        "sha256": "6fe2a23cf425ab82bdef7d09887d0f951c15a5b1f0e156d80a91d9662eeb30ab"
+      },
+      {
+        "path": "crates/llama_cpp/src/model/params.rs",
+        "sha256": "ad3f67ed8429f51f15a12f1bd6a1d18bd678d55a7932fd7a23e2d32dc313801d"
+      },
+      {
+        "path": "crates/llama_cpp/src/model/params/kv_overrides.rs",
+        "sha256": "1a6c40e3d8787c5d4bbc1dff0f05bfd917c8f108bb5125444e4f00b13c1d1743"
+      },
+      {
+        "path": "crates/llama_cpp/src/mtmd.rs",
+        "sha256": "a5a5b51f4e05e7260c26b43ea0b9ee8321754638396a8145c8038257df385a98"
+      },
+      {
+        "path": "crates/llama_cpp/src/mtp.rs",
+        "sha256": "fcdcb5a0aa6176d7d1641ee8943b398685b152582e9d344805522b64f2fed9b9"
+      },
+      {
+        "path": "crates/llama_cpp/src/ngram.rs",
+        "sha256": "18f2a6401ff0f9b4a8eefc5fd9bb2fdc12bc21b3469a7d4a4e336398d94a4829"
+      },
+      {
+        "path": "crates/llama_cpp/src/pq3_reference.rs",
+        "sha256": "bbdab0474a1681b42a4a87a4f9e45e63fc057991729ae02c1bf250e39b8db4c2"
+      },
+      {
+        "path": "crates/llama_cpp/src/prelude.rs",
+        "sha256": "42f2f3972c244a124e983e54b87ec4bc1d54b67d2ddae16b803d183260ffb2f6"
+      },
+      {
+        "path": "crates/llama_cpp/src/quantize.rs",
+        "sha256": "1464e6c8cb079aa74ebd1b8dfc5c0d6bf4536c3a87303bb83462326fe219c721"
+      },
+      {
+        "path": "crates/llama_cpp/src/rpc/backend.rs",
+        "sha256": "55f12e2213385713ed14d720fc1fe17ed8bc393ac3fb9d9ec757de62f94b18ab"
+      },
+      {
+        "path": "crates/llama_cpp/src/rpc/error.rs",
+        "sha256": "ef7d80ed751676f49e4fdd99e9d0c6a6abb55e75af7d4b8aaf23c60461badb26"
+      },
+      {
+        "path": "crates/llama_cpp/src/rpc/mod.rs",
+        "sha256": "7275b7c9727eee1b8b119b3207912dc86ec315ee7ce07e489f6b754dd23ba2e1"
+      },
+      {
+        "path": "crates/llama_cpp/src/rpc/server.rs",
+        "sha256": "c4589b787f88df7d02358f5508d6021bf517e77298ead12a887bcf3f3d098e22"
+      },
+      {
+        "path": "crates/llama_cpp/src/runtime.rs",
+        "sha256": "acaa30043a060868a8650d07284e1f9db4f746e5a60287d309f9a9b8d477d31b"
+      },
+      {
+        "path": "crates/llama_cpp/src/sampling.rs",
+        "sha256": "39336552974c57bd2abc9896edf9d97287e45c5a607583e465b58276c6109202"
+      },
+      {
+        "path": "crates/llama_cpp/src/shim.rs",
+        "sha256": "93c4065892440a4c90d9ab986d519abe21eabcb2726fef676cbc922db3b3fb4d"
+      },
+      {
+        "path": "crates/llama_cpp/src/speculative.rs",
+        "sha256": "74aed3ad0aefcfcdc526ae7678e7a1f4048190b662c39bf9700d2871e99c9363"
+      },
+      {
+        "path": "crates/llama_cpp/src/token.rs",
+        "sha256": "e438c7dcfff2b5aba4145e9a983277cded045db78b0ae0eef31027ee24df04c3"
+      },
+      {
+        "path": "crates/llama_cpp/src/token/data.rs",
+        "sha256": "7b73c08307704394d2b07471d9a0b6744014574c98b93b180967b18a224274b9"
+      },
+      {
+        "path": "crates/llama_cpp/src/token/data_array.rs",
+        "sha256": "53f772e97e3940787c915b8c02f2d424e20e7598ba59059f7db25fee189978f7"
+      },
+      {
+        "path": "crates/llama_cpp/src/token/detokenizer.rs",
+        "sha256": "0a683877fe0929b8489ff82a5388fc40d7aa748de9a4354b0e3df5b7bc0c53d6"
+      },
+      {
+        "path": "crates/llama_cpp/src/token_type.rs",
+        "sha256": "e3c0530e34cd97d20c1e1e7606ec347f43e885bb57c41f4b40ff1c8480bd4b46"
+      },
+      {
+        "path": "crates/llama_cpp/tests/support/mod.rs",
+        "sha256": "7fba905b9866a831e364690a3a000b5f10839151d4e503e4416358340a8d4fbd"
+      },
+      {
+        "path": "crates/llama_cpp/tests/support/model.rs",
+        "sha256": "ef950a31d49e8ba107ad4f6a8b66ce4178c58cf948a2f7e7ffca537b35252ec8"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_backend_lifecycle.rs",
+        "sha256": "9256a028dfae5e3229fb680d6327b3f3aeff3f2b2b4505825f1c640d560b2cf4"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_batch_ext.rs",
+        "sha256": "9a055527293995563fd79249625bbb88366591e7ab9a74f285b5c0e6961eddf6"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_chat.rs",
+        "sha256": "b8df98afd867da8e128accab396f89488328a0a4bdca8fc0e29e51b2c8210219"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_context_params.rs",
+        "sha256": "6be3d9226f3afb3ea393937ae46a65eea51db1eca7a1f192c163e94ffbd31504"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_context_rotation.rs",
+        "sha256": "bdd628627d98dd4da4c3d618988359867abe2507fd40c7c1779df311bdc81a37"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_fit.rs",
+        "sha256": "f998fbcca63c0015c23e1254167cbfbe57454726a92ed6c4876fdb1c27993520"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_ggml.rs",
+        "sha256": "380113ce320170d2dc1c9b3cb3d23b640d90e01ad0b44bb25f59ec814c85aedb"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_integration.rs",
+        "sha256": "57fdb9a6aa9eecc41e5fe5ac7561993ea4cb5c1853bb5dbe834185f3fab8a408"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_lib.rs",
+        "sha256": "2af232808e16a27499ea137960cc97eca3005b66eab68d889730320bed8c012c"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_logging_concurrency.rs",
+        "sha256": "a7a80fd9f907a466d6d0728dda100cb353478e0ff5a1ab42d9405744dabf7cd6"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_lora.rs",
+        "sha256": "4c92a4481d900c969e76f0b042669493d6491012101b027849e781319f0b2f43"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_model.rs",
+        "sha256": "8ec6f464ab439534d68fae232fda03d665fe1577617f50a9ea7a15b761a068b6"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_model_params.rs",
+        "sha256": "cf47138b7dc24ab96d862d6a243742991ae9f25d7491018d6fdc517c1f89f9e8"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_pq3_reference.rs",
+        "sha256": "e6ef505a1ff09884e56dc044be790d7d6e5f6cb10e9075b3cb33e69704d3e061"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_prelude.rs",
+        "sha256": "892dddf66d915aef0bbb9dc063e8de1085d0eb578e5780127038afb96821f28c"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_q1.rs",
+        "sha256": "2f5b411ca0651982be6b5f2e7c2cc3f8477537af2df57c2580b3bc3795bb150d"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_quant_preview.rs",
+        "sha256": "f1935b02ca11eda96684469d496d5c251f7e3537f6cdccb3f3e593b234ead724"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_sampler.rs",
+        "sha256": "0c5adbe43bc3ea307171cad416c3a4ad4c8d3f323ad4eee380668e7118bd3290"
+      },
+      {
+        "path": "crates/llama_cpp/tests/test_vulkan_lifecycle.rs",
+        "sha256": "ef36d6e41c310c82438c8889e270dae91a5ad48fbc5c6357bc2ce27c9a1fb2f7"
+      },
+      {
+        "path": "crates/llama_cpp_sys/Cargo.toml",
+        "sha256": "65765f5b0e8213266fb03ea16ee6bfe75cfbe2f792f355cd57e2a17a1ec9ca61"
+      },
+      {
+        "path": "crates/llama_cpp_sys/build.rs",
+        "sha256": "79f133717a9433eaf195026932dabbfc643ea3d2e79ccb7d633049eda0dee909"
+      },
+      {
+        "path": "crates/llama_cpp_sys/chat_shim/chat_shim.cpp",
+        "sha256": "baf44ba707f66103ba6e67a04fc0ed69f2d0ee2a19d7c5c6a14556819f7bfed0"
+      },
+      {
+        "path": "crates/llama_cpp_sys/chat_shim/chat_shim.h",
+        "sha256": "c3210c821e0e52cb77b689e1dc6ebda7ec827fbfafd1006b7bca568627c3a243"
+      },
+      {
+        "path": "crates/llama_cpp_sys/common_shim/common_shim.cpp",
+        "sha256": "373ba0b972430ed4c6283305da23eee341d4cf223d4df7d2c20f341cacde5a64"
+      },
+      {
+        "path": "crates/llama_cpp_sys/common_shim/common_shim.h",
+        "sha256": "d068b2c435e7cc6ca2fc6b2a5664bd689e4566642b00a4c9794893978024b46b"
+      },
+      {
+        "path": "crates/llama_cpp_sys/ext_shim/ext_shim.cpp",
+        "sha256": "b6ea44188d3aa8ece23a75cfe76f93e06106ac13ad334d0b7b03b239a78d5022"
+      },
+      {
+        "path": "crates/llama_cpp_sys/ext_shim/ext_shim.h",
+        "sha256": "5f306b45002f75f729e0578eb74eae688b78f38f804bbbf1de29b93acb5710fb"
+      },
+      {
+        "path": "crates/llama_cpp_sys/mtp_shim/mtp_shim.cpp",
+        "sha256": "9ddddcf93234c6cd079a6aa876074605be6d1dd5f465d48905b679a6bd9f47a2"
+      },
+      {
+        "path": "crates/llama_cpp_sys/mtp_shim/mtp_shim.h",
+        "sha256": "e02519b4701335d75c77c4f27b38432bcb738bdc08aa4f386b6254d12117e8c1"
+      },
+      {
+        "path": "crates/llama_cpp_sys/patch_staging.rs",
+        "sha256": "ed76cde2e9c5dede1197ea3784d547ef75c5a3abbafb980d43c20361cbc254da"
+      },
+      {
+        "path": "crates/llama_cpp_sys/patch_verification.rs",
+        "sha256": "fef7aedaedbfafad8a4aa662ec16788202cbf85da3101419aacc02b32c8368c1"
+      },
+      {
+        "path": "crates/llama_cpp_sys/prebuilt_download.rs",
+        "sha256": "8fba010a8785898ddbf4411ba1bb20fa73f9b864747a98d9b3bcb5c35f6c1296"
+      },
+      {
+        "path": "crates/llama_cpp_sys/shim_support/shim_support.cpp",
+        "sha256": "25d605f5e81e77dd4889e315f47ec016fd9073361f623136cbef41272491eeb3"
+      },
+      {
+        "path": "crates/llama_cpp_sys/shim_support/shim_support.h",
+        "sha256": "b6eade529cf563d627d0c9e84deefd36e34155d1c235b0e770158d25f2573698"
+      },
+      {
+        "path": "crates/llama_cpp_sys/shim_support/shim_support_impl.hpp",
+        "sha256": "42dc54c369fc03f63fbb0a3313cb4a3855e7ddc2e0195afeb4a0836892ea68d5"
+      },
+      {
+        "path": "crates/llama_cpp_sys/src/common.rs",
+        "sha256": "fba87d2899f7f9945c73063fe2039d639caf43eb91a93a6d2cfe7c687210859b"
+      },
+      {
+        "path": "crates/llama_cpp_sys/src/lib.rs",
+        "sha256": "885a86dc1ed4eb81b5008df4c27eb8e5d4ff4c021c351d66434114c9b2f09900"
+      },
+      {
+        "path": "crates/llama_cpp_sys/tests/patch_staging.rs",
+        "sha256": "c6cf2335859927bdf598e49a344dc286a3b5c1d2970f0d17812c07e5224c092c"
+      },
+      {
+        "path": "crates/llama_cpp_sys/tests/patch_verification.rs",
+        "sha256": "d1a4d9e1b2bfc1cfb9ad478514ea23b9fe59485734d79e5fad96a8e5df5494d0"
+      },
+      {
+        "path": "crates/llama_cpp_sys/wrapper.h",
+        "sha256": "f7ea879f51ff898dc255a238dfba8715841ceb8fda181e3bade1b1d17648408d"
+      }
+    ],
+    "working_diff_sha256": "8298c01feca865e172712aa6c309c7012e0d06d248195582d6442b9ecd97a659",
+    "working_tree_status": "M README.md\n M crates/assistant/examples/cache_bench.rs\n M crates/assistant/src/engine/context/cache_tests.rs\n M crates/assistant/src/engine/diagnostics.rs\n M crates/assistant/src/engine/llm.rs\n M crates/assistant/src/main.rs\n M crates/assistant/tests/cache_quality.rs\n M crates/llama_cpp/README.md\n M crates/llama_cpp/src/context.rs\n M crates/llama_cpp/src/context/cache.rs\n M crates/llama_cpp/src/context/kv_cache.rs\n M crates/llama_cpp/src/context/session.rs\n M crates/llama_cpp/src/lib.rs\n M crates/llama_cpp/src/llama_backend.rs\n M crates/llama_cpp/src/quantize.rs\n M crates/llama_cpp/tests/test_batch_ext.rs\n M crates/llama_cpp/tests/test_model.rs\n M crates/llama_cpp/tests/test_pq3_reference.rs\n M crates/llama_cpp_sys/build.rs\n M crates/llama_cpp_sys/ext_shim/ext_shim.cpp\n M crates/llama_cpp_sys/ext_shim/ext_shim.h\n M crates/llama_cpp_sys/patch_staging.rs\n M crates/llama_cpp_sys/tests/patch_staging.rs\n M crates/llama_cpp_sys/tests/patch_verification.rs\n M docs/bindings-fork.md\n M docs/cache-quality-evaluation.md\n M docs/docs-map.md\n M docs/pq3-reference-contract.md\n M docs/turboquant-implementation-plan.md\n M scripts/cache-quality-results.py\n M scripts/cache-results.py\n M scripts/tests/test_cache_quality_results.py\n?? crates/llama_cpp_sys/patches/0009-pq3-kv-graph-state.patch\n?? crates/llama_cpp_sys/patches/0010-pq3-vulkan-cache-attention.patch\n?? docs/benchmarks/pq3-quality-2026-11-04.json\n?? docs/decisions/0002-pq3-graph-transform.md",
+    "workspace_revision": "d4a04b181932e2d44efb670f9d738209c4aa7416"
+  },
+  "measurement_contract": {
+    "build": "release",
+    "threads": 4,
+    "batch": 512,
+    "microbatch": 512,
+    "warm_trials": 3,
+    "cold_trials": 1,
+    "reverse_warm_trials": 5,
+    "decode_tokens": 64,
+    "corpus": "representative authored fixture concatenation, repeated and tokenizer-bounded to the recorded prefix",
+    "isolation": "new process per profile; one resident model/context; normal synchronization boundaries; no concurrent build or model job during timing",
+    "summary_codec": "pre-inference identity; observed_codec contains completed post-inference counters/path",
+    "memory": "native model+context+compute allocation snapshots sum host and device buffers; payload is separate; device peaks not measured",
+    "pairing": "same model, executable, source manifests, native patch hashes, prompt-text hashes within each matrix, and fixed batch/ubatch",
+    "quality_artifact": "pq3-quality-2026-11-04.json",
+    "quality_artifact_sha256": "d2b17ec525af94d812a19bcb4fa3b5031cc68baaba79316468df4813b33dc4ee"
+  },
+  "matrices": {
+    "4k": {
+      "raw_jsonl_sha256": "b5dea310639294a6fca35916016e99640c19bf058167b9df829b8b1108165055",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [
+        {
+          "status": "ok",
+          "profile": "full-f16",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2369.75191449052,
+            "min": 2345.095517160296,
+            "max": 2383.70190749879
+          },
+          "decode_tokens_per_second": {
+            "median": 54.96817338466639,
+            "min": 54.73337240554942,
+            "max": 55.46943324162922
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.43523986800000003,
+            "min": 0.432112141,
+            "max": 0.439775128
+          },
+          "kv_payload_estimate_bytes": 92274688,
+          "context_bytes": 92913664,
+          "compute_bytes": 312529008,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 2039873648,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-f16",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2353.601910186988,
+            "min": 2338.6633946268767,
+            "max": 2360.5773240909016
+          },
+          "decode_tokens_per_second": {
+            "median": 54.95844092074297,
+            "min": 54.837768109624115,
+            "max": 55.440713534388046
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.43780429099999996,
+            "min": 0.437139763,
+            "max": 0.440887531
+          },
+          "kv_payload_estimate_bytes": 58195968,
+          "context_bytes": 58834944,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 1998979184,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q8",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2284.311550158468,
+            "min": 2281.776403128318,
+            "max": 2306.4111597055376
+          },
+          "decode_tokens_per_second": {
+            "median": 54.812387133586896,
+            "min": 54.464905329327074,
+            "max": 55.36163518506233
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.451759221,
+            "min": 0.446609713,
+            "max": 0.45179513499999996
+          },
+          "kv_payload_estimate_bytes": 30916608,
+          "context_bytes": 32456704,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 1972600944,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q4",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2289.4853286840025,
+            "min": 2279.063221242691,
+            "max": 2307.6441734106347
+          },
+          "decode_tokens_per_second": {
+            "median": 54.97533834239124,
+            "min": 54.501364520858075,
+            "max": 55.28114436971789
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.45074349700000005,
+            "min": 0.446148087,
+            "max": 0.45256801399999996
+          },
+          "kv_payload_estimate_bytes": 16367616,
+          "context_bytes": 17907712,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 1958051952,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "full-pq3",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2167.7027435493787,
+            "min": 2159.4053274402036,
+            "max": 2179.8388973884394
+          },
+          "decode_tokens_per_second": {
+            "median": 51.813245281062336,
+            "min": 51.557285596077406,
+            "max": 52.61537938167212
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.475887452,
+            "min": 0.47294210200000003,
+            "max": 0.47812144
+          },
+          "kv_payload_estimate_bytes": 18022400,
+          "context_bytes": 20108800,
+          "compute_bytes": 312529008,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 1967068784,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 2904,
+            "completed_indexed_writes": 5808,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "CooperativeMatrix2"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        },
+        {
+          "status": "ok",
+          "profile": "compact-pq3",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2170.250947727819,
+            "min": 2162.6698004934788,
+            "max": 2174.2163970699553
+          },
+          "decode_tokens_per_second": {
+            "median": 52.53341982041572,
+            "min": 52.365510306267176,
+            "max": 53.17262549779184
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.47485079399999996,
+            "min": 0.473849535,
+            "max": 0.47762517
+          },
+          "kv_payload_estimate_bytes": 11366400,
+          "context_bytes": 13452800,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 1953597040,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 2904,
+            "completed_indexed_writes": 5808,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "CooperativeMatrix2"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        }
+      ],
+      "observations": [
+        {
+          "profile": "full-f16",
+          "load_seconds": 0.60184938,
+          "context_creation_seconds": 0.020498096,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                },
+                {
+                  "cells": 4096,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 92274688,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 25194592,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 287334416,
+                "context_bytes": 92913664,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "f16",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Full",
+              "value": "f16"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664188416,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.3201818969999999,
+              "decode_tokens_per_second": 48.47816815655063,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 10.786847339,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 94.9304247866486,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 10.960151949,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.153788605,
+              "decode_tokens_per_second": 55.46943324162922,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.429583916,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2383.70190749879,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.432112141,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.16431011,
+              "decode_tokens_per_second": 54.96817338466639,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.436655988,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2345.095517160296,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.439775128,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.16930489,
+              "decode_tokens_per_second": 54.73337240554942,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.432112743,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2369.75191449052,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.43523986800000003,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-f16",
+          "load_seconds": 0.593763426,
+          "context_creation_seconds": 0.019219224,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 58195968,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 58834944,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "f16",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "f16"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664040960,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.147785607,
+              "decode_tokens_per_second": 55.759542208652206,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.436955989,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2343.4854442514575,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.442171738,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.154386297,
+              "decode_tokens_per_second": 55.440713534388046,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.435077825,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2353.601910186988,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.43780429099999996,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.164516295,
+              "decode_tokens_per_second": 54.95844092074297,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.433792187,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2360.5773240909016,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.437139763,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.1670788619999999,
+              "decode_tokens_per_second": 54.837768109624115,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.437856941,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2338.6633946268767,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.440887531,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q8",
+          "load_seconds": 0.588689017,
+          "context_creation_seconds": 0.018104334,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 30916608,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 32456704,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q8_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q8_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664028672,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.301176099,
+              "decode_tokens_per_second": 49.18627082774289,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.487415619,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 688.4424144264683,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.638064669,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.156035218,
+              "decode_tokens_per_second": 55.36163518506233,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.443979815,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2306.4111597055376,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.446609713,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.16761928,
+              "decode_tokens_per_second": 54.812387133586896,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.448773157,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2281.776403128318,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45179513499999996,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.175068599,
+              "decode_tokens_per_second": 54.464905329327074,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.448275105,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2284.311550158468,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.451759221,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q4",
+          "load_seconds": 0.561635092,
+          "context_creation_seconds": 0.017956023,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 16367616,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 17907712,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q4_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q4_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664253952,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.304345042,
+              "decode_tokens_per_second": 49.066771398054655,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.4678305790000001,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 697.6281967756988,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.624238182,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.157718436,
+              "decode_tokens_per_second": 55.28114436971789,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.443742589,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2307.6441734106347,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.446148087,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.164158365,
+              "decode_tokens_per_second": 54.97533834239124,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.449307413,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2279.063221242691,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45256801399999996,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.174282526,
+              "decode_tokens_per_second": 54.501364520858075,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.447262093,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2289.4853286840025,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45074349700000005,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "full-pq3",
+          "load_seconds": 0.605043355,
+          "context_creation_seconds": 0.022576113,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 18022400,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 25194592,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 287334416,
+                "context_bytes": 20108800,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Full",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663979520,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.410851442,
+              "decode_tokens_per_second": 45.36267823441045,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.724227014,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 593.8893148556133,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.92991125,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.21637439,
+              "decode_tokens_per_second": 52.61537938167212,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.469759486,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2179.8388973884394,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.47294210200000003,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.235205393,
+              "decode_tokens_per_second": 51.813245281062336,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.472389493,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2167.7027435493787,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.475887452,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.241337655,
+              "decode_tokens_per_second": 51.557285596077406,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.474204628,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2159.4053274402036,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.47812144,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-pq3",
+          "load_seconds": 0.505633112,
+          "context_creation_seconds": 0.016755894,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 11366400,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 13452800,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663643648,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.201311131,
+              "decode_tokens_per_second": 53.2751244440105,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.47437661,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2158.6224497873113,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.480076118,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.203626855,
+              "decode_tokens_per_second": 53.17262549779184,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.470974279,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2174.2163970699553,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.473849535,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.218272106,
+              "decode_tokens_per_second": 52.53341982041572,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.471834836,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2170.250947727819,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.47485079399999996,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.222178484,
+              "decode_tokens_per_second": 52.365510306267176,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.473488833,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2162.6698004934788,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.47762517,
+              "trial": 3
+            }
+          ]
+        }
+      ]
+    },
+    "near4k": {
+      "raw_jsonl_sha256": "a204ac62370c393334b8c354d07a09bcd2479d9a169d2eaaf7764e02546f0e11",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [
+        {
+          "status": "ok",
+          "profile": "compact-f16",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2322.826362768347,
+            "min": 2319.9214267800467,
+            "max": 2323.715584518217
+          },
+          "decode_tokens_per_second": {
+            "median": 53.58044778734049,
+            "min": 53.48806771637512,
+            "max": 53.738349150155635
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.510616004,
+            "min": 1.5104136289999999,
+            "max": 1.511817217
+          },
+          "kv_payload_estimate_bytes": 58195968,
+          "context_bytes": 58834944,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": null,
+          "total_native_bytes": 1998979184,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q8",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2249.3193598176954,
+            "min": 2245.1115348766975,
+            "max": 2254.4400092917713
+          },
+          "decode_tokens_per_second": {
+            "median": 53.76104965868928,
+            "min": 53.64195215780398,
+            "max": 53.86021627605191
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.559491576,
+            "min": 1.556305445,
+            "max": 1.5625035239999998
+          },
+          "kv_payload_estimate_bytes": 30916608,
+          "context_bytes": 32456704,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": null,
+          "total_native_bytes": 1972600944,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q4",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2265.4088796389124,
+            "min": 2264.0683345607,
+            "max": 2266.535574393566
+          },
+          "decode_tokens_per_second": {
+            "median": 53.80738215440725,
+            "min": 53.652661500339555,
+            "max": 53.877758655943886
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.548669349,
+            "min": 1.548368864,
+            "max": 1.550257866
+          },
+          "kv_payload_estimate_bytes": 16367616,
+          "context_bytes": 17907712,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": null,
+          "total_native_bytes": 1958051952,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-pq3",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2007.5373609686237,
+            "min": 2006.0286859133164,
+            "max": 2012.3157946747795
+          },
+          "decode_tokens_per_second": {
+            "median": 50.238708359291365,
+            "min": 49.84894267113469,
+            "max": 50.278064761872706
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.747624713,
+            "min": 1.7435567879999998,
+            "max": 1.7488234799999998
+          },
+          "kv_payload_estimate_bytes": 11366400,
+          "context_bytes": 13452800,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 1953597040,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 3124,
+            "completed_indexed_writes": 6248,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "CooperativeMatrix2"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        }
+      ],
+      "observations": [
+        {
+          "profile": "compact-f16",
+          "load_seconds": 0.595633604,
+          "context_creation_seconds": 0.01838591,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 58195968,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 58834944,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "f16",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "f16"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664184320,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.175303686,
+              "decode_tokens_per_second": 54.454011131213285,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.499052636,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2334.807941994106,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.504003828,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.196528548,
+              "decode_tokens_per_second": 53.48806771637512,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.506785034,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2322.826362768347,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.510616004,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.194465568,
+              "decode_tokens_per_second": 53.58044778734049,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.506208429,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2323.715584518217,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.5104136289999999,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.190955826,
+              "decode_tokens_per_second": 53.738349150155635,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.508671785,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2319.9214267800467,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.511817217,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q8",
+          "load_seconds": 0.657735193,
+          "context_creation_seconds": 0.018783497,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 30916608,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 32456704,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q8_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q8_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663905792,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.177277802,
+              "decode_tokens_per_second": 54.36270002821305,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.549430424,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2258.8945884800823,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.555054771,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.190452947,
+              "decode_tokens_per_second": 53.76104965868928,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.556026264,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2249.3193598176954,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.559491576,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.193096027,
+              "decode_tokens_per_second": 53.64195215780398,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.552491965,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2254.4400092917713,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.556305445,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.188261103,
+              "decode_tokens_per_second": 53.86021627605191,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.558942594,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2245.1115348766975,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.5625035239999998,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q4",
+          "load_seconds": 0.642709471,
+          "context_creation_seconds": 0.018970653,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 16367616,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 17907712,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q4_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q4_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664208896,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.175165182,
+              "decode_tokens_per_second": 54.46042903609443,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.5426512049999999,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2268.8213568017795,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.551804746,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.189427871,
+              "decode_tokens_per_second": 53.80738215440725,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.544206956,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2266.535574393566,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.548368864,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.192857879,
+              "decode_tokens_per_second": 53.652661500339555,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.545889736,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2264.0683345607,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.550257866,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.18787421,
+              "decode_tokens_per_second": 53.877758655943886,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.544974963,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2265.4088796389124,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.548669349,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-pq3",
+          "load_seconds": 0.623130688,
+          "context_creation_seconds": 0.019109054,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 11366400,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 13452800,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664069632,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.2559478020000001,
+              "decode_tokens_per_second": 50.95753175258154,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.739093899,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2012.5422796391513,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.744887297,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.272920911,
+              "decode_tokens_per_second": 50.278064761872706,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.7392896329999998,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2012.3157946747795,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.7435567879999998,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.273918102,
+              "decode_tokens_per_second": 50.238708359291365,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.743429571,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2007.5373609686237,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.747624713,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.283878786,
+              "decode_tokens_per_second": 49.84894267113469,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.7447407529999999,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2006.0286859133164,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.7488234799999998,
+              "trial": 3
+            }
+          ]
+        }
+      ]
+    },
+    "32k": {
+      "raw_jsonl_sha256": "365e66825020f0288d542fe65ec7ffa4798887ce737558986152c3293bbe5a43",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [
+        {
+          "status": "ok",
+          "profile": "compact-f16",
+          "context": 32768,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2310.2192505683493,
+            "min": 2297.0207190394017,
+            "max": 2338.3171625533287
+          },
+          "decode_tokens_per_second": {
+            "median": 55.03504901507028,
+            "min": 54.90106979915792,
+            "max": 55.218864425485336
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.446279731,
+            "min": 0.44164429099999997,
+            "max": 0.44863064399999997
+          },
+          "kv_payload_estimate_bytes": 410517504,
+          "context_bytes": 411156480,
+          "compute_bytes": 364433520,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 2410020976,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q8",
+          "context": 32768,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2252.4766200405766,
+            "min": 2245.2633948637317,
+            "max": 2273.558118544333
+          },
+          "decode_tokens_per_second": {
+            "median": 54.74315904443862,
+            "min": 54.68312867394901,
+            "max": 55.07947638826586
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.45724200699999995,
+            "min": 0.45446427699999997,
+            "max": 0.45922651099999995
+          },
+          "kv_payload_estimate_bytes": 218087424,
+          "context_bytes": 219627520,
+          "compute_bytes": 364433520,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 2218492016,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q4",
+          "context": 32768,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2248.259531510006,
+            "min": 2246.9738484719833,
+            "max": 2259.2476333840495
+          },
+          "decode_tokens_per_second": {
+            "median": 54.44723334516812,
+            "min": 54.31865600924677,
+            "max": 55.2212784359277
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.45827655899999997,
+            "min": 0.45730130100000005,
+            "max": 0.46154798999999996
+          },
+          "kv_payload_estimate_bytes": 115458048,
+          "context_bytes": 116998144,
+          "compute_bytes": 364433520,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 2115862640,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-pq3",
+          "context": 32768,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 2150.8076688173246,
+            "min": 2150.3123835866495,
+            "max": 2157.2010734030305
+          },
+          "decode_tokens_per_second": {
+            "median": 52.03513481574532,
+            "min": 51.44631036442979,
+            "max": 52.75574458147664
+          },
+          "time_to_first_text_seconds": {
+            "median": 0.479729258,
+            "min": 0.479445236,
+            "max": 0.480399494
+          },
+          "kv_payload_estimate_bytes": 80179200,
+          "context_bytes": 82265600,
+          "compute_bytes": 364433520,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 2081130096,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 2904,
+            "completed_indexed_writes": 5808,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "CooperativeMatrix2"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        }
+      ],
+      "observations": [
+        {
+          "profile": "compact-f16",
+          "load_seconds": 0.634545911,
+          "context_creation_seconds": 0.037594411,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 32768,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 0,
+                  "key_type": "F16",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 0,
+                  "value_type": "F16"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 32768,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 410517504,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 51146848,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 313286672,
+                "context_bytes": 411156480,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 32768,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "f16",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "f16"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664421888,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.162226602,
+              "decode_tokens_per_second": 55.06671408989139,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.438608609,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2334.65549692391,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.44452630099999996,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.159024197,
+              "decode_tokens_per_second": 55.218864425485336,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.443247973,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2310.2192505683493,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.446279731,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.162895303,
+              "decode_tokens_per_second": 55.03504901507028,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.437921774,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2338.3171625533287,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.44164429099999997,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.165733204,
+              "decode_tokens_per_second": 54.90106979915792,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.445794847,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2297.0207190394017,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.44863064399999997,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q8",
+          "load_seconds": 0.62479646,
+          "context_creation_seconds": 0.02867519,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 32768,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q8_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q8_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 32768,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 218087424,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 51146848,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 313286672,
+                "context_bytes": 219627520,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 32768,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q8_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q8_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663549440,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.159077592,
+              "decode_tokens_per_second": 55.21632066889271,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.452700818,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2261.9795663810796,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.45861283,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.161957306,
+              "decode_tokens_per_second": 55.07947638826586,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.456071213,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2245.2633948637317,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45922651099999995,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.169095849,
+              "decode_tokens_per_second": 54.74315904443862,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.450395348,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2273.558118544333,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45446427699999997,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.170379266,
+              "decode_tokens_per_second": 54.68312867394901,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.454610712,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2252.4766200405766,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45724200699999995,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-q4",
+          "load_seconds": 0.557504333,
+          "context_creation_seconds": 0.025721142,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 32768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 32768,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 115458048,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 51146848,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 313286672,
+                "context_bytes": 116998144,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 32768,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q4_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q4_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664528384,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.15552517,
+              "decode_tokens_per_second": 55.3860717720238,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.451513274,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2267.9288937139863,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.456879448,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.15897353,
+              "decode_tokens_per_second": 55.2212784359277,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.45572404,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2246.9738484719833,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45827655899999997,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.178232392,
+              "decode_tokens_per_second": 54.31865600924677,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.453248234,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2259.2476333840495,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.45730130100000005,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.1754499919999999,
+              "decode_tokens_per_second": 54.44723334516812,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.455463431,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2248.259531510006,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.46154798999999996,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-pq3",
+          "load_seconds": 0.638091729,
+          "context_creation_seconds": 0.0246742,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 32768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 32768,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 80179200,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 51146848,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 313286672,
+                "context_bytes": 82265600,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 32768,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663979520,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.210021946,
+              "decode_tokens_per_second": 52.891602678419524,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.474363107,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2158.683896131914,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 0.48036938,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.213138029,
+              "decode_tokens_per_second": 52.75574458147664,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.476209879,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2150.3123835866495,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.480399494,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.229938199,
+              "decode_tokens_per_second": 52.03513481574532,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.474689176,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2157.2010734030305,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.479445236,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.244015354,
+              "decode_tokens_per_second": 51.44631036442979,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 0.476100218,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 2150.8076688173246,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 0.479729258,
+              "trial": 3
+            }
+          ]
+        }
+      ]
+    },
+    "scalar": {
+      "raw_jsonl_sha256": "19302974428311b9ecc0975df8e451fb647dbe0c6f60be328549110dd7af94f7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [
+        {
+          "status": "ok",
+          "profile": "compact-q4",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 997.5151925776967,
+            "min": 996.579091419329,
+            "max": 998.9532170200138
+          },
+          "decode_tokens_per_second": {
+            "median": 54.55549708106055,
+            "min": 54.35973555904831,
+            "max": 54.88236611834178
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.030281022,
+            "min": 1.027996975,
+            "max": 1.031157472
+          },
+          "kv_payload_estimate_bytes": 16367616,
+          "context_bytes": 17907712,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": null,
+          "total_native_bytes": 1958051952,
+          "observed_codec": null
+        },
+        {
+          "status": "ok",
+          "profile": "compact-pq3",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 1024,
+          "warm_trials": 3,
+          "prefill_tokens_per_second": {
+            "median": 964.5790947920108,
+            "min": 960.9145447125001,
+            "max": 964.9793437737319
+          },
+          "decode_tokens_per_second": {
+            "median": 52.13899701650149,
+            "min": 52.12631081484036,
+            "max": 52.99150224212883
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.065469685,
+            "min": 1.063957413,
+            "max": 1.069670849
+          },
+          "kv_payload_estimate_bytes": 11366400,
+          "context_bytes": 13452800,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "60d4adff324ef8a50f6f570efa61695f5b38ee84d980aa91936ea7ac7a5044bb",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 1953597040,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 2904,
+            "completed_indexed_writes": 5808,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "Scalar"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        }
+      ],
+      "observations": [
+        {
+          "profile": "compact-q4",
+          "load_seconds": 0.643448913,
+          "context_creation_seconds": 0.01822873,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 16367616,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 17907712,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q4_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q4_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1666965504,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {
+            "GGML_VK_DISABLE_COOPMAT": "1",
+            "GGML_VK_DISABLE_COOPMAT2": "1"
+          },
+          "trials": [
+            {
+              "decode_seconds": 1.325930301,
+              "decode_tokens_per_second": 48.267997157717865,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 2.322598004,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 440.885593734455,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 2.493864672,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.166130481,
+              "decode_tokens_per_second": 54.88236611834178,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.025073029,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 998.9532170200138,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.027996975,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.173117347,
+              "decode_tokens_per_second": 54.55549708106055,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.027515035,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 996.579091419329,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.031157472,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.177342004,
+              "decode_tokens_per_second": 54.35973555904831,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.026550781,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 997.5151925776967,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.030281022,
+              "trial": 3
+            }
+          ]
+        },
+        {
+          "profile": "compact-pq3",
+          "load_seconds": 0.63681611,
+          "context_creation_seconds": 0.022012989,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 11366400,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 13452800,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1666867200,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {
+            "GGML_VK_DISABLE_COOPMAT": "1",
+            "GGML_VK_DISABLE_COOPMAT2": "1"
+          },
+          "trials": [
+            {
+              "decode_seconds": 1.424688409,
+              "decode_tokens_per_second": 44.92210338464261,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 2.133174271,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 480.0357916936454,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 2.360313107,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.207740813,
+              "decode_tokens_per_second": 52.99150224212883,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.061162611,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 964.9793437737319,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.063957413,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.227488131,
+              "decode_tokens_per_second": 52.13899701650149,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.061602937,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 964.5790947920108,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.065469685,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.22778687,
+              "decode_tokens_per_second": 52.12631081484036,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 1024,
+              "prefill_seconds": 1.065651473,
+              "prefill_tokens": 1024,
+              "prefill_tokens_per_second": 960.9145447125001,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.069670849,
+              "trial": 3
+            }
+          ]
+        }
+      ]
+    },
+    "reverse": {
+      "raw_jsonl_sha256": "092062d3735224605833b553a742731a8d5df0899df6a420e42f47e247e98111",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "results": [
+        {
+          "status": "ok",
+          "profile": "compact-pq3",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 5,
+          "prefill_tokens_per_second": {
+            "median": 2023.9845780979977,
+            "min": 2017.4822898818957,
+            "max": 2033.7482296323349
+          },
+          "decode_tokens_per_second": {
+            "median": 50.09176043481577,
+            "min": 47.94275330818519,
+            "max": 50.44346727951864
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.733193319,
+            "min": 1.7248152239999999,
+            "max": 1.738774547
+          },
+          "kv_payload_estimate_bytes": 11366400,
+          "context_bytes": 13452800,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 0,
+            "completed_indexed_writes": 0,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          },
+          "total_native_bytes": 1953597040,
+          "observed_codec": {
+            "block_bytes": 50,
+            "block_values": 128,
+            "completed_attention_operations": 4686,
+            "completed_indexed_writes": 9372,
+            "execution": "VulkanRequired",
+            "graph_version": 1,
+            "name": "pq3_0",
+            "observed_attention_paths": [
+              "CooperativeMatrix2"
+            ],
+            "position_shifting": "unsupported",
+            "row_version": 1,
+            "state_io": "unsupported",
+            "transform_version": 1
+          }
+        },
+        {
+          "status": "ok",
+          "profile": "compact-q4",
+          "context": 4096,
+          "microbatch": 512,
+          "input_tokens": 3500,
+          "warm_trials": 5,
+          "prefill_tokens_per_second": {
+            "median": 2269.83113769595,
+            "min": 2264.073749099949,
+            "max": 2274.553216107964
+          },
+          "decode_tokens_per_second": {
+            "median": 53.75666288743048,
+            "min": 52.99603889553519,
+            "max": 53.94067826541104
+          },
+          "time_to_first_text_seconds": {
+            "median": 1.545516761,
+            "min": 1.542221531,
+            "max": 1.550018478
+          },
+          "kv_payload_estimate_bytes": 16367616,
+          "context_bytes": 17907712,
+          "compute_bytes": 305713264,
+          "model_bytes": 1634430976,
+          "peak_device_bytes": null,
+          "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+          "corpus_sha256": "53bf51795e68a23ce788c1919ba6d43f0cf844f96935ba9c3a8c1d38ff7db187",
+          "prompt_text_sha256": "7a354cc7d473cd87f28c70b093627af9e6eaa26e1cc9b5affd26529be0704c44",
+          "codec": null,
+          "total_native_bytes": 1958051952,
+          "observed_codec": null
+        }
+      ],
+      "observations": [
+        {
+          "profile": "compact-pq3",
+          "load_seconds": 0.675789044,
+          "context_creation_seconds": 0.019079397,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "PQ3_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 128,
+                  "value_type": "PQ3_0"
+                }
+              ],
+              "batch_size": 512,
+              "codec": {
+                "block_bytes": 50,
+                "block_values": 128,
+                "completed_attention_operations": 0,
+                "completed_indexed_writes": 0,
+                "execution": "VulkanRequired",
+                "graph_version": 1,
+                "name": "pq3_0",
+                "observed_attention_paths": [],
+                "position_shifting": "unsupported",
+                "row_version": 1,
+                "state_io": "unsupported",
+                "transform_version": 1
+              },
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 11366400,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 13452800,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "RequireVulkan",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "pq3_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "pq3_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1663565824,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.251768832,
+              "decode_tokens_per_second": 51.12765101983303,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.709942471,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2046.8524873548217,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.71785365,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.268747044,
+              "decode_tokens_per_second": 50.44346727951864,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.720960318,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2033.7482296323349,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.7248152239999999,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.26954421,
+              "decode_tokens_per_second": 50.41179306390598,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.7248921,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2029.112429699226,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.7288888809999998,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.277655236,
+              "decode_tokens_per_second": 50.09176043481577,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.7310867779999999,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2021.8512696652347,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.7356673619999998,
+              "trial": 3
+            },
+            {
+              "decode_seconds": 1.334925418,
+              "decode_tokens_per_second": 47.94275330818519,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.7292621879999999,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2023.9845780979977,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.733193319,
+              "trial": 4
+            },
+            {
+              "decode_seconds": 1.3090321870000001,
+              "decode_tokens_per_second": 48.891082003623794,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.734835551,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2017.4822898818957,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.738774547,
+              "trial": 5
+            }
+          ]
+        },
+        {
+          "profile": "compact-q4",
+          "load_seconds": 0.647237641,
+          "context_creation_seconds": 0.018353044,
+          "allocated": {
+            "effective": {
+              "arenas": [
+                {
+                  "cells": 4096,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Full",
+                  "layers": 6,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                },
+                {
+                  "cells": 768,
+                  "key_rotation": 128,
+                  "key_type": "Q4_0",
+                  "kind": "Sliding",
+                  "layers": 5,
+                  "streams": 1,
+                  "value_rotation": 64,
+                  "value_type": "Q4_0"
+                }
+              ],
+              "batch_size": 512,
+              "context_size": 4096,
+              "flash_attention": true,
+              "inspection_available": true,
+              "microbatch_size": 512,
+              "offload_kqv": true,
+              "op_offload": true,
+              "sequences": 1
+            },
+            "gpu_placement": "not_observed",
+            "kv_payload_estimate_bytes": 16367616,
+            "memory": [
+              {
+                "buffer": "CPU_Mapped",
+                "compute_bytes": 0,
+                "context_bytes": 0,
+                "model_bytes": 215040000
+              },
+              {
+                "buffer": "Vulkan_Host",
+                "compute_bytes": 21786720,
+                "context_bytes": 0,
+                "model_bytes": 0
+              },
+              {
+                "buffer": "Vulkan0",
+                "compute_bytes": 283926544,
+                "context_bytes": 17907712,
+                "model_bytes": 1419390976
+              }
+            ],
+            "peak_vram_bytes": null,
+            "requested": {
+              "batch_size": 512,
+              "context_size": 4096,
+              "execution": "Auto",
+              "flash_attention": "Auto",
+              "gpu_layers": 1000,
+              "key": "q4_0",
+              "microbatch_size": 512,
+              "rotation": "Auto",
+              "swa": "Compact",
+              "value": "q4_0"
+            },
+            "weight_devices": [
+              "Vulkan0"
+            ]
+          },
+          "host_peak": {
+            "bytes": 1664299008,
+            "source": "Linux /proc/self/status VmHWM (host resident bytes)"
+          },
+          "environment": {},
+          "trials": [
+            {
+              "decode_seconds": 1.17450646,
+              "decode_tokens_per_second": 54.49097317012629,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.534586398,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2280.7448342833545,
+              "temperature": "cold",
+              "time_to_first_text_seconds": 1.54015322,
+              "trial": 0
+            },
+            {
+              "decode_seconds": 1.190550093,
+              "decode_tokens_per_second": 53.75666288743048,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.538763734,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2274.553216107964,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.542221531,
+              "trial": 1
+            },
+            {
+              "decode_seconds": 1.194395122,
+              "decode_tokens_per_second": 53.58360798797703,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.545886039,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2264.073749099949,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.550018478,
+              "trial": 2
+            },
+            {
+              "decode_seconds": 1.186488603,
+              "decode_tokens_per_second": 53.94067826541104,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.541636526,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2270.3146565171614,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.545438094,
+              "trial": 3
+            },
+            {
+              "decode_seconds": 1.207637426,
+              "decode_tokens_per_second": 52.99603889553519,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.543232353,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2267.9669676417157,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.547755671,
+              "trial": 4
+            },
+            {
+              "decode_seconds": 1.189097536,
+              "decode_tokens_per_second": 53.82233001280056,
+              "finish_reason": "TokenLimit",
+              "generated_tokens": 64,
+              "input_tokens": 3500,
+              "prefill_seconds": 1.541964925,
+              "prefill_tokens": 3500,
+              "prefill_tokens_per_second": 2269.83113769595,
+              "temperature": "warm",
+              "time_to_first_text_seconds": 1.545516761,
+              "trial": 5
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "placement": {
+    "schema": 1,
+    "artifact_sha256": "0f56cace8c0df83a3bf120e10b534f88d33966a4de1abc71b86c3c67bc9732c8",
+    "results": [
+      {
+        "op": "FLASH_ATTN",
+        "backend": "Vulkan0",
+        "scheduled_nodes": 264
+      },
+      {
+        "op": "SET_ROWS",
+        "backend": "Vulkan0",
+        "scheduled_nodes": 552
+      }
+    ]
+  },
+  "placement_all_transform_ops": {
+    "MUL_Vulkan0": 4800,
+    "MUL_MAT_Vulkan0": 4752,
+    "CPU_GET_ROWS": 48,
+    "notes": "Only GET_ROWS observed on CPU; all sign multiplication/matrix operations and required cache/attention operations were scheduled on Vulkan. Includes other model operations, not exclusively PQ3."
+  },
+  "native_correctness": {
+    "vulkan_paths": [
+      "scalar",
+      "coopmat1",
+      "coopmat2"
+    ],
+    "observed_writes_per_path": 8,
+    "observed_attention_per_path": 3,
+    "max_attention_absolute_error": 0.000220765483,
+    "declared_attention_tolerance": "abs(error) <= 3e-4 + 3e-4*abs(independent decoded F64/F32-query reference)",
+    "model_wrap_tokens": 900,
+    "same_layout_reset_replay_max_logit_tolerance": 2e-05,
+    "full_vs_compact_logit_drift_characterization": {
+      "cpu_fp16_control": 0.509114504,
+      "cpu_pq3": 0.807980776,
+      "vulkan_pq3": 0.217959166
+    },
+    "note": "Cross-layout drift is characterization, not an acceptance bound; CPU attention uses its separate Q8-query oracle."
+  },
+  "reverse_order_regression_vs_q4": {
+    "prefill_tokens_per_second": 0.10831050623770422,
+    "decode_tokens_per_second": 0.06817578055931828
+  },
+  "quality_verdict": {
+    "passed": false,
+    "lost_tasks": [
+      "retrieve-river-gate-3500-middle"
+    ],
+    "retrieval_accuracy_drop": 0.08333333333333337,
+    "mean_target_nll_delta": 0.007043784444718635,
+    "max_checkpoint_kl": 0.12506935783584539
+  },
+  "quality_gates": {
+    "default_workspace": {
+      "passed": 572,
+      "ignored": 14,
+      "failed": 0
+    },
+    "turboquant_workspace": {
+      "passed": 580,
+      "ignored": 14,
+      "failed": 0
+    },
+    "cpu_binding_units_serial": 127,
+    "required_cpu_pq3_integration": 8,
+    "required_vulkan_pq3_integration": 8,
+    "python": 5,
+    "patch_staging_and_composition": 5,
+    "execution": "workspace tests serialized because a parallel binding unit run encountered the existing global-logger callback count race; no assertions weakened"
+  },
+  "raw_log_manifest": [
+    {
+      "file": "assistant-pq3-vulkan-observed-default.log",
+      "sha256": "77f855253e1a50bb58532d982fe87a0e538f5442f1bd5c6bbbdc7c8ff5cec74b"
+    },
+    {
+      "file": "assistant-pq3-vulkan-observed-scalar.log",
+      "sha256": "f4445ce2be8ceaff3387fe2a5f3bd707bad2afd9f44c283d83c52961efe2e029"
+    },
+    {
+      "file": "assistant-pq3-vulkan-observed-coopmat1.log",
+      "sha256": "e9aebfb8ffbc807caaa29dac1558d5e4e9707cef6e661c1582e761e45539e612"
+    },
+    {
+      "file": "assistant-pq3-graph-wrap-replay.log",
+      "sha256": "43c6e78008f39bef1c2b92d0b3b59a34a59ede5b38432b2ad70c0886df1af171"
+    },
+    {
+      "file": "assistant-pq3-graph-wrap-f16.log",
+      "sha256": "810eb26625f81501b9c08d1b0873f621e0f02078ce3a4af9127fcc2f09713f8c"
+    },
+    {
+      "file": "assistant-pq3-vulkan-wrap.log",
+      "sha256": "df5723627b34d13be9d5f9b1487d05b54e3d8cc836bf3619584706c56333505e"
+    },
+    {
+      "file": "assistant-pq3-final-native-cpu.log",
+      "sha256": "368796a877b89bac9ec2d446d63eacb0d98665ff5a16f40f06d8ec6bf30c5a74"
+    },
+    {
+      "file": "assistant-pq3-final-cpu-model.log",
+      "sha256": "5523c94884a8e64f4454c6fa519d76966f13feba7465645642b54c9a315c1fe3"
+    },
+    {
+      "file": "assistant-pq3-final-gpu-binding.log",
+      "sha256": "4b3408f77a57d1e3b8fe6e5e759c3589bd8818f576419c5ad6d51f37992f0be8"
+    },
+    {
+      "file": "assistant-pq3-workspace-feature-tests.log",
+      "sha256": "55da16d7eebf7e187cc2ab81e0a5a51635f65620582914acd2561a55b1646ca0"
+    },
+    {
+      "file": "assistant-pq3-default-tests.log",
+      "sha256": "e2cc2d274ba237b3ea03cd78c9723ec33ebe3b39ddb181adda601f4302f1ec01"
+    },
+    {
+      "file": "assistant-pq3-default-check.log",
+      "sha256": "a807b4d5a5014fe549c6049e9c8c508d97d48383dde2aa9a4b3c3575b3007f77"
+    },
+    {
+      "file": "assistant-pq3-workspace-final-check.log",
+      "sha256": "6c7bbf7f2205691fb24dce48eacd0d8ad50635a194dcb4d0bf8a5ca4ee77a0d8"
+    },
+    {
+      "file": "assistant-pq3-final-python-tests.log",
+      "sha256": "3872f5a85da677f909ec5c55a5821758c34e2394460567a29f8043b480cc1105"
+    },
+    {
+      "file": "assistant-pq3-final-patch-tests.log",
+      "sha256": "2e1435b560e0f72279406e052e6125e0fc3b2753367e5d0683e8903ad3834fac"
+    }
+  ],
+  "decision": "Keep PQ3 opt-in and FP16/full defaults unchanged. Candidate fails retrieval/KL gates and repeats a near-full 4K slowdown versus Q4. Do not automatically proceed to QJL or claim production/vendor support.",
+  "limits": [
+    "NVIDIA single-device evidence only; AMD and Intel not validated.",
+    "32K capacity exercised with 1024-token prefixes; near-full 32K quality/recovery not measured.",
+    "One resident context per benchmark process; simultaneous resident-context capacity not measured.",
+    "No measured device peak; native allocations do not establish a hard VRAM ceiling.",
+    "Scalar whole-model quality not characterized by the coopmat2 quality run.",
+    "Live kernels retain finite activation/representable norm preconditions; no per-write numeric error channel.",
+    "Synthetic attention matrix tests cover N=1/8/64 and KV=7/65/512; split-K is not isolated as a separate regression case.",
+    "Ordinary 128-head Llama is architecture-allowlisted but only LFM3 has model-backed evidence here."
+  ],
+  "cli_smoke": {
+    "exit_code": 0,
+    "answer": "ready",
+    "raw_log_sha256": "8897c4ab5213c8411c0b58877e65154aa1dcb9c6c536edd5e131d086f14c6fff",
+    "observed_codec": {
+      "block_bytes": 50,
+      "block_values": 128,
+      "completed_attention_operations": 22,
+      "completed_indexed_writes": 44,
+      "execution": "VulkanRequired",
+      "graph_version": 1,
+      "name": "pq3_0",
+      "observed_attention_paths": [
+        "CooperativeMatrix2"
+      ],
+      "position_shifting": "unsupported",
+      "row_version": 1,
+      "state_io": "unsupported",
+      "transform_version": 1
+    },
+    "notes": "Actual CLI flags, ordinary worker inference, diagnostics and normal process shutdown."
+  }
+}

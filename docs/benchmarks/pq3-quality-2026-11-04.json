@@ -1,0 +1,4402 @@
+{
+  "schema": 1,
+  "status": "complete",
+  "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+  "fixture_manifest": {
+    "schema": 1,
+    "files": [
+      {
+        "file": "cache-quality-v1.json",
+        "sha256": "114637c3b6826abefeced7d20a10e5cc84cd3cd3c8ccf192118435269b62db78",
+        "fnv1a64": "00127a0cff646b88"
+      }
+    ],
+    "provenance": "Authored for this project; no external dataset or model downloads."
+  },
+  "full": true,
+  "source_identity": {
+    "workspace_revision": "d4a04b181932e2d44efb670f9d738209c4aa7416",
+    "native_revision": "a34de8618b25dfc32ee43749db47d767a9f0a25d",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "active_patches": {
+      "0003-exact-speculative-state.patch": "5f893126ddad279ee1d65bbf3640d5a036c64c85cf5921235f5b001d5a721c90",
+      "0004-exact-decode-lifecycle-hooks.patch": "ffd47640cf6aa6e8607301f28e66a1897d4f632835694c2e17070b9bb172eedb",
+      "0005-fail-closed-eagle3-process.patch": "b30050c988774508bf0ca12e4921862ec33e1880e6d0f85835fc1bc613272b1b",
+      "0006-runtime-state-safety.patch": "7aa9e9f1d172088a102744b13fc252a318623010087a1a816705d4c2077293e3",
+      "0007-vulkan-resource-lifecycle.patch": "38b18acc9717a3836f2a40fab5d2cdda00eddb435fa38dd3330f806a36be3f2a",
+      "0008-pq3-cpu-format.patch": "fb24b3b5574112fa0eef4e587d88c7fe77dc2e6d32051c8b9560cfb3948beec7",
+      "0009-pq3-kv-graph-state.patch": "029503cd5ecf8cbb54c19ade3d054a39d773faa2c2f433dc111ec3551cb28ca9",
+      "0010-pq3-vulkan-cache-attention.patch": "dc2d7839c78ca2e87a5bbff689a71cb47cb17abadb5509553c69324b62f6198e"
+    },
+    "source_files_sha256": {
+      "Cargo.lock": "39f69a3ecbdbbb023dee4707e51e6412cb5988731ada8e884643fb3981d1e606",
+      "Cargo.toml": "f8c8ce18e7a1e46b01807fab8f6311149bc38c246d79fea847739913c6390c0a",
+      "crates/assistant/Cargo.toml": "6d9612472c08c947ee00f5f8284917f218ab48e628284a1ca4ad2bfc5460887b",
+      "crates/assistant/examples/cache_bench.rs": "2361b2265f50627a9da598def469c70995ec33c62d5135f7137a80af706cfaf3",
+      "crates/assistant/src/chat/mod.rs": "1a38b93ede72d1517e7758130eee9bc9acfef4ed64a9919906bd325d32760287",
+      "crates/assistant/src/chat/runner.rs": "788097bdafc3024cc2e4114d528651f94b5912abe4009972b58fe12f7f691eab",
+      "crates/assistant/src/chat/tests.rs": "145631073b61b0b6a9eb94ea818dff74ac8022267b01a4a06516a037928313db",
+      "crates/assistant/src/chat/types.rs": "099f8f284f90116717418435c69b5ab1eee6151ac0e66c90936b6c78c159a093",
+      "crates/assistant/src/engine/context.rs": "34add684f79cd5b23cfed38106bf03e0069bcc83b16a24a8f5209f895c781488",
+      "crates/assistant/src/engine/context/cache_tests.rs": "fa43b71a02e61c46cfce25df005cd961a863d6a5cd1b8f40e3a366b02d02e2d8",
+      "crates/assistant/src/engine/context/tests.rs": "78b09966f126882e44b925c2c35aaf56994e46ab1dc5a518c683643bcf7527c1",
+      "crates/assistant/src/engine/diagnostics.rs": "fda6c5a16873747edf4f4e3bccfc99fd7c771fa1f7cbf25354bbdf702031bb08",
+      "crates/assistant/src/engine/engine.rs": "92ddf9bcb1e807f3f5fc974de23a188a8597cb894e4b6f860a2fdd597ae26e7d",
+      "crates/assistant/src/engine/errors.rs": "81eec0148b2cba7792d72aa6ea414ddbcd7f8146b11769490a27b287c275645f",
+      "crates/assistant/src/engine/helpers.rs": "6fd0110c5a5b29ea2cc19ee541fabb8311fcc9bfc15b2ba24a834b665594c2c1",
+      "crates/assistant/src/engine/llm.rs": "35d2b34a29147ae03966a5a7b98a3c185c78818f2096311ab3926bba091455ac",
+      "crates/assistant/src/engine/mod.rs": "38834fe77c69611a34dba51c925ad1fb0368bd467fd2d5417745be18c49cde6d",
+      "crates/assistant/src/example.rs": "bd237e0943ccfce471ba9d1a0cb70fd21046a55a0300e2ba9ceb93c90e1760be",
+      "crates/assistant/src/lib.rs": "dd6921579b455501466d091ab17196cb4ac74b54b723d1a4756ed0a676823b65",
+      "crates/assistant/src/main.rs": "edf111e16011b0f91be7ab50b51afe82f194267cb235d0046dc916a6b207cbd6",
+      "crates/assistant/src/pipeline/mod.rs": "173ca3721b8628464a4bd27a6cc10a74ff4e1b61b13dcc15ce0441982f487678",
+      "crates/assistant/src/pipeline/tests.rs": "4ca18fd418d7ae68b4c0998ad14a3c98ea36411d055dfe00d7f93c204ca4d389",
+      "crates/assistant/src/runtime/mod.rs": "cea538a44f436aaab90ec23a7c8d2649b77d8a9e4ef6f73dbdb0e675d9b77967",
+      "crates/assistant/src/runtime/tests.rs": "188bd186194d9b46d7a2a43b7aa3cd5036eb1f13cff10d82c6a467e3141f2512",
+      "crates/assistant/src/runtime/worker.rs": "d63f52d6617d59695ad8bf691a30cbd771acc04a0ec0dfc9a152447655719150",
+      "crates/assistant/src/tools/builtin.rs": "05febdc1580f92766fbd3e2a6c7c845b6930f29474c0904625f5e2ec8895dc4b",
+      "crates/assistant/src/tools/mod.rs": "6a86eba38f867a565c6fba37cfae36a1d72d4af69b582de61765c302151bd6e4",
+      "crates/assistant/src/tools/tests.rs": "805f72e6fb67e1cf2d859c034cfc68c9256734ae9952773c1af77cf2184ec287",
+      "crates/assistant/tests/cache_quality.rs": "f6eb44e4be305480d8e903ff434bc13833489e702df9401485f63988806e0ca8",
+      "crates/assistant/tests/fixtures/cache-quality-manifest.json": "25dd043bf9bcc0648b7420dea62917aff1f5299ca6dca9584ca056721022e5d2",
+      "crates/assistant/tests/fixtures/cache-quality-v1.json": "114637c3b6826abefeced7d20a10e5cc84cd3cd3c8ccf192118435269b62db78",
+      "crates/assistant/tests/inference.rs": "f4681511ada151cacc6d55129b6522b0940ca151c7fd0239cc35eed1e62396f6",
+      "crates/llama_cpp/Cargo.toml": "97dc3570f7a1b9077e7c2f238e50a2be1311da2d6306644a2824c728df5222f5",
+      "crates/llama_cpp/benches/decode_hooks.rs": "0661a9a864b1ea13e8838149664265f5d5e29d851b852a77f616efe6285ed912",
+      "crates/llama_cpp/benches/tensor_transactions.rs": "6c3d610c0be8adf248e16fdfb23a946d5c4cc3f40a24693c996a2bef8cfc8d6b",
+      "crates/llama_cpp/src/cfile.rs": "d466b801f5ff37538c117a983d1950e88e3e836375d5447f77527af8cc471d95",
+      "crates/llama_cpp/src/chat.rs": "26ce14bd437d9ec0bb8afba9faff50eddc2b5bce238a375a33a1723ff162b14a",
+      "crates/llama_cpp/src/common.rs": "e5bdf7100c07a7f57764d811b2fe6f3c145b63b640756ffd4986b5268fe4aeb5",
+      "crates/llama_cpp/src/common_sampler.rs": "a4972430d8fadef093b8f25bcaa306523efec0dc1f6409072d003d23adc2270f",
+      "crates/llama_cpp/src/context.rs": "1881ce94b8262135c4480a863ade0d081cba803b0365b4b22fd9aa339b51815b",
+      "crates/llama_cpp/src/context/cache.rs": "fb0388c5b39a7dd187822a121c42e6332df86982afe10f8c4d2202cea9c5a2cc",
+      "crates/llama_cpp/src/context/kv_cache.rs": "d61c2aa0aa0b83292ac59519544ee51c2be88e43b2117b7d28ab61ac7da70f9d",
+      "crates/llama_cpp/src/context/memory_breakdown.rs": "9ed905c159f7d84c3251e2f948d12417378979e49c6821f310deaf627d292903",
+      "crates/llama_cpp/src/context/params/advanced.rs": "090603197360401c83e9928d8022ed584008074065d911753b5d6542575b1142",
+      "crates/llama_cpp/src/context/params/mod.rs": "a80235b0b4d88887b55226c3287c22d6be2f048b5efea5f21125f5baf4f3de9b",
+      "crates/llama_cpp/src/context/params/types.rs": "cb234578e7d4ae6457b5fc3d4c4969f2d2f3356b1ac34686515ac0816c05e816",
+      "crates/llama_cpp/src/context/perf.rs": "a79da307a9d329e541aa9bb18bb0308eea8faa232cd8ec5e36e23a179abc3f1d",
+      "crates/llama_cpp/src/context/session.rs": "a7da3cbf4f8cb2d1df9a4af1237c8595dcd87f9642717ea5568f9fdd4b8734e1",
+      "crates/llama_cpp/src/context/tensor_capture.rs": "eb1b16cfdc69463d4c11ddabd1dcc78cd449e2cc3fc5477caaa807b6142ed552",
+      "crates/llama_cpp/src/context/tensor_transaction.rs": "7e21646d5590bfa9f77a617efb1a9179a64ba8edeeb04b0f88d813cbacbf0e35",
+      "crates/llama_cpp/src/eagle.rs": "b8689de0f036d47ef8dc741e96b79d64be43db3d73c5d55654699c1e880a494e",
+      "crates/llama_cpp/src/fit.rs": "8f452bb95677adbc7c597b8fac20f664684d9280f09af82c0ad425e9a10e25d1",
+      "crates/llama_cpp/src/ggml.rs": "90d035558fff13f1448ae8bc3fbca408ec2d510bd0a1fdbf2059638ddc77ad7d",
+      "crates/llama_cpp/src/grammar/tests.rs": "66e8207fcfbfc83a600be6f2a5f17f5d8d8ad3e20e09a879312fd934ffd61ddb",
+      "crates/llama_cpp/src/lib.rs": "74af8a8d79272e0ba497dd709052e29ee7d8121da0e3cc0ebba1d0be44c1e77c",
+      "crates/llama_cpp/src/llama_backend.rs": "592b8751ccc14eeeb9cbf963faddf8eb33290cd1435897da213c3f360bca66fe",
+      "crates/llama_cpp/src/llama_batch.rs": "42832c3716e2d2889bb34e44088bc34b3ce87e37436aa80b2664c9a01fa76721",
+      "crates/llama_cpp/src/llama_batch_ext.rs": "0eafd6e21a06fc890b1d2b19788f5791268c66100c6b9c2f58d96930879831dc",
+      "crates/llama_cpp/src/logging.rs": "0d7aaa75e1984adddbfd8088b5a67adfd62b260484a28938724d457a9c1590b3",
+      "crates/llama_cpp/src/model.rs": "6fe2a23cf425ab82bdef7d09887d0f951c15a5b1f0e156d80a91d9662eeb30ab",
+      "crates/llama_cpp/src/model/params.rs": "ad3f67ed8429f51f15a12f1bd6a1d18bd678d55a7932fd7a23e2d32dc313801d",
+      "crates/llama_cpp/src/model/params/kv_overrides.rs": "1a6c40e3d8787c5d4bbc1dff0f05bfd917c8f108bb5125444e4f00b13c1d1743",
+      "crates/llama_cpp/src/mtmd.rs": "a5a5b51f4e05e7260c26b43ea0b9ee8321754638396a8145c8038257df385a98",
+      "crates/llama_cpp/src/mtp.rs": "fcdcb5a0aa6176d7d1641ee8943b398685b152582e9d344805522b64f2fed9b9",
+      "crates/llama_cpp/src/ngram.rs": "18f2a6401ff0f9b4a8eefc5fd9bb2fdc12bc21b3469a7d4a4e336398d94a4829",
+      "crates/llama_cpp/src/pq3_reference.rs": "bbdab0474a1681b42a4a87a4f9e45e63fc057991729ae02c1bf250e39b8db4c2",
+      "crates/llama_cpp/src/prelude.rs": "42f2f3972c244a124e983e54b87ec4bc1d54b67d2ddae16b803d183260ffb2f6",
+      "crates/llama_cpp/src/quantize.rs": "1464e6c8cb079aa74ebd1b8dfc5c0d6bf4536c3a87303bb83462326fe219c721",
+      "crates/llama_cpp/src/rpc/backend.rs": "55f12e2213385713ed14d720fc1fe17ed8bc393ac3fb9d9ec757de62f94b18ab",
+      "crates/llama_cpp/src/rpc/error.rs": "ef7d80ed751676f49e4fdd99e9d0c6a6abb55e75af7d4b8aaf23c60461badb26",
+      "crates/llama_cpp/src/rpc/mod.rs": "7275b7c9727eee1b8b119b3207912dc86ec315ee7ce07e489f6b754dd23ba2e1",
+      "crates/llama_cpp/src/rpc/server.rs": "c4589b787f88df7d02358f5508d6021bf517e77298ead12a887bcf3f3d098e22",
+      "crates/llama_cpp/src/runtime.rs": "acaa30043a060868a8650d07284e1f9db4f746e5a60287d309f9a9b8d477d31b",
+      "crates/llama_cpp/src/sampling.rs": "39336552974c57bd2abc9896edf9d97287e45c5a607583e465b58276c6109202",
+      "crates/llama_cpp/src/shim.rs": "93c4065892440a4c90d9ab986d519abe21eabcb2726fef676cbc922db3b3fb4d",
+      "crates/llama_cpp/src/speculative.rs": "74aed3ad0aefcfcdc526ae7678e7a1f4048190b662c39bf9700d2871e99c9363",
+      "crates/llama_cpp/src/token.rs": "e438c7dcfff2b5aba4145e9a983277cded045db78b0ae0eef31027ee24df04c3",
+      "crates/llama_cpp/src/token/data.rs": "7b73c08307704394d2b07471d9a0b6744014574c98b93b180967b18a224274b9",
+      "crates/llama_cpp/src/token/data_array.rs": "53f772e97e3940787c915b8c02f2d424e20e7598ba59059f7db25fee189978f7",
+      "crates/llama_cpp/src/token/detokenizer.rs": "0a683877fe0929b8489ff82a5388fc40d7aa748de9a4354b0e3df5b7bc0c53d6",
+      "crates/llama_cpp/src/token_type.rs": "e3c0530e34cd97d20c1e1e7606ec347f43e885bb57c41f4b40ff1c8480bd4b46",
+      "crates/llama_cpp/tests/support/mod.rs": "7fba905b9866a831e364690a3a000b5f10839151d4e503e4416358340a8d4fbd",
+      "crates/llama_cpp/tests/support/model.rs": "ef950a31d49e8ba107ad4f6a8b66ce4178c58cf948a2f7e7ffca537b35252ec8",
+      "crates/llama_cpp/tests/test_backend_lifecycle.rs": "9256a028dfae5e3229fb680d6327b3f3aeff3f2b2b4505825f1c640d560b2cf4",
+      "crates/llama_cpp/tests/test_batch_ext.rs": "9a055527293995563fd79249625bbb88366591e7ab9a74f285b5c0e6961eddf6",
+      "crates/llama_cpp/tests/test_chat.rs": "b8df98afd867da8e128accab396f89488328a0a4bdca8fc0e29e51b2c8210219",
+      "crates/llama_cpp/tests/test_context_params.rs": "6be3d9226f3afb3ea393937ae46a65eea51db1eca7a1f192c163e94ffbd31504",
+      "crates/llama_cpp/tests/test_context_rotation.rs": "bdd628627d98dd4da4c3d618988359867abe2507fd40c7c1779df311bdc81a37",
+      "crates/llama_cpp/tests/test_fit.rs": "f998fbcca63c0015c23e1254167cbfbe57454726a92ed6c4876fdb1c27993520",
+      "crates/llama_cpp/tests/test_ggml.rs": "380113ce320170d2dc1c9b3cb3d23b640d90e01ad0b44bb25f59ec814c85aedb",
+      "crates/llama_cpp/tests/test_integration.rs": "57fdb9a6aa9eecc41e5fe5ac7561993ea4cb5c1853bb5dbe834185f3fab8a408",
+      "crates/llama_cpp/tests/test_lib.rs": "2af232808e16a27499ea137960cc97eca3005b66eab68d889730320bed8c012c",
+      "crates/llama_cpp/tests/test_logging_concurrency.rs": "a7a80fd9f907a466d6d0728dda100cb353478e0ff5a1ab42d9405744dabf7cd6",
+      "crates/llama_cpp/tests/test_lora.rs": "4c92a4481d900c969e76f0b042669493d6491012101b027849e781319f0b2f43",
+      "crates/llama_cpp/tests/test_model.rs": "8ec6f464ab439534d68fae232fda03d665fe1577617f50a9ea7a15b761a068b6",
+      "crates/llama_cpp/tests/test_model_params.rs": "cf47138b7dc24ab96d862d6a243742991ae9f25d7491018d6fdc517c1f89f9e8",
+      "crates/llama_cpp/tests/test_pq3_reference.rs": "e6ef505a1ff09884e56dc044be790d7d6e5f6cb10e9075b3cb33e69704d3e061",
+      "crates/llama_cpp/tests/test_prelude.rs": "892dddf66d915aef0bbb9dc063e8de1085d0eb578e5780127038afb96821f28c",
+      "crates/llama_cpp/tests/test_q1.rs": "2f5b411ca0651982be6b5f2e7c2cc3f8477537af2df57c2580b3bc3795bb150d",
+      "crates/llama_cpp/tests/test_quant_preview.rs": "f1935b02ca11eda96684469d496d5c251f7e3537f6cdccb3f3e593b234ead724",
+      "crates/llama_cpp/tests/test_sampler.rs": "0c5adbe43bc3ea307171cad416c3a4ad4c8d3f323ad4eee380668e7118bd3290",
+      "crates/llama_cpp/tests/test_vulkan_lifecycle.rs": "ef36d6e41c310c82438c8889e270dae91a5ad48fbc5c6357bc2ce27c9a1fb2f7",
+      "crates/llama_cpp_sys/Cargo.toml": "65765f5b0e8213266fb03ea16ee6bfe75cfbe2f792f355cd57e2a17a1ec9ca61",
+      "crates/llama_cpp_sys/build.rs": "79f133717a9433eaf195026932dabbfc643ea3d2e79ccb7d633049eda0dee909",
+      "crates/llama_cpp_sys/chat_shim/chat_shim.cpp": "baf44ba707f66103ba6e67a04fc0ed69f2d0ee2a19d7c5c6a14556819f7bfed0",
+      "crates/llama_cpp_sys/chat_shim/chat_shim.h": "c3210c821e0e52cb77b689e1dc6ebda7ec827fbfafd1006b7bca568627c3a243",
+      "crates/llama_cpp_sys/common_shim/common_shim.cpp": "373ba0b972430ed4c6283305da23eee341d4cf223d4df7d2c20f341cacde5a64",
+      "crates/llama_cpp_sys/common_shim/common_shim.h": "d068b2c435e7cc6ca2fc6b2a5664bd689e4566642b00a4c9794893978024b46b",
+      "crates/llama_cpp_sys/ext_shim/ext_shim.cpp": "b6ea44188d3aa8ece23a75cfe76f93e06106ac13ad334d0b7b03b239a78d5022",
+      "crates/llama_cpp_sys/ext_shim/ext_shim.h": "5f306b45002f75f729e0578eb74eae688b78f38f804bbbf1de29b93acb5710fb",
+      "crates/llama_cpp_sys/mtp_shim/mtp_shim.cpp": "9ddddcf93234c6cd079a6aa876074605be6d1dd5f465d48905b679a6bd9f47a2",
+      "crates/llama_cpp_sys/mtp_shim/mtp_shim.h": "e02519b4701335d75c77c4f27b38432bcb738bdc08aa4f386b6254d12117e8c1",
+      "crates/llama_cpp_sys/patch_staging.rs": "ed76cde2e9c5dede1197ea3784d547ef75c5a3abbafb980d43c20361cbc254da",
+      "crates/llama_cpp_sys/patch_verification.rs": "fef7aedaedbfafad8a4aa662ec16788202cbf85da3101419aacc02b32c8368c1",
+      "crates/llama_cpp_sys/patches/0003-exact-speculative-state.patch": "5f893126ddad279ee1d65bbf3640d5a036c64c85cf5921235f5b001d5a721c90",
+      "crates/llama_cpp_sys/patches/0004-exact-decode-lifecycle-hooks.patch": "ffd47640cf6aa6e8607301f28e66a1897d4f632835694c2e17070b9bb172eedb",
+      "crates/llama_cpp_sys/patches/0005-fail-closed-eagle3-process.patch": "b30050c988774508bf0ca12e4921862ec33e1880e6d0f85835fc1bc613272b1b",
+      "crates/llama_cpp_sys/patches/0006-runtime-state-safety.patch": "7aa9e9f1d172088a102744b13fc252a318623010087a1a816705d4c2077293e3",
+      "crates/llama_cpp_sys/patches/0007-vulkan-resource-lifecycle.patch": "38b18acc9717a3836f2a40fab5d2cdda00eddb435fa38dd3330f806a36be3f2a",
+      "crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch": "fb24b3b5574112fa0eef4e587d88c7fe77dc2e6d32051c8b9560cfb3948beec7",
+      "crates/llama_cpp_sys/patches/0009-pq3-kv-graph-state.patch": "029503cd5ecf8cbb54c19ade3d054a39d773faa2c2f433dc111ec3551cb28ca9",
+      "crates/llama_cpp_sys/patches/0010-pq3-vulkan-cache-attention.patch": "dc2d7839c78ca2e87a5bbff689a71cb47cb17abadb5509553c69324b62f6198e",
+      "crates/llama_cpp_sys/prebuilt_download.rs": "8fba010a8785898ddbf4411ba1bb20fa73f9b864747a98d9b3bcb5c35f6c1296",
+      "crates/llama_cpp_sys/shim_support/shim_support.cpp": "25d605f5e81e77dd4889e315f47ec016fd9073361f623136cbef41272491eeb3",
+      "crates/llama_cpp_sys/shim_support/shim_support.h": "b6eade529cf563d627d0c9e84deefd36e34155d1c235b0e770158d25f2573698",
+      "crates/llama_cpp_sys/shim_support/shim_support_impl.hpp": "42dc54c369fc03f63fbb0a3313cb4a3855e7ddc2e0195afeb4a0836892ea68d5",
+      "crates/llama_cpp_sys/src/common.rs": "fba87d2899f7f9945c73063fe2039d639caf43eb91a93a6d2cfe7c687210859b",
+      "crates/llama_cpp_sys/src/lib.rs": "885a86dc1ed4eb81b5008df4c27eb8e5d4ff4c021c351d66434114c9b2f09900",
+      "crates/llama_cpp_sys/tests/patch_staging.rs": "c6cf2335859927bdf598e49a344dc286a3b5c1d2970f0d17812c07e5224c092c",
+      "crates/llama_cpp_sys/tests/patch_verification.rs": "6b1545f5a30226f0a0edce1c573fc9244e47f5c4abff447590d65e123567818d",
+      "crates/llama_cpp_sys/wrapper.h": "f7ea879f51ff898dc255a238dfba8715841ceb8fda181e3bade1b1d17648408d",
+      "scripts/cache-quality-results.py": "296592981bc2c4f203d32cf7e00b9f6da8193594463a2e637ea3b97e5ff89231",
+      "scripts/cache-results.py": "d4b28951fcaf8047aa11a4da71a381dceea46d43079bc35eded4c211b29aa544",
+      "scripts/tests/test_cache_quality_results.py": "eddce952379b97ebf4d84ef6c69b95583834a81bd2c01bc478b711ef528f6582"
+    },
+    "source_set_sha256": "71bad694482af7b01916d9fbc2be77e88f01662faeeede6f3e815c7789aaa001"
+  },
+  "source_inputs_unchanged": true,
+  "turboquant_reference_feature": true,
+  "include_pq3": true,
+  "acceptance": {
+    "scope": "experimental codec comparison; promotion needs broader data and hardware",
+    "max_mean_target_nll_increase_nats": 0.05,
+    "max_checkpoint_kl_reference_to_candidate": 0.05,
+    "max_lost_tasks_passed_by_fp16_and_q4": 0,
+    "max_retrieval_accuracy_drop": 0.0,
+    "throughput_regression_investigation_fraction": 0.05,
+    "numerical_token_stride": 32,
+    "fp16_repeats": 2
+  },
+  "records": {
+    "tasks": [
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "The complete output from the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 2026 at 12:34:56 UTC**.  \nAnd 19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 73,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry has \"river-gate\" and the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are all \"ordinary parcel number X\". None mention river-gate explicitly. Possibly there is a missing entry? Let's read carefully.\n\nThe archive data: It lists entries 0 through 40. Each entry: \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So none of them mention river-gate. But the user says only record river-gate has the access phrase ORCHID-72. So maybe one of these entries corresponds to river-gate, but we need to identify which entry number corresponds to river-gate. Possibly the entries are not all ordinary; maybe some are river-gate? But the text says \"Archive entry 0: ordinary parcel number 3...\" etc. So all are ordinary. That seems odd.\n\nMaybe there is a missing line or we need to infer that river-gate is one of these entries. Could be that \"river-gate\" is a specific record among these",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry assigns the access phrase \"COBALT-19\" to north-store. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate in the archive entries which one mentions \"north-store\" and has access phrase COBALT-19. But the provided archive entries only list ordinary parcel numbers and say \"held for routine inspection. This entry assigns no access phrase.\" for entries 0 through 40. None of them mention north-store or COBALT-19. Possibly there is a missing entry or we need to infer? Let's read carefully.\n\nThe text:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... up to entry 40: ordinary parcel number 683 is held for routine inspection. This entry assigns no access phrase.\"\n\nSo all entries say \"This entry assigns no access phrase.\" But the user says only north-store has the",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"river-gate\" and check its access phrase. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" But we need to find which entry mentions \"river-gate\". Possibly one of the entries is about river-gate, but the text given doesn't explicitly mention \"river-gate\". Let's read carefully.\n\nThe archive data: It lists many entries, each starting with \"Archive entry X: ordinary parcel number Y is held for routine inspection. This entry assigns no access phrase.\" So all entries say \"ordinary parcel number\" and \"no access phrase\". But the user says only record river-gate has the access phrase ORCHID-72. So maybe there is a specific entry where the access phrase is ORCHID-72, and that entry corresponds to river-gate. We need to find which entry number has access phrase ORCHID-72. The text says \"Only record river-gate has the access phrase ORCHID-72.\" So",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase \"COBALT-19\". The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" except maybe one entry that assigns a different phrase. We need to scan the list for any mention of \"north-store\". The provided text doesn't explicitly mention \"north-store\" in each entry; it just says \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So we need to infer which entry corresponds to north-store. Possibly there is a mapping: maybe entry 0 is for north-store? But the user says only record north-store has the access phrase COBALT-19. So we need to find the entry where the access phrase is COBALT-19. That might be one of the entries, but all entries listed say \"assigns no access phrase\". Wait, maybe I missed something: The text says \"Only record north-store has the access phrase",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19\n\nOnly record north-store has the access phrase COBALT-19. (Archive entry 69)</think>COBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 34,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "The complete output from the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 2026 at 12:34:56 UTC**.  \nAnd 19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 73,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry has \"river-gate\" and the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are all \"ordinary parcel number X\". None mention river-gate explicitly. Possibly there is a missing entry? Let's read carefully.\n\nThe archive data: It lists entries 0 through 40. Each entry: \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So none of them mention river-gate. But the user says only record river-gate has the access phrase ORCHID-72. So maybe one of these entries corresponds to river-gate, but we need to identify which entry number corresponds to river-gate. Possibly the entries are not all ordinary; maybe some are river-gate? But the text says \"Archive entry 0: ordinary parcel number 3...\" etc. So all are ordinary. That seems odd.\n\nMaybe there is a missing line or we need to infer that river-gate is one of these entries. Could be that \"river-gate\" is a specific record among these",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry assigns the access phrase \"COBALT-19\" to north-store. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate in the archive entries which one mentions \"north-store\" and has access phrase COBALT-19. But the provided archive entries only list ordinary parcel numbers and say \"held for routine inspection. This entry assigns no access phrase.\" for entries 0 through 40. None of them mention north-store or COBALT-19. Possibly there is a missing entry or we need to infer? Let's read carefully.\n\nThe text:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... up to entry 40: ordinary parcel number 683 is held for routine inspection. This entry assigns no access phrase.\"\n\nSo all entries say \"This entry assigns no access phrase.\" But the user says only north-store has the",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"river-gate\" and check its access phrase. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" But we need to find which entry mentions \"river-gate\". Possibly one of the entries is about river-gate, but the text given doesn't explicitly mention \"river-gate\". Let's read carefully.\n\nThe archive data: It lists many entries, each starting with \"Archive entry X: ordinary parcel number Y is held for routine inspection. This entry assigns no access phrase.\" So all entries say \"ordinary parcel number\" and \"no access phrase\". But the user says only record river-gate has the access phrase ORCHID-72. So maybe there is a specific entry where the access phrase is ORCHID-72, and that entry corresponds to river-gate. We need to find which entry number has access phrase ORCHID-72. The text says \"Only record river-gate has the access phrase ORCHID-72.\" So",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase \"COBALT-19\". The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" except maybe one entry that assigns a different phrase. We need to scan the list for any mention of \"north-store\". The provided text doesn't explicitly mention \"north-store\" in each entry; it just says \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So we need to infer which entry corresponds to north-store. Possibly there is a mapping: maybe entry 0 is for north-store? But the user says only record north-store has the access phrase COBALT-19. So we need to find the entry where the access phrase is COBALT-19. That might be one of the entries, but all entries listed say \"assigns no access phrase\". Wait, maybe I missed something: The text says \"Only record north-store has the access phrase",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19\n\nOnly record north-store has the access phrase COBALT-19. (Archive entry 69)</think>COBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 34,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "f16",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "The complete output from the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 2026 at 12:34:56 UTC**.  \nAnd 19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 73,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry has \"river-gate\" and the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are all \"ordinary parcel number X\". None mention river-gate explicitly. Possibly there is a missing entry? Let's read carefully.\n\nThe archive data: It lists entries 0 through 40. Each entry: \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So none of them mention river-gate. But the user says only record river-gate has the access phrase ORCHID-72. So maybe one of these entries corresponds to river-gate, but we need to identify which entry number corresponds to river-gate. Possibly the entries are not all ordinary; maybe some are river-gate? But the text says \"Archive entry 0: ordinary parcel number 3...\" etc. So all are ordinary. That seems odd.\n\nMaybe there is a missing line or we need to infer that river-gate is one of these entries. Could be that \"river-gate\" is a specific record among these",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry assigns the access phrase \"COBALT-19\" to north-store. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate in the archive entries which one mentions \"north-store\" and has access phrase COBALT-19. But the provided archive entries only list ordinary parcel numbers and say \"held for routine inspection. This entry assigns no access phrase.\" for entries 0 through 40. None of them mention north-store or COBALT-19. Possibly there is a missing entry or we need to infer? Let's read carefully.\n\nThe user gave a block of text:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... up to entry 40: ordinary parcel number 683 is held for routine inspection. This entry assigns no access phrase.\"\n\nSo all entries say \"no access phrase\". But the user says only north-store",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"river-gate\" and check its access phrase. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" But we need to find which entry mentions \"river-gate\". Possibly one of the entries is about river-gate, but the text given for each entry only mentions \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" That seems generic. Maybe there is a missing mention of \"river-gate\" in one of them. Let's scan the list: I see entries 0 through 139. None explicitly mention \"river-gate\". Perhaps the phrase \"river-gate\" is the name of a record, and we need to find which entry number corresponds to river-gate. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to find which entry number is for river-gate, and then its access phrase is ORCHID-72. But the text says",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase \"COBALT-19\". The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" except maybe one entry that assigns a different phrase. We need to scan the list for any mention of \"north-store\". The provided text doesn't explicitly mention \"north-store\" in each entry; it just says \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" So we need to infer which entry corresponds to north-store. Possibly there is a mapping: maybe entry 0 is for north-store? But the user says only record north-store has the access phrase COBALT-19. So we need to find the entry where the access phrase is COBALT-19. That might be one of the entries, but all entries listed say \"assigns no access phrase\". Wait, maybe I missed something: The text says \"Only record north-store has the access phrase",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19\n\nOnly record north-store has the access phrase COBALT-19. (Archive entry 69)</think>COBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 34,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q8",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "The complete output from the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 12:34:56 UTC 2026**.  \nAnd 19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 72,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry has \"river-gate\" and that entry assigns the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are all \"ordinary parcel number X\". None mention \"river-gate\". Possibly there is a missing entry? Let's read carefully.\n\nThe archive data:\n\n- Entry 0: ordinary parcel number 3, no access phrase.\n- Entry 1: ordinary parcel number 20, no access phrase.\n- ...\n- Entry 40: ordinary parcel number 683, no access phrase.\n\nWe need to find \"river-gate\". Maybe \"river-gate\" is a record identifier, not a parcel number. Could be that among these entries, one corresponds to river-gate. But none mention river-gate. Perhaps we missed something: The user says \"Only record river-gate has the access phrase ORCHID-72.\" So we need to find which entry corresponds to river-gate. Possibly the entries are not all ordinary; maybe there is a pattern: The numbers increase by 17? Let's check: 3, 20",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry assigns the access phrase \"COBALT-19\" to north-store. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate in the archive entries which one mentions \"north-store\" and has access phrase COBALT-19. But the provided archive entries only list ordinary parcel numbers and say \"held for routine inspection. This entry assigns no access phrase.\" for entries 0 through 40. None of them mention north-store or COBALT-19. Possibly there is a missing entry? Let's re-read the data.\n\nThe user gave:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... up to entry 40: ordinary parcel number 683 is held for routine inspection. This entry assigns no access phrase.\"\n\nSo all entries say \"no access phrase\". But the statement \"Only record north-store has the access phrase COB",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "Only record river-gate has the access phrase ORCHID-72.\n\nAnswer: ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 22,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "Only record north-store has the access phrase COBALT-19.\n\nCOBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 20,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry has \"river-gate\" and the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are all \"ordinary parcel number X\". None mention river-gate explicitly. Possibly \"river-gate\" is a record identifier, not a parcel number. We need to search for \"river-gate\" in the text. The provided text is a list of archive entries 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" But maybe one of them mentions river-gate. Let's scan quickly: The text is:\n\n\"Archive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 ...\n...\nArchive entry 139: ordinary parcel number 2366 ... This entry assigns no access phrase.\"\n\nNone mention river-gate. Perhaps \"river-gate\" is a specific record among these, maybe the entry number 72? Or maybe \"river-gate\" is a phrase that appears elsewhere. Let",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase \"COBALT-19\". The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139, each describing an ordinary parcel number and says \"This entry assigns no access phrase.\" except maybe one entry mentions an access phrase. We need to scan the text for \"COBALT-19\". Let's search the provided text.\n\nThe text:\n\n\"Archive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 ... no access phrase.\n...\nArchive entry 4: ordinary parcel number 71 ... no access phrase.\n...\nArchive entry 5: ordinary parcel number 88 ... no access phrase.\n...\nArchive entry 6: ordinary parcel number 105 ... no access phrase.\n...\nArchive entry 7: ordinary parcel number 122 ... no access phrase.\n...\nArchive entry 8: ordinary parcel number 139 ... no access phrase.\n...\nArchive entry 9: ordinary parcel number ",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "Only record river-gate has the access phrase ORCHID-72.\n\nORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 20,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "q4",
+        "stage": "baseline",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "The complete output of the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 12:34:56 UTC 2026**.  \n19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 70,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Full"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"river-gate\" and check if it has the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry for river-gate. The archive entries listed are ordinary parcel numbers from 3 to 683, but none mention \"river-gate\". Possibly \"river-gate\" is a specific entry among these? Let's scan the descriptions: each entry says \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" That seems like a template. But maybe one of them is for river-gate? The text doesn't specify which entry is for river-gate. Perhaps we need to infer from the list: maybe \"river-gate\" is a known location and its entry is among these. Could be that \"river-gate\" is the name of a parcel? Or maybe the archive entries are not all ordinary; maybe some are for river-gate. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to find the entry for river-gate and see its access phrase. But the provided text doesn",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase COBALT-19. The prompt says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries listed are numbered 0 to 40, each describing an ordinary parcel number and says \"held for routine inspection. This entry assigns no access phrase.\" None of them mention north-store explicitly. But maybe one of them is for north-store? Let's read carefully.\n\nThe text:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... and so on up to entry 40.\"\n\nWe need to find which entry is for north-store. Possibly one of these entries mentions north-store, but the given lines only say \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" None mention north-store. Perhaps there is",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find the archive entry for \"river-gate\" and check which entry assigns the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry where the ordinary parcel number is for river-gate? Or maybe \"river-gate\" is a specific record. Let's scan the entries. The entries are listed from 0 to 139. They all say \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" But we need to find which one has access phrase ORCHID-72. The user says only record river-gate has the access phrase ORCHID-72. So we need to find the entry where the access phrase is ORCHID-72. But in the provided text, each entry says \"This entry assigns no access phrase.\" That seems generic. Perhaps there is a missing detail: maybe earlier in the text there is a mention of \"river-gate\" somewhere. Let's search the text: I see \"Archive entry 72: ordinary parcel number 1227 is held for routine inspection. This entry assigns no access phrase.\" Not that. Wait, we need to find",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase COBALT-19. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139, but they all say \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" However, we need to find the one that mentions \"north-store\" and has access phrase COBALT-19. The text provided doesn't explicitly mention \"north-store\" in any entry. Let's re-read the given text carefully.\n\nThe user wrote:\n\n\"Read the archive data below.\nOnly record north-store has the access phrase COBALT-19.\nArchive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase.\nArchive entry 1: ordinary parcel number 20 is held for routine inspection. This entry assigns no access phrase.\n... and so on up to entry 139: ordinary parcel number 2366 is held for routine inspection. This entry assigns no access phrase.\"\n\nBut none of these entries mention \"north-store",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "From the text: \"Only record river-gate has the access phrase ORCHID-72.\"\n\nThus the access phrase for record river-gate is ORCHID-72.\n\nORCHID-72</think>ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 48,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "Only record north-store has the access phrase COBALT-19.\n\nCOBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 20,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Full"
+      },
+      {
+        "answer": "123 \u00d7 456 = **56,088**.",
+        "case": "multiply",
+        "generated_tokens": 40,
+        "input_tokens": 926,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "calculate"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "The complete output of the `current_time` command is:\n\n```json\n{\n  \"ok\": true,\n  \"result\": {\n    \"local_time\": \"Thu Jan 15 12:34:56 UTC 2026\"\n  }\n}\n```",
+        "case": "fixed-clock",
+        "generated_tokens": 62,
+        "input_tokens": 933,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "It is currently **Thu Jan 15, 12:34:56 UTC 2026**.  \n19 \u00d7 23 = **437**.",
+        "case": "two-tools",
+        "generated_tokens": 70,
+        "input_tokens": 1476,
+        "kind": "tools",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [
+          "calculate",
+          "current_time"
+        ],
+        "swa": "Compact"
+      },
+      {
+        "answer": "\"CEDAR\"",
+        "case": "read-code",
+        "generated_tokens": 4,
+        "input_tokens": 112,
+        "kind": "answer",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "green cabinet",
+        "case": "read-prose",
+        "generated_tokens": 2,
+        "input_tokens": 94,
+        "kind": "answer",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry assigns the access phrase ORCHID-72 for river-gate. The entries listed are ordinary parcel numbers, but we need to locate the one for river-gate. The text says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to find the entry where the entry mentions river-gate and assigns ORCHID-72. However, the provided entries all say \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" None of them mention river-gate explicitly. Possibly there is a missing entry or we need to infer. Let's read carefully: The archive entries 0 through 40 are listed. Each says: \"Archive entry X: ordinary parcel number Y is held for routine inspection. This entry assigns no access phrase.\" None mention river-gate. Perhaps river-gate is one of these entries but the description is generic. Maybe river-gate is the name of the record, and we need to find which entry corresponds to river-gate. But the text doesn't give mapping. Possibly \"river-gate\" is a location and the entries are for ordinary parcels, but maybe one of them is for river-gate?",
+        "case": "retrieve-river-gate-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase COBALT-19. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries listed are from 0 to 40, each describing an ordinary parcel number and says \"held for routine inspection. This entry assigns no access phrase.\" But we need to find which one is for north-store and has access phrase COBALT-19. However, the provided text doesn't explicitly mention \"north-store\" anywhere. Let's re-read the prompt: \"Read the archive data below. Only record north-store has the access phrase COBALT-19. Archive entry 0: ordinary parcel number 3 is held for routine inspection. This entry assigns no access phrase. ... Archive entry 40: ordinary parcel number 683 is held for routine inspection. This entry assigns no access phrase.\"\n\nIt seems none of these entries mention north-store. Possibly there is a missing entry or we need to infer that only one entry has an access phrase, and that is COBALT-19 for north-store. But the text says \"Only",
+        "case": "retrieve-north-store-1024-start",
+        "generated_tokens": 256,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-middle",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-1024-end",
+        "generated_tokens": 5,
+        "input_tokens": 1082,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find the archive entry for \"river-gate\" and check which entry has the access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to locate the entry where the ordinary parcel number is for river-gate? Or maybe \"river-gate\" is a specific record. Let's scan the entries. The entries are listed from 0 to 139, each with an ordinary parcel number. None of them mention \"river-gate\" explicitly. Possibly \"river-gate\" is the name of a parcel or something. But we need to find which entry has access phrase ORCHID-72. The user says: \"Only record river-gate has the access phrase ORCHID-72.\" So we need to find the entry where the access phrase is ORCHID-72. That is, among the archive entries, one of them assigns an access phrase ORCHID-72. We need to locate that entry. The list shows many entries, but they all say \"This entry assigns no access phrase.\" except maybe one. Let's scan quickly: I see \"Archive entry 72: ordinary parcel number 479 is held for routine inspection",
+        "case": "retrieve-river-gate-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "We need to find which archive entry corresponds to \"north-store\" and has the access phrase COBALT-19. The user says: \"Only record north-store has the access phrase COBALT-19.\" So we need to locate the entry for north-store. The archive entries are listed from 0 to 139. Each entry mentions \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" But we need to find which one is for north-store. The text doesn't explicitly mention \"north-store\" in each line. Possibly \"north-store\" is a category or location. Maybe there is a specific entry that mentions north-store. Let's scan the list. The entries are all \"ordinary parcel number X is held for routine inspection. This entry assigns no access phrase.\" None mention north-store. Perhaps earlier in the archive there is a mention of north-store? The user says \"Only record north-store has the access phrase COBALT-19.\" So we need to find the entry where access phrase is COBALT-19. But in the given text, each entry says \"This entry assigns no access phrase.\" That suggests none of them have an access phrase?",
+        "case": "retrieve-north-store-3500-start",
+        "generated_tokens": 256,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "From the text: \"Only record river-gate has the access phrase ORCHID-72.\"\n\nThus the access phrase for record river-gate is ORCHID-72.</think>ORCHID-72",
+        "case": "retrieve-river-gate-3500-middle",
+        "generated_tokens": 43,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "Only record north-store has the access phrase COBALT-19.\n\nCOBALT-19",
+        "case": "retrieve-north-store-3500-middle",
+        "generated_tokens": 20,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": false,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "ORCHID-72",
+        "case": "retrieve-river-gate-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      },
+      {
+        "answer": "COBALT-19",
+        "case": "retrieve-north-store-3500-end",
+        "generated_tokens": 5,
+        "input_tokens": 3539,
+        "kind": "retrieval",
+        "passed": true,
+        "profile": "pq3_0",
+        "stage": "candidate",
+        "successful_tools": [],
+        "swa": "Compact"
+      }
+    ],
+    "text": [
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.050831152187186035,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.113523267664753,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.13398767263707256,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.9592015560622045,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.41090101843184357,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.655232218506335,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 9.39308638982693,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.9186893372650857,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.6841994528377136,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.0004220703451984775,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.013524040588965391,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 3.7433263774965546,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.40510631103060746,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.25530266564814497,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.110699415902296,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.08239572331032718,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.8180159936418256,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.050831152187186035,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.113523267664753,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.13398767263707256,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.9592015560622045,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.41090101843184357,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.655232218506335,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 9.39308638982693,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.9186893372650857,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.6841994528377136,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.0004220703451984775,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.013524040588965391,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 3.7433263774965546,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.40510631103060746,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.25530266564814497,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.110699415902296,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.08239572331032718,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.8180159936418256,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 1,
+        "stage": "baseline",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.050831152187186035,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.113523267664753,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.13398767263707256,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.9592015560622045,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.41090101843184357,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 4.655232218506335,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 9.39308638982693,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.9186893372650857,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.6841994528377136,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.0004220703451984775,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.013524040588965391,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 3.7433263774965546,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.40510631103060746,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.25530266564814497,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 1.110699415902296,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.08239572331032718,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0,
+          "target_nll_profile": 0.8180159936418256,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "f16",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 2.0955830385042437e-05,
+          "target_nll_profile": 0.04982799237939162,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0002690528543152099,
+          "target_nll_profile": 4.096644313252199,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 3.727015001796771e-05,
+          "target_nll_profile": 0.1351533419693105,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 8.516505007385368e-05,
+          "target_nll_profile": 1.9717744227339367,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 1.4269483959784686e-05,
+          "target_nll_profile": 0.4122270909407284,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.00023803540197813185,
+          "target_nll_profile": 4.664800855015741,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.00024216053551117476,
+          "target_nll_profile": 9.376627082471185,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.00017993673560887834,
+          "target_nll_profile": 0.9166345340993942,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0001962017914383055,
+          "target_nll_profile": 1.6628679399110418,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 8.235821179373787e-07,
+          "target_nll_profile": 0.00044428373990612613,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 2.2567509541070174e-05,
+          "target_nll_profile": 0.01405713088040983,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.00039784988199973554,
+          "target_nll_profile": 3.737892677616358,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 7.216219224675907e-05,
+          "target_nll_profile": 0.4038982996563192,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.00018375392392012488,
+          "target_nll_profile": 0.24788011954824896,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.00032775456267201616,
+          "target_nll_profile": 1.110119535768419,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 8.593126291528109e-05,
+          "target_nll_profile": 0.07862007258693993,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0001218391311465714,
+          "target_nll_profile": 0.8027494361592069,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q8",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0023038786801796874,
+          "target_nll_profile": 0.056540941338365514,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0321888431954514,
+          "target_nll_profile": 4.250248789808406,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.003564993621140699,
+          "target_nll_profile": 0.11698508094522353,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.00974539079382211,
+          "target_nll_profile": 2.0839722139809673,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0033904599873159267,
+          "target_nll_profile": 0.442371497163915,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.022133265545455312,
+          "target_nll_profile": 4.588194957019734,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.019054766206599655,
+          "target_nll_profile": 9.392515228544834,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.04134295696166917,
+          "target_nll_profile": 1.2459345834835212,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.006836500860283048,
+          "target_nll_profile": 1.7562605796239126,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 2.0979534785444796e-05,
+          "target_nll_profile": 0.00040991684522495575,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.001465121388796344,
+          "target_nll_profile": 0.008849359412678837,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.013304782301939735,
+          "target_nll_profile": 3.895956479113824,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0069494997402407025,
+          "target_nll_profile": 0.42274204070145416,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.02098808323431911,
+          "target_nll_profile": 0.3676716194386067,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.07578561529166272,
+          "target_nll_profile": 1.058384931954862,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.006834063061157071,
+          "target_nll_profile": 0.05272383098158784,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.0023236010279097732,
+          "target_nll_profile": 0.7591021994034968,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": true
+        },
+        "pq3_observation": null,
+        "profile": "q4",
+        "repeat": 0,
+        "stage": "baseline",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0037067834368400623,
+          "target_nll_profile": 0.04627011366102707,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 11,
+          "completed_indexed_writes": 22,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.1068777578677194,
+          "target_nll_profile": 3.6376283035847194,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 22,
+          "completed_indexed_writes": 44,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.01175467254815774,
+          "target_nll_profile": 0.10409300534898946,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 33,
+          "completed_indexed_writes": 66,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.018893974750639708,
+          "target_nll_profile": 1.8723492700362705,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 44,
+          "completed_indexed_writes": 88,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.017702337781440963,
+          "target_nll_profile": 0.4128829102979594,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 55,
+          "completed_indexed_writes": 110,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.11892614800577543,
+          "target_nll_profile": 5.101616432933103,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 66,
+          "completed_indexed_writes": 132,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.07279300484204629,
+          "target_nll_profile": 9.277833704963061,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 77,
+          "completed_indexed_writes": 154,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.1241994120868753,
+          "target_nll_profile": 1.4510954431258511,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 88,
+          "completed_indexed_writes": 176,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.04286305433310667,
+          "target_nll_profile": 1.455867743813382,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 99,
+          "completed_indexed_writes": 198,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.00012455734221122116,
+          "target_nll_profile": 0.00029869981149133196,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 110,
+          "completed_indexed_writes": 220,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.002511146302138631,
+          "target_nll_profile": 0.013436423596377978,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 121,
+          "completed_indexed_writes": 242,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.12506935783584539,
+          "target_nll_profile": 4.019080233854222,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 132,
+          "completed_indexed_writes": 264,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.07474530083168547,
+          "target_nll_profile": 0.5033719276917203,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 143,
+          "completed_indexed_writes": 286,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.03167018445611502,
+          "target_nll_profile": 0.31792948125675835,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 154,
+          "completed_indexed_writes": 308,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.10389303660332826,
+          "target_nll_profile": 1.0260382947074156,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 165,
+          "completed_indexed_writes": 330,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.041891063876154024,
+          "target_nll_profile": 0.024056716040671944,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 176,
+          "completed_indexed_writes": 352,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.029546239857758262,
+          "target_nll_profile": 0.6043402942202398,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": false
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 187,
+          "completed_indexed_writes": 374,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Full",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.0037067834368400623,
+          "target_nll_profile": 0.04627011366102707,
+          "target_nll_reference": 0.050831152187186035,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 11,
+          "completed_indexed_writes": 22,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 32
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.1068777578677194,
+          "target_nll_profile": 3.6376283035847194,
+          "target_nll_reference": 4.113523267664753,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 22,
+          "completed_indexed_writes": 44,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 64
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.01175467254815774,
+          "target_nll_profile": 0.10409300534898946,
+          "target_nll_reference": 0.13398767263707256,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 33,
+          "completed_indexed_writes": 66,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 96
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.018893974750639708,
+          "target_nll_profile": 1.8723492700362705,
+          "target_nll_reference": 1.9592015560622045,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 44,
+          "completed_indexed_writes": 88,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 128
+      },
+      {
+        "corpus": "journal-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.017702337781440963,
+          "target_nll_profile": 0.4128829102979594,
+          "target_nll_reference": 0.41090101843184357,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 55,
+          "completed_indexed_writes": 110,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "6081c0ab6fd2e97d",
+        "tokens": 139
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.11892614800577543,
+          "target_nll_profile": 5.101616432933103,
+          "target_nll_reference": 4.655232218506335,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 66,
+          "completed_indexed_writes": 132,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 32
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.07279300484204629,
+          "target_nll_profile": 9.277833704963061,
+          "target_nll_reference": 9.39308638982693,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 77,
+          "completed_indexed_writes": 154,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 64
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.1241994120868753,
+          "target_nll_profile": 1.4510954431258511,
+          "target_nll_reference": 0.9186893372650857,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 88,
+          "completed_indexed_writes": 176,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 96
+      },
+      {
+        "corpus": "ownership-prose",
+        "metrics": {
+          "kl_reference_to_profile": 0.04286305433310667,
+          "target_nll_profile": 1.455867743813382,
+          "target_nll_reference": 1.6841994528377136,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 99,
+          "completed_indexed_writes": 198,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "8a67600c2effe112",
+        "tokens": 113
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.00012455734221122116,
+          "target_nll_profile": 0.00029869981149133196,
+          "target_nll_reference": 0.0004220703451984775,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 110,
+          "completed_indexed_writes": 220,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 32
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.002511146302138631,
+          "target_nll_profile": 0.013436423596377978,
+          "target_nll_reference": 0.013524040588965391,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 121,
+          "completed_indexed_writes": 242,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 64
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.12506935783584539,
+          "target_nll_profile": 4.019080233854222,
+          "target_nll_reference": 3.7433263774965546,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 132,
+          "completed_indexed_writes": 264,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 96
+      },
+      {
+        "corpus": "rust-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.07474530083168547,
+          "target_nll_profile": 0.5033719276917203,
+          "target_nll_reference": 0.40510631103060746,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 143,
+          "completed_indexed_writes": 286,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "54065e133316d5e5",
+        "tokens": 118
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.03167018445611502,
+          "target_nll_profile": 0.31792948125675835,
+          "target_nll_reference": 0.25530266564814497,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 154,
+          "completed_indexed_writes": 308,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 32
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.10389303660332826,
+          "target_nll_profile": 1.0260382947074156,
+          "target_nll_reference": 1.110699415902296,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 165,
+          "completed_indexed_writes": 330,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 64
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.041891063876154024,
+          "target_nll_profile": 0.024056716040671944,
+          "target_nll_reference": 0.08239572331032718,
+          "top1_agrees": true
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 176,
+          "completed_indexed_writes": 352,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 96
+      },
+      {
+        "corpus": "python-code",
+        "metrics": {
+          "kl_reference_to_profile": 0.029546239857758262,
+          "target_nll_profile": 0.6043402942202398,
+          "target_nll_reference": 0.8180159936418256,
+          "top1_agrees": false
+        },
+        "pq3_observation": {
+          "completed_attention_operations": 187,
+          "completed_indexed_writes": 374,
+          "execution": "VulkanRequired",
+          "observed_paths": [
+            "CooperativeMatrix2"
+          ]
+        },
+        "profile": "pq3_0",
+        "repeat": 0,
+        "stage": "candidate",
+        "swa": "Compact",
+        "token_stream_fnv1a64": "e9ec0ff163875ae4",
+        "tokens": 114
+      }
+    ],
+    "identity": [
+      {
+        "acceptance": {
+          "fp16_repeats": 2,
+          "max_checkpoint_kl_reference_to_candidate": 0.05,
+          "max_lost_tasks_passed_by_fp16_and_q4": 0,
+          "max_mean_target_nll_increase_nats": 0.05,
+          "max_retrieval_accuracy_drop": 0.0,
+          "numerical_token_stride": 32,
+          "scope": "experimental codec comparison; promotion needs broader data and hardware",
+          "throughput_regression_investigation_fraction": 0.05
+        },
+        "fixture_fnv1a64": "00127a0cff646b88",
+        "full": true,
+        "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+        "task_count": 17,
+        "vocabulary_size": 128000
+      }
+    ],
+    "configurations": [
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 287334416,
+              "context_bytes": 92913664,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 25194592,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 0,
+                    "key_type": "F16",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 0,
+                    "value_type": "F16"
+                  },
+                  {
+                    "cells": 4096,
+                    "key_rotation": 0,
+                    "key_type": "F16",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 0,
+                    "value_type": "F16"
+                  }
+                ],
+                "batch_size": 512,
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "not_observed",
+              "kv_payload_estimate_bytes": 92274688,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 25194592,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 287334416,
+                  "context_bytes": 92913664,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "Auto",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "f16",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Full",
+                "value": "f16"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "f16",
+        "swa": "Full"
+      },
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 283926544,
+              "context_bytes": 58834944,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 21786720,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 0,
+                    "key_type": "F16",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 0,
+                    "value_type": "F16"
+                  },
+                  {
+                    "cells": 768,
+                    "key_rotation": 0,
+                    "key_type": "F16",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 0,
+                    "value_type": "F16"
+                  }
+                ],
+                "batch_size": 512,
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "not_observed",
+              "kv_payload_estimate_bytes": 58195968,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 21786720,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 283926544,
+                  "context_bytes": 58834944,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "Auto",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "f16",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Compact",
+                "value": "f16"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "f16",
+        "swa": "Compact"
+      },
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 283926544,
+              "context_bytes": 32456704,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 21786720,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 128,
+                    "key_type": "Q8_0",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 64,
+                    "value_type": "Q8_0"
+                  },
+                  {
+                    "cells": 768,
+                    "key_rotation": 128,
+                    "key_type": "Q8_0",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 64,
+                    "value_type": "Q8_0"
+                  }
+                ],
+                "batch_size": 512,
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "not_observed",
+              "kv_payload_estimate_bytes": 30916608,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 21786720,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 283926544,
+                  "context_bytes": 32456704,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "Auto",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "q8_0",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Compact",
+                "value": "q8_0"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "q8",
+        "swa": "Compact"
+      },
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 283926544,
+              "context_bytes": 17907712,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 21786720,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 128,
+                    "key_type": "Q4_0",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 64,
+                    "value_type": "Q4_0"
+                  },
+                  {
+                    "cells": 768,
+                    "key_rotation": 128,
+                    "key_type": "Q4_0",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 64,
+                    "value_type": "Q4_0"
+                  }
+                ],
+                "batch_size": 512,
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "not_observed",
+              "kv_payload_estimate_bytes": 16367616,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 21786720,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 283926544,
+                  "context_bytes": 17907712,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "Auto",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "q4_0",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Compact",
+                "value": "q4_0"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "q4",
+        "swa": "Compact"
+      },
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 287334416,
+              "context_bytes": 20108800,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 25194592,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 128,
+                    "key_type": "PQ3_0",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 128,
+                    "value_type": "PQ3_0"
+                  },
+                  {
+                    "cells": 4096,
+                    "key_rotation": 128,
+                    "key_type": "PQ3_0",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 128,
+                    "value_type": "PQ3_0"
+                  }
+                ],
+                "batch_size": 512,
+                "codec": {
+                  "block_bytes": 50,
+                  "block_values": 128,
+                  "completed_attention_operations": 15070,
+                  "completed_indexed_writes": 30140,
+                  "execution": "VulkanRequired",
+                  "graph_version": 1,
+                  "name": "pq3_0",
+                  "observed_attention_paths": [
+                    "CooperativeMatrix2"
+                  ],
+                  "position_shifting": "unsupported",
+                  "row_version": 1,
+                  "state_io": "unsupported",
+                  "transform_version": 1
+                },
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "pq3_cache_writes_and_attention_observed",
+              "kv_payload_estimate_bytes": 18022400,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 25194592,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 287334416,
+                  "context_bytes": 20108800,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "RequireVulkan",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "pq3_0",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Full",
+                "value": "pq3_0"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "pq3_0",
+        "swa": "Full"
+      },
+      {
+        "diagnostics": {
+          "aggregate_memory": [
+            {
+              "buffer": "CPU_Mapped",
+              "compute_bytes": 0,
+              "context_bytes": 0,
+              "model_bytes": 215040000
+            },
+            {
+              "buffer": "Vulkan0",
+              "compute_bytes": 283926544,
+              "context_bytes": 13452800,
+              "model_bytes": 1419390976
+            },
+            {
+              "buffer": "Vulkan_Host",
+              "compute_bytes": 21786720,
+              "context_bytes": 0,
+              "model_bytes": 0
+            }
+          ],
+          "contexts": [
+            {
+              "effective": {
+                "arenas": [
+                  {
+                    "cells": 4096,
+                    "key_rotation": 128,
+                    "key_type": "PQ3_0",
+                    "kind": "Full",
+                    "layers": 6,
+                    "streams": 1,
+                    "value_rotation": 128,
+                    "value_type": "PQ3_0"
+                  },
+                  {
+                    "cells": 768,
+                    "key_rotation": 128,
+                    "key_type": "PQ3_0",
+                    "kind": "Sliding",
+                    "layers": 5,
+                    "streams": 1,
+                    "value_rotation": 128,
+                    "value_type": "PQ3_0"
+                  }
+                ],
+                "batch_size": 512,
+                "codec": {
+                  "block_bytes": 50,
+                  "block_values": 128,
+                  "completed_attention_operations": 15015,
+                  "completed_indexed_writes": 30030,
+                  "execution": "VulkanRequired",
+                  "graph_version": 1,
+                  "name": "pq3_0",
+                  "observed_attention_paths": [
+                    "CooperativeMatrix2"
+                  ],
+                  "position_shifting": "unsupported",
+                  "row_version": 1,
+                  "state_io": "unsupported",
+                  "transform_version": 1
+                },
+                "context_size": 4096,
+                "flash_attention": true,
+                "inspection_available": true,
+                "microbatch_size": 512,
+                "offload_kqv": true,
+                "op_offload": true,
+                "sequences": 1
+              },
+              "gpu_placement": "pq3_cache_writes_and_attention_observed",
+              "kv_payload_estimate_bytes": 11366400,
+              "memory": [
+                {
+                  "buffer": "CPU_Mapped",
+                  "compute_bytes": 0,
+                  "context_bytes": 0,
+                  "model_bytes": 215040000
+                },
+                {
+                  "buffer": "Vulkan_Host",
+                  "compute_bytes": 21786720,
+                  "context_bytes": 0,
+                  "model_bytes": 0
+                },
+                {
+                  "buffer": "Vulkan0",
+                  "compute_bytes": 283926544,
+                  "context_bytes": 13452800,
+                  "model_bytes": 1419390976
+                }
+              ],
+              "peak_vram_bytes": null,
+              "requested": {
+                "batch_size": 512,
+                "context_size": 4096,
+                "execution": "RequireVulkan",
+                "flash_attention": "Auto",
+                "gpu_layers": 1000,
+                "key": "pq3_0",
+                "microbatch_size": null,
+                "rotation": "Auto",
+                "swa": "Compact",
+                "value": "pq3_0"
+              },
+              "weight_devices": [
+                "Vulkan0"
+              ]
+            }
+          ]
+        },
+        "profile": "pq3_0",
+        "swa": "Compact"
+      }
+    ]
+  },
+  "summary": [
+    {
+      "profile": "f16",
+      "swa": "Full",
+      "task_count": 17,
+      "tasks_passed": 12,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-north-store-3500-middle"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7499085096107674,
+      "mean_target_nll_delta": 0.0,
+      "max_checkpoint_kl": 0.0
+    },
+    {
+      "profile": "f16",
+      "swa": "Compact",
+      "task_count": 17,
+      "tasks_passed": 12,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-north-store-3500-middle"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7499085096107674,
+      "mean_target_nll_delta": 0.0,
+      "max_checkpoint_kl": 0.0
+    },
+    {
+      "profile": "q8",
+      "swa": "Compact",
+      "task_count": 17,
+      "tasks_passed": 12,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-north-store-3500-middle"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7460128899252199,
+      "mean_target_nll_delta": -0.0038956196855475115,
+      "max_checkpoint_kl": 0.00039784988199973554
+    },
+    {
+      "profile": "q4",
+      "swa": "Compact",
+      "task_count": 17,
+      "tasks_passed": 10,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-1024-end",
+        "retrieve-north-store-1024-end",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-river-gate-3500-end"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7940508382212126,
+      "mean_target_nll_delta": 0.04414232861044537,
+      "max_checkpoint_kl": 0.07578561529166272
+    },
+    {
+      "profile": "pq3_0",
+      "swa": "Full",
+      "task_count": 17,
+      "tasks_passed": 11,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-river-gate-3500-middle",
+        "retrieve-north-store-3500-middle"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7569522940554858,
+      "mean_target_nll_delta": 0.007043784444718635,
+      "max_checkpoint_kl": 0.12506935783584539
+    },
+    {
+      "profile": "pq3_0",
+      "swa": "Compact",
+      "task_count": 17,
+      "tasks_passed": 11,
+      "failed_tasks": [
+        "retrieve-river-gate-1024-start",
+        "retrieve-north-store-1024-start",
+        "retrieve-river-gate-3500-start",
+        "retrieve-north-store-3500-start",
+        "retrieve-river-gate-3500-middle",
+        "retrieve-north-store-3500-middle"
+      ],
+      "text_checkpoints": 17,
+      "mean_target_nll": 1.7569522940554858,
+      "mean_target_nll_delta": 0.007043784444718635,
+      "max_checkpoint_kl": 0.12506935783584539
+    }
+  ],
+  "test_binaries": [
+    {
+      "file": "target/debug/deps/assistant-f2452d3e3dfafdf3",
+      "sha256": "81ddb46dbb280c2fd1ca58ed7e5019dbc69c3a58eecae666a32cd782a64d27be"
+    },
+    {
+      "file": "target/debug/deps/cache_quality-5e49ef577859fc62",
+      "sha256": "160de25649e3358c8a7fa7470599e18ce0b658219e70cc5933a275571a2218b4"
+    }
+  ],
+  "logs": [
+    {
+      "file": "assistant-pq3-candidate-quality-tasks.log",
+      "sha256": "6cd3eefdeacb5f93740d3920ec9a328d468d1ea282f4cdab1dab42f83b5dc48a"
+    },
+    {
+      "file": "assistant-pq3-candidate-quality-text.log",
+      "sha256": "4ab7a631d8ddbee22810f98df028feb2e4ae81b895882295dcd1f5e849dbd6f4"
+    }
+  ],
+  "recorded_local_date": "2026-11-04",
+  "purpose": "Experimental codebook-only PQ3 inference against unchanged FP16/Q8/Q4 references; no default promotion",
+  "hardware": {
+    "gpu": "NVIDIA RTX A500 Laptop GPU",
+    "driver": "615.78.08",
+    "vram_bytes": 4294967296,
+    "cpu": "13th Gen Intel Core i7-1370P",
+    "platform": "Linux x86_64"
+  },
+  "gate_characterization": {
+    "passed": false,
+    "lost_tasks": [
+      "retrieve-river-gate-3500-middle"
+    ],
+    "retrieval_accuracy_drop": 0.08333333333333337,
+    "mean_target_nll_delta": 0.007043784444718635,
+    "max_checkpoint_kl": 0.12506935783584539
+  },
+  "raw_artifact_sha256": "c8906a0093fe42d12bc4c86c30cc793904f9d851e331625d0feaa090050df356",
+  "notes": [
+    "Authored fixtures and acceptance thresholds unchanged. All 102 task and 119 numerical records retained.",
+    "PQ3 full and compact have the same measured quality; Vulkan write/attention counters and CooperativeMatrix2 observed.",
+    "Quality source inputs were unchanged for the complete capture. A subsequent fix only changes the standalone patch-verifier fixture bookkeeping for files created by an earlier patch; inference implementation and native patch hashes are unchanged.",
+    "Debug quality tests are not performance measurements; AMD/Intel and near-full 32K quality remain unvalidated."
+  ]
+}

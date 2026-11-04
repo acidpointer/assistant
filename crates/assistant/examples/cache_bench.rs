@@ -5,7 +5,7 @@ use assistant::engine::{
     AttentionRotation, ExecutionMode, GenerationOptions, KvCacheType, LLMConfig, ModelEngine,
     StreamCmd, SwaCacheMode,
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use serde_json::{Value, json};
 use std::{
     io::Write,
@@ -20,6 +20,15 @@ const CORPUS: &str = "The local assistant keeps careful notes. A red box contain
 #[derive(Debug, Parser)]
 #[allow(clippy::struct_excessive_bools)] // Independent CLI switches, mapped to typed engine policy.
 struct Args {
+    /// Select matrix profiles explicitly; useful for bounded 32K compact-only runs.
+    #[arg(long, value_delimiter = ',')]
+    profiles: Vec<String>,
+    /// Include experimental full/compact PQ3 cells in the default matrix.
+    #[arg(long)]
+    include_pq3: bool,
+    /// Fixed authored prose/code or the retained repetitive legacy fixture.
+    #[arg(long, value_enum, default_value_t = Corpus::Legacy)]
+    corpus: Corpus,
     #[arg(long)]
     model: PathBuf,
     /// Context capacities; each matrix cell runs in a fresh process.
@@ -57,6 +66,50 @@ struct Args {
     child_context: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum Corpus {
+    Legacy,
+    Representative,
+}
+fn corpus_text(kind: Corpus) -> anyhow::Result<String> {
+    if matches!(kind, Corpus::Legacy) {
+        return Ok(CORPUS.to_owned());
+    }
+    let fixture: Value =
+        serde_json::from_str(include_str!("../tests/fixtures/cache-quality-v1.json"))?;
+    let mut text = String::new();
+    for item in fixture["texts"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("quality corpus texts missing"))?
+    {
+        text.push_str(
+            item["text"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("quality text missing"))?,
+        );
+        text.push_str("\n\n");
+    }
+    Ok(text)
+}
+fn hash_bytes(bytes: &[u8]) -> anyhow::Result<String> {
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("checksum stdin missing"))?
+        .write_all(bytes)?;
+    let result = child.wait_with_output()?;
+    anyhow::ensure!(result.status.success(), "byte checksum failed");
+    String::from_utf8(result.stdout)?
+        .split_whitespace()
+        .next()
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow::anyhow!("checksum missing"))
+}
+
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     // Scheduler tracing reads its environment at construction. Relaunch rather
@@ -82,17 +135,48 @@ fn main() -> anyhow::Result<()> {
     }
     let executable = std::env::current_exe()?;
     let mut failures = 0;
+    #[allow(unused_mut)]
+    let mut available = vec![
+        "full-f16",
+        "compact-f16",
+        "full-q8",
+        "compact-q8",
+        "full-q8-q4",
+        "compact-q8-q4",
+        "full-q4",
+        "compact-q4",
+    ];
+    #[cfg(feature = "turboquant")]
+    available.extend(["full-pq3", "compact-pq3"]);
+    anyhow::ensure!(
+        !args.include_pq3 || cfg!(feature = "turboquant"),
+        "PQ3 benchmark requires turboquant"
+    );
+    let profiles: Vec<_> = if args.profiles.is_empty() {
+        available
+            .iter()
+            .copied()
+            .filter(|p| args.include_pq3 || !p.ends_with("pq3"))
+            .collect()
+    } else {
+        anyhow::ensure!(
+            args.profiles
+                .iter()
+                .all(|p| available.contains(&p.as_str())),
+            "unsupported benchmark profile"
+        );
+        args.profiles.iter().map(String::as_str).collect()
+    };
+    anyhow::ensure!(
+        profiles
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == profiles.len(),
+        "duplicate benchmark profiles"
+    );
     for context in &args.contexts {
-        for profile in [
-            "full-f16",
-            "compact-f16",
-            "full-q8",
-            "compact-q8",
-            "full-q8-q4",
-            "compact-q8-q4",
-            "full-q4",
-            "compact-q4",
-        ] {
+        for profile in &profiles {
             let mut command = Command::new(&executable);
             command
                 .args(std::env::args_os().skip(1))
@@ -148,6 +232,8 @@ fn child(args: &Args, profile: &str) -> anyhow::Result<()> {
         Some("q8") => (KvCacheType::Q8_0, KvCacheType::Q8_0),
         Some("q8-q4") => (KvCacheType::Q8_0, KvCacheType::Q4_0),
         Some("q4") => (KvCacheType::Q4_0, KvCacheType::Q4_0),
+        #[cfg(feature = "turboquant")]
+        Some("pq3") => (KvCacheType::PQ3_0, KvCacheType::PQ3_0),
         _ => anyhow::bail!("unknown profile {profile}"),
     };
     if args.rotation_disabled {
@@ -156,6 +242,10 @@ fn child(args: &Args, profile: &str) -> anyhow::Result<()> {
     if args.cpu {
         config.gpu_layers = 0;
         config.execution = ExecutionMode::Cpu;
+    }
+    #[cfg(feature = "turboquant")]
+    if config.cache.key == KvCacheType::PQ3_0 && args.require_vulkan && !args.cpu {
+        config.execution = ExecutionMode::RequireVulkan;
     }
     config.validate()?;
     let identity = identity(&args.model)?;
@@ -210,7 +300,13 @@ fn child(args: &Args, profile: &str) -> anyhow::Result<()> {
         target > 0 && target <= 1_000_000,
         "prompt length must be 1..=1000000"
     );
-    let text = CORPUS.repeat(target.div_ceil(8));
+    let corpus = corpus_text(args.corpus)?;
+    anyhow::ensure!(
+        corpus.is_ascii(),
+        "benchmark corpus must be ASCII for byte-prefix bisection"
+    );
+    let corpus_sha256 = hash_bytes(corpus.as_bytes())?;
+    let text = corpus.repeat(target.div_ceil(8));
     // ASCII allows byte-prefix bisection without splitting UTF-8. Tokenization
     // is setup work, outside timed intervals. All formats use this same input.
     let (mut lo, mut hi) = (1, text.len());
@@ -252,7 +348,7 @@ fn child(args: &Args, profile: &str) -> anyhow::Result<()> {
     }
     println!(
         "{}",
-        json!({"schema":1,"status":"ok","profile":profile,"identity":identity,"load_seconds":load_seconds,"context_creation_seconds":context_seconds,"allocated":allocated.to_json(),"trials":trials,"devices":topology.layers.iter().map(|l|&l.device_name).collect::<std::collections::BTreeSet<_>>(),"quality_artifact":args.quality_artifact,"placement_audit":if args.audit {"scheduler_trace_on_stderr; inspect assignments"} else {"not_run"},"timing_valid_for_comparison":!args.audit,"host_peak":host_peak(),"device_peak":null})
+        json!({"schema":1,"status":"ok","profile":profile,"identity":identity,"corpus":format!("{:?}",args.corpus),"corpus_sha256":corpus_sha256,"prompt_text_sha256":hash_bytes(text[..lo].as_bytes())?,"load_seconds":load_seconds,"context_creation_seconds":context_seconds,"allocated":allocated.to_json(),"trials":trials,"devices":topology.layers.iter().map(|l|&l.device_name).collect::<std::collections::BTreeSet<_>>(),"quality_artifact":args.quality_artifact,"placement_audit":if args.audit {"scheduler_trace_on_stderr; inspect assignments"} else {"not_run"},"timing_valid_for_comparison":!args.audit,"host_peak":host_peak(),"device_peak":null})
     );
     Ok(())
 }
@@ -288,7 +384,14 @@ fn identity(model: &Path) -> anyhow::Result<Value> {
     let mut paths = std::fs::read_dir(patch_dir)?
         .map(|v| v.map(|v| v.path()))
         .collect::<Result<Vec<_>, _>>()?;
-    paths.retain(|p| p.extension().is_some_and(|e| e == "patch"));
+    paths.retain(|p| {
+        p.extension().is_some_and(|e| e == "patch")
+            && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                matches!(n.get(..4), Some("0003" | "0004" | "0005" | "0006" | "0007"))
+                    || cfg!(feature = "turboquant")
+                        && matches!(n.get(..4), Some("0008" | "0009" | "0010"))
+            })
+    });
     paths.sort();
     let patches = paths
         .iter()
@@ -353,7 +456,7 @@ fn identity(model: &Path) -> anyhow::Result<Value> {
     .filter_map(|key| std::env::var(key).ok().map(|value| (key, value)))
     .collect::<std::collections::BTreeMap<_, _>>();
     Ok(
-        json!({"workspace_revision":command_text("git",&["-C",root_text,"rev-parse","HEAD"])?,"working_diff_sha256":String::from_utf8(diff_hash.stdout)?.split_whitespace().next(),"source_files":source_files,"rustc":command_text("rustc",&["--version"])?,"working_tree_status":command_text("git",&["-C",root_text,"status","--porcelain"])?,"native_revision":command_text("git",&["-C",root_text,"-C","crates/llama_cpp_sys/llama.cpp","rev-parse","HEAD"])?,"patches":patches,"executable_sha256":hash_file(&std::env::current_exe()?)?,"build_rustflags":option_env!("CARGO_ENCODED_RUSTFLAGS"),"model_sha256":hash_file(model)?,"model_bytes":std::fs::metadata(model)?.len(),"corpus":"cache-bench-local-notes-v1","build_profile":if cfg!(debug_assertions) {"debug"} else {"release"},"gpu_driver_nvidia_smi":command_text("nvidia-smi",&["--query-gpu=name,driver_version","--format=csv,noheader"]).ok(),"environment":overrides}),
+        json!({"workspace_revision":command_text("git",&["-C",root_text,"rev-parse","HEAD"])?,"working_diff_sha256":String::from_utf8(diff_hash.stdout)?.split_whitespace().next(),"source_files":source_files,"rustc":command_text("rustc",&["--version"])?,"working_tree_status":command_text("git",&["-C",root_text,"status","--porcelain"])?,"native_revision":command_text("git",&["-C",root_text,"-C","crates/llama_cpp_sys/llama.cpp","rev-parse","HEAD"])?,"patches":patches,"executable_sha256":hash_file(&std::env::current_exe()?)?,"build_rustflags":option_env!("CARGO_ENCODED_RUSTFLAGS"),"model_sha256":hash_file(model)?,"model_bytes":std::fs::metadata(model)?.len(),"corpus":"selected_in_record", "features":{"turboquant":cfg!(feature="turboquant"),"vulkan":cfg!(feature="vulkan")},"build_profile":if cfg!(debug_assertions) {"debug"} else {"release"},"gpu_driver_nvidia_smi":command_text("nvidia-smi",&["--query-gpu=name,driver_version","--format=csv,noheader"]).ok(),"environment":overrides}),
     )
 }
 fn host_peak() -> Option<Value> {

@@ -10,7 +10,7 @@ use super::params::{LlamaContextParams, LlamaFlashAttnType};
 use crate::{quantize::GgmlType, ShimError};
 use llama_cpp_sys as sys;
 
-/// Initially supported, independently selectable cache formats.
+/// Existing formats are independently selectable; PQ3 requires a matched pair.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum KvCacheType {
@@ -21,6 +21,9 @@ pub enum KvCacheType {
     Q8_0,
     /// Four bits plus a half-precision scale per 32 values.
     Q4_0,
+    /// Experimental 128-coordinate PQ3 cache; requires matched K/V and transforms.
+    #[cfg(feature = "turboquant")]
+    PQ3_0,
 }
 impl KvCacheType {
     /// Native storage type.
@@ -30,6 +33,8 @@ impl KvCacheType {
             Self::F16 => GgmlType::F16,
             Self::Q8_0 => GgmlType::Q8_0,
             Self::Q4_0 => GgmlType::Q4_0,
+            #[cfg(feature = "turboquant")]
+            Self::PQ3_0 => GgmlType::PQ3_0,
         }
     }
     /// Stable configuration spelling.
@@ -39,6 +44,8 @@ impl KvCacheType {
             Self::F16 => "f16",
             Self::Q8_0 => "q8_0",
             Self::Q4_0 => "q4_0",
+            #[cfg(feature = "turboquant")]
+            Self::PQ3_0 => "pq3_0",
         }
     }
     /// Number of values per storage block.
@@ -46,6 +53,8 @@ impl KvCacheType {
     pub const fn block_size(self) -> u32 {
         match self {
             Self::F16 => 1,
+            #[cfg(feature = "turboquant")]
+            Self::PQ3_0 => 128,
             _ => 32,
         }
     }
@@ -109,6 +118,10 @@ pub enum CacheConfigError {
     /// MLA and certain compressed-attention architectures share K/V storage.
     #[error("this model requires identical key and value cache formats")]
     EqualTypesRequired,
+    /// PQ3 graph support is restricted to a matched pair with mandatory rotation.
+    #[cfg(feature = "turboquant")]
+    #[error("PQ3 requires PQ3/PQ3, 128-dimensional heads, attention layers and enabled rotation")]
+    Pq3PolicyUnsupported,
     /// A storage block does not divide an attention head.
     #[error("layer {layer}: {side} head dimension {dimension} is incompatible with cache block size {block}")]
     HeadAlignment {
@@ -127,6 +140,12 @@ impl KvCacheConfig {
     /// # Errors
     /// Rejects quantized V with explicitly disabled flash attention.
     pub fn validate(&self) -> Result<(), CacheConfigError> {
+        #[cfg(feature = "turboquant")]
+        if self.key == KvCacheType::PQ3_0 || self.value == KvCacheType::PQ3_0 {
+            if self.key != self.value || self.rotation == AttentionRotation::Disabled {
+                return Err(CacheConfigError::Pq3PolicyUnsupported);
+            }
+        }
         if self.value != KvCacheType::F16 && self.flash_attention == LlamaFlashAttnType::Disabled {
             return Err(CacheConfigError::FlashRequired);
         }
@@ -137,6 +156,15 @@ impl KvCacheConfig {
     /// Returns incompatible K/V pairing or head-block alignment.
     pub fn validate_for(&self, model: &ModelCacheTopology) -> Result<(), CacheConfigError> {
         self.validate()?;
+        #[cfg(feature = "turboquant")]
+        if self.key == KvCacheType::PQ3_0
+            && !model
+                .layers
+                .iter()
+                .any(|layer| matches!(layer.kind, CacheLayerKind::Full | CacheLayerKind::Sliding))
+        {
+            return Err(CacheConfigError::Pq3PolicyUnsupported);
+        }
         if model.requires_equal_kv && self.key != self.value {
             return Err(CacheConfigError::EqualTypesRequired);
         }
@@ -148,6 +176,10 @@ impl KvCacheConfig {
                 ("key", layer.key_head_dim, self.key),
                 ("value", layer.value_head_dim, self.value),
             ] {
+                #[cfg(feature = "turboquant")]
+                if format == KvCacheType::PQ3_0 && dimension != 128 {
+                    return Err(CacheConfigError::Pq3PolicyUnsupported);
+                }
                 if dimension == 0 || dimension % format.block_size() != 0 {
                     return Err(CacheConfigError::HeadAlignment {
                         layer: layer.layer,
@@ -169,6 +201,10 @@ impl KvCacheConfig {
         params: LlamaContextParams,
     ) -> Result<LlamaContextParams, CacheConfigError> {
         self.validate()?;
+        #[cfg(feature = "turboquant")]
+        if self.key == KvCacheType::PQ3_0 && params.attn_rot_disabled() {
+            return Err(CacheConfigError::Pq3PolicyUnsupported);
+        }
         Ok(params
             .with_cache_type_k(self.key.ggml_type())
             .with_cache_type_v(self.value.ggml_type())
@@ -248,6 +284,125 @@ pub struct CacheArenaInfo {
     /// Value rotation size, zero when absent.
     pub value_rotation: u32,
 }
+/// Execution contract validated by the experimental native context constructor.
+#[cfg(feature = "turboquant")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Pq3Execution {
+    /// Explicit CPU reference, including Q8 query quantization.
+    CpuReference,
+    /// Required Vulkan cache operations; completed counts provide execution evidence.
+    VulkanRequired,
+}
+
+/// Actual Vulkan attention path used by synchronized commands in this context.
+#[cfg(feature = "turboquant")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Pq3KernelPath {
+    /// Portable scalar shader.
+    Scalar,
+    /// Cooperative-matrix version 1.
+    CooperativeMatrix1,
+    /// Cooperative-matrix version 2.
+    CooperativeMatrix2,
+}
+
+/// Owned versioned codec identity and cumulative completed-operation observations.
+/// No query adds GPU synchronization; counts advance at normal completion points.
+/// This proves the recorded operations, not every node or peak device memory.
+#[cfg(feature = "turboquant")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pq3GraphInfo {
+    /// Frozen block/scale/codebook identity.
+    pub row_version: u32,
+    /// Native graph capability ABI.
+    pub graph_version: u32,
+    /// Fixed signs and forward/inverse ordering identity.
+    pub transform_version: u32,
+    /// Actual values per storage block, queried from native type metadata.
+    pub block_values: u32,
+    /// Actual bytes per storage block, including the half norm.
+    pub block_bytes: u32,
+    /// Required execution mode.
+    pub execution: Pq3Execution,
+    /// Completed indexed-write operations, cumulative over this context lifetime.
+    pub indexed_writes: u64,
+    /// Completed attention operations, cumulative over this context lifetime.
+    pub attention_operations: u64,
+    /// Validated path bits from the versioned shim record.
+    path_mask: u32,
+}
+#[cfg(feature = "turboquant")]
+impl Pq3GraphInfo {
+    /// Enumerate paths actually observed after normal GPU synchronization.
+    pub fn observed_paths(&self) -> impl Iterator<Item = Pq3KernelPath> + '_ {
+        [
+            (1, Pq3KernelPath::Scalar),
+            (2, Pq3KernelPath::CooperativeMatrix1),
+            (4, Pq3KernelPath::CooperativeMatrix2),
+        ]
+        .into_iter()
+        .filter_map(|(bit, path)| (self.path_mask & bit != 0).then_some(path))
+    }
+}
+
+#[cfg(feature = "turboquant")]
+fn inspect_pq3(ctx: *const sys::llama_context) -> Result<Option<Pq3GraphInfo>, ShimError> {
+    let mut raw = sys::llama_pq3_graph_info_v1 {
+        abi_version: 0,
+        row_version: 0,
+        graph_version: 0,
+        transform_version: 0,
+        execution: 0,
+        path_mask: 0,
+        block_values: 0,
+        block_bytes: 0,
+        indexed_writes: 0,
+        attention_operations: 0,
+    };
+    // SAFETY: the caller holds the live context on its owner thread; the
+    // guarded call writes a fixed-size POD record and retains no pointers.
+    crate::shim::check_status(unsafe { sys::llama_pq3_graph_inspect_guarded(ctx, &raw mut raw) })?;
+    if raw.abi_version != 1
+        || raw.row_version != 1
+        || raw.graph_version != 1
+        || raw.path_mask & !7 != 0
+        || raw.block_values != 128
+        || raw.block_bytes != 50
+    {
+        return Err(ShimError::CorruptResult);
+    }
+    let execution = match raw.execution {
+        0 if raw.transform_version == 0
+            && raw.path_mask == 0
+            && raw.indexed_writes == 0
+            && raw.attention_operations == 0 =>
+        {
+            return Ok(None)
+        }
+        1 if raw.path_mask == 0 && raw.indexed_writes == 0 && raw.attention_operations == 0 => {
+            Pq3Execution::CpuReference
+        }
+        2 => Pq3Execution::VulkanRequired,
+        _ => return Err(ShimError::CorruptResult),
+    };
+    if raw.transform_version != 1 {
+        return Err(ShimError::CorruptResult);
+    }
+    Ok(Some(Pq3GraphInfo {
+        row_version: raw.row_version,
+        graph_version: raw.graph_version,
+        transform_version: raw.transform_version,
+        block_values: raw.block_values,
+        block_bytes: raw.block_bytes,
+        execution,
+        indexed_writes: raw.indexed_writes,
+        attention_operations: raw.attention_operations,
+        path_mask: raw.path_mask,
+    }))
+}
+
 /// Effective algorithm/allocation settings; does not prove GPU execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // Independent native snapshot flags, not policy parameters.
@@ -271,6 +426,9 @@ pub struct ContextCacheInfo {
     /// Known attention arenas; an empty list with unavailable inspection is
     /// not evidence that the model allocated no cache.
     pub arenas: Vec<CacheArenaInfo>,
+    /// Experimental codec identity and completed operation observations.
+    #[cfg(feature = "turboquant")]
+    pub pq3: Option<Pq3GraphInfo>,
 }
 
 pub(crate) fn inspect_model(
@@ -370,6 +528,8 @@ pub(crate) fn inspect_context(
         op_offload: info.op_offload != 0,
         inspection_available: info.inspection_available != 0,
         arenas,
+        #[cfg(feature = "turboquant")]
+        pq3: inspect_pq3(ctx)?,
     })
 }
 

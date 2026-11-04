@@ -56,6 +56,8 @@ impl LlamaBackend {
             let _ = llama_cpp_sys::ggml_pq3_reference_abi_v1();
             #[cfg(feature = "turboquant")]
             let _ = llama_cpp_sys::ggml_pq3_cpu_reference_abi_v1();
+            #[cfg(feature = "turboquant")]
+            let _ = llama_cpp_sys::llama_pq3_graph_abi_v1();
             llama_cpp_sys::llama_backend_init();
         }
         let backend = Self {

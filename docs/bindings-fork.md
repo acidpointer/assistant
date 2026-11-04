@@ -74,9 +74,12 @@ exists and which upstream API or behavior forced it.
 | `0005-fail-closed-eagle3-process.patch` | Replaces process-aborting `GGML_ABORT`/`GGML_ASSERT` paths in EAGLE-3 with recoverable errors for bad model pairs. |
 | `0006-runtime-state-safety.patch` | Appends a context-local attention-rotation opt-out with an ABI guard; synchronizes native logger pairs and confines fitting log scopes to their thread. |
 | `0007-vulkan-resource-lifecycle.patch` | Retires idle Vulkan logical devices before NVIDIA driver finalization, preserves registry descriptors across cache recreation, and destroys the instance from an ordered process-exit handler. |
-| `0008-pq3-cpu-format.patch` | Opt-in `turboquant` CPU/reference format (type 44, 128 values / 50 bytes), base/CPU ABI guards and numerical tests; rejects live cache and weight use until graph/kernels exist. |
+| `0008-pq3-cpu-format.patch` | Opt-in `turboquant` CPU/reference format (type 44, 128 values / 50 bytes), base/CPU ABI guards and numerical tests; rejects weight use. |
 
-Patches 0003–0007 are mandatory. `patch_staging.rs` adds 0008 only for the
+| `0009-pq3-kv-graph-state.patch` | Signed-Hadamard graph identity, restricted CPU cache inference, early state/shift rejection, graph ABI, indexed-write and attention tests. |
+| `0010-pq3-vulkan-cache-attention.patch` | Packed Vulkan writes/copies and scalar/coopmat1/coopmat2 attention, actual-device preflight, completed-operation observation ABI and GPU tests. |
+
+Patches 0003–0007 are mandatory. `patch_staging.rs` adds 0008–0010 only for the
 `turboquant` feature; feature selection and patch contents change source-copy
 identity. Generated FFI and shim defines follow that same selection. Native
 `tests/` sources are packaged so the experimental test/CMake patch applies to

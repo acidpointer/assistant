@@ -1,4 +1,7 @@
-//! utilities for working with the kv cache
+//! Context-owned sequence copy, shift and clear operations. Native handles
+//! remain borrowed on the owner thread throughout synchronous FFI calls. Typed
+//! errors report conversion and codec restrictions; no storage escapes here.
+//! PQ3 rebasing fails before mutation and requires reset/replay instead.
 
 use crate::context::LlamaContext;
 use std::num::{NonZeroU8, TryFromIntError};
@@ -6,6 +9,10 @@ use std::num::{NonZeroU8, TryFromIntError};
 /// Errors that can occur when attempting to prepare values for the kv cache
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum KvCacheConversionError {
+    /// The experimental PQ3 graph does not support positional key rebasing.
+    #[cfg(feature = "turboquant")]
+    #[error("PQ3 position shifting is unsupported; reset and replay instead")]
+    Pq3PositionShiftUnsupported,
     /// Sequence id conversion to i32 failed
     #[error("Provided sequence id is too large for a i32")]
     SeqIdTooLarge(#[source] TryFromIntError),
@@ -166,8 +173,14 @@ impl LlamaContext<'_> {
         let p1 = p1
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
+        // SAFETY: the memory is borrowed from this live, exclusively borrowed
+        // context; capability inspection and the update retain no pointers.
         unsafe {
             let mem = llama_cpp_sys::llama_get_memory(self.context.as_ptr());
+            #[cfg(feature = "turboquant")]
+            if llama_cpp_sys::llama_pq3_memory_uses_codec(mem) {
+                return Err(KvCacheConversionError::Pq3PositionShiftUnsupported);
+            }
             llama_cpp_sys::llama_memory_seq_add(mem, seq_id, p0, p1, delta);
         }
         Ok(())
@@ -199,8 +212,14 @@ impl LlamaContext<'_> {
             .map_or(Ok(-1), i32::try_from)
             .map_err(KvCacheConversionError::P1TooLarge)?;
         let d = i32::from(d.get());
+        // SAFETY: the memory is borrowed from this live, exclusively borrowed
+        // context; capability inspection and the update retain no pointers.
         unsafe {
             let mem = llama_cpp_sys::llama_get_memory(self.context.as_ptr());
+            #[cfg(feature = "turboquant")]
+            if llama_cpp_sys::llama_pq3_memory_uses_codec(mem) {
+                return Err(KvCacheConversionError::Pq3PositionShiftUnsupported);
+            }
             llama_cpp_sys::llama_memory_seq_div(mem, seq_id, p0, p1, d);
         }
         Ok(())

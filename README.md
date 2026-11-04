@@ -142,9 +142,18 @@ git add crates/llama_cpp_sys/llama.cpp
 Update the revision above and adapt the shims or patches if upstream changes
 their APIs. Builds use the pinned source and do not fetch llama.cpp themselves.
 
-The opt-in `turboquant` feature additionally applies
-[`0008-pq3-cpu-format.patch`](crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch).
-It provides a guarded, model-free PQ3 CPU reference only. PQ3 inference, Vulkan
-kernels and CLI selection are pending; defaults remain FP16/full SWA. See the
-[format contract](docs/pq3-reference-contract.md) and
-[deterministic quality jobs](docs/cache-quality-evaluation.md).
+The opt-in `turboquant` feature adds ordered native patches
+[0008](crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch),
+[0009](crates/llama_cpp_sys/patches/0009-pq3-kv-graph-state.patch), and
+[0010](crates/llama_cpp_sys/patches/0010-pq3-vulkan-cache-attention.patch).
+It enables experimental matched `pq3_0` K/V on restricted Llama/LFM3 CPU or
+Vulkan contexts. Defaults remain FP16/full SWA. State I/O and positional shifts
+are unavailable for PQ3; see the [format/support contract](docs/pq3-reference-contract.md)
+and [fixed quality jobs](docs/cache-quality-evaluation.md). The
+[measured candidate](docs/pq3-inference-evaluation.md) fails quality gates and
+regresses near-full 4K speed; it remains opt-in.
+
+```sh
+cargo run --features turboquant -- --model ./model.gguf \
+  --cache-type-k pq3_0 --cache-type-v pq3_0 --swa-cache compact --require-vulkan
+```

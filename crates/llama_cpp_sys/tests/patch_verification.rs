@@ -25,7 +25,8 @@ fn real_patch_series_matches_cli_at_each_increment() {
     let _fixture = Fixture(root.clone());
     for (name, selection) in [
         ("default", patch_staging::CodecPatches::Disabled),
-        ("pq3", patch_staging::CodecPatches::Pq3Reference),
+        ("pq3-cpu", patch_staging::CodecPatches::Pq3Cpu),
+        ("pq3-graph", patch_staging::CodecPatches::Pq3Graph),
     ] {
         let selected = root.join(name).join("selected");
         let prefix = root.join(name).join("prefix");
@@ -47,6 +48,18 @@ fn real_patch_series_matches_cli_at_each_increment() {
             let text = fs::read_to_string(path).expect("patch contents");
             for patch in Patch::from_multiple(&text).expect("parse real patch") {
                 if patch.old.path.as_ref() == "/dev/null" {
+                    // A later patch may modify this created file. It has no
+                    // pristine submodule input to copy into the fixture.
+                    let (_, relative) = patch
+                        .new
+                        .path
+                        .split_once('/')
+                        .expect("relative created-file path");
+                    assert!(
+                        !source.join(relative).exists(),
+                        "new patch file already exists upstream: {relative}"
+                    );
+                    touched.insert(relative.to_owned());
                     continue;
                 }
                 let (_, relative) = patch
