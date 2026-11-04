@@ -79,8 +79,11 @@ Schemas are derived and cached once at registration. Selection refers only to
 registered names. Dispatch rechecks selection and deserializes the actual JSON.
 Bad arguments, unknown/disallowed names and domain failures produce structured
 failed results. The model never chooses Rust code, executable paths or shell
-text. `tools::builtin::{Calculator, CurrentTime}` are opt-in CLI examples, not
-capabilities automatically installed by the library.
+text. `tools::builtin::{Calculator, CurrentTime, ProcessTop, ProcessDetails}` are opt-in
+library capabilities. The daemon registers them by default (process tools on
+Linux only), unless `--no-tools` or `--raw` is selected. See the
+[built-in tool contracts](builtin-tools.md) for arguments, process lookup and
+measurement semantics. They are not installed automatically by the library.
 
 The runner parses a complete assistant message, dispatches bounded tool calls,
 appends correlated results and evaluates again. It rejects duplicate IDs and

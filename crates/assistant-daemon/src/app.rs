@@ -2,6 +2,8 @@
 //! installs the default web plugin and always awaits runtime cleanup. Explicit
 //! one-shot/stdin adapters remain diagnostic modes and never start HTTP.
 use crate::cli::{Args, model_config};
+#[cfg(target_os = "linux")]
+use assistant::tools::builtin::{ProcessDetails, ProcessTop};
 use assistant::{
     AssistantRuntime, RunEvent,
     chat::{InputMode, RunLimits, ToolUse},
@@ -21,7 +23,7 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
     let signal = shutdown_signal()?;
     ModelEngine::init()?;
     let engine = ModelEngine::get_instance()?;
-    let system = "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly.";
+    let system = "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly. For running-process questions, use process_top for rankings and process_details for a process name or PID when those tools are available. Never invent live process data.";
     let mut builder = AssistantRuntime::builder(engine)
         .model("main", config)
         .system(system)
@@ -32,6 +34,10 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
         });
     if !args.no_tools && !args.raw {
         builder = builder.tool(Calculator).tool(CurrentTime);
+        #[cfg(target_os = "linux")]
+        {
+            builder = builder.tool(ProcessTop).tool(ProcessDetails);
+        }
     }
     if !args.no_web {
         builder = builder.plugin(assistant_web::WebPlugin::new(assistant_web::WebConfig {

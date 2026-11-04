@@ -8,6 +8,7 @@ Each row points at a real file and says what it is for.
 | [`../AGENTS.md`](../AGENTS.md) | Operating manual for coding agents: ownership model, task modes, Rust standards, review protocol, binding-fork rules, quality gates. | Current |
 | [`../README.md`](../README.md) | Project overview, feature highlights, prebuilt quickstart/distribution, native dependencies, source builds, development checks, and upstream pin. | Current |
 | [`architecture.md`](architecture.md) | Current system architecture, crate boundaries, ownership split, resident workers, bounded working context, extension boundaries, and deliberate limits. | Current |
+| [`builtin-tools.md`](builtin-tools.md) | Built-in calculator/time and Linux process listing/lookup tools: arguments, live measurement semantics, visibility, resource bounds and cancellation. | Implemented |
 | [`llm-api.md`](llm-api.md) | High-level chat/runtime API, typed tools, plugins/hooks/middleware, context-window policy, cancellation, failure and lifecycle contracts. | Current |
 | [`decisions/0001-persistent-runtime.md`](decisions/0001-persistent-runtime.md) | Accepted decision: singleton backend, thread-confined workers, bounded interaction pipeline and separate future permanent memory. | Accepted |
 | [`decisions/0002-pq3-graph-transform.md`](decisions/0002-pq3-graph-transform.md) | Experimental signed-Hadamard graph convention, row/graph ABI separation and state/shift/support restrictions. | Accepted prototype contract; CPU/NVIDIA verified |

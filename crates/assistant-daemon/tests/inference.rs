@@ -201,3 +201,71 @@ fn model_can_use_two_different_tools_in_one_conversation() {
     assert_eq!(result_for(&logs, "calculate")["value"], 437);
     assert!(mentions_integer(&answer, 437), "incorrect answer: {answer}");
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn model_looks_up_a_live_process_and_reports_its_identity() {
+    let pid = std::process::id();
+    let Some((answer, logs)) = ask_with_tools(&format!(
+        "Tell me about the running process with PID {pid}. Inspect its current CPU and memory use."
+    )) else {
+        return;
+    };
+    let result = result_for(&logs, "process_details");
+    let processes = result["processes"]
+        .as_array()
+        .expect("process details rows");
+    assert_eq!(processes.len(), 1, "one exact PID: {result}");
+    assert_eq!(processes[0]["pid"], pid);
+    assert!(
+        mentions_integer(&answer, i64::from(pid)),
+        "missing process identity: {answer}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn model_resolves_a_process_name_from_a_natural_language_request() {
+    let name = std::fs::read_to_string("/proc/self/comm")
+        .expect("own kernel process name")
+        .trim()
+        .to_owned();
+    let Some((answer, logs)) = ask_with_tools(&format!(
+        "Tell me about the running process named {name}. Look up its live process details."
+    )) else {
+        return;
+    };
+    let result = result_for(&logs, "process_details");
+    let rows = result["processes"]
+        .as_array()
+        .expect("process name matches");
+    assert!(
+        rows.iter().any(|row| row["pid"] == std::process::id()),
+        "own process matched by name: {result}"
+    );
+    assert!(answer.contains(&name), "missing process name: {answer}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn model_ranks_live_processes_by_resident_memory() {
+    let Some((_answer, logs)) = ask_with_tools(
+        "Which three running processes use the most resident RAM right now? Inspect the process list.",
+    ) else {
+        return;
+    };
+    let result = result_for(&logs, "process_top");
+    let rows = result["processes"].as_array().expect("top process rows");
+    assert!(
+        !rows.is_empty() && rows.len() <= 3,
+        "requested at most three rows: {result}"
+    );
+    let memory = rows
+        .iter()
+        .map(|row| row["rss_bytes"].as_u64().expect("RSS bytes"))
+        .collect::<Vec<_>>();
+    assert!(
+        memory.windows(2).all(|pair| pair[0] >= pair[1]),
+        "RSS ordering: {result}"
+    );
+}

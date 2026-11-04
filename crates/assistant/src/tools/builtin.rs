@@ -1,10 +1,14 @@
-//! Small opt-in capabilities used by the CLI and inference smoke tests. Commands
-//! are fixed by host code; the model supplies only validated typed arguments.
+//! Opt-in capabilities used by the daemon and inference smoke tests. External
+//! commands are fixed by host code; process tools read bounded OS metadata.
+//! The model supplies validated arguments, never executable code or shell text.
 use super::{Tool, ToolContext};
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::io;
+
+pub mod process;
+pub use process::{ProcessDetails, ProcessTop};
 
 /// Empty arguments for the current-time capability.
 #[derive(Debug, Deserialize, JsonSchema)]

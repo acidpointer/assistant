@@ -22,6 +22,10 @@ in one executable.
 - **Build on the core.** Typed tools, plugins, hooks, middleware, and a shared
   application API. HTTP/WebUI is the first transport plugin.
 
+Built-in [tools](docs/builtin-tools.md) cover arithmetic, current time, and Linux
+process inspection. Ask which processes use the most RAM, or “tell me about the
+htop process.”
+
 > **Early development.** Today: one ongoing chat, local inference, and tools.
 > Conversation history is in memory and resets on restart. Durable history and
 > additional transports are future work.
