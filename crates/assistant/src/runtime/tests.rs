@@ -61,6 +61,111 @@ fn config() -> LLMConfig {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Complete worker admission/inspection/release scenario.
+async fn required_cache_worker_snapshots_and_context_release() {
+    let Some(path) = std::env::var_os("ASSISTANT_CACHE_TEST_MODEL") else {
+        assert!(
+            std::env::var_os("ASSISTANT_CACHE_REQUIRE_MODEL").is_none(),
+            "required worker cache coverage needs ASSISTANT_CACHE_TEST_MODEL"
+        );
+        eprintln!("SKIP: set ASSISTANT_CACHE_TEST_MODEL for worker cache validation");
+        return;
+    };
+    for (key, value) in [
+        (
+            crate::engine::KvCacheType::F16,
+            crate::engine::KvCacheType::F16,
+        ),
+        (
+            crate::engine::KvCacheType::Q8_0,
+            crate::engine::KvCacheType::Q8_0,
+        ),
+        (
+            crate::engine::KvCacheType::Q8_0,
+            crate::engine::KvCacheType::Q4_0,
+        ),
+        (
+            crate::engine::KvCacheType::Q4_0,
+            crate::engine::KvCacheType::Q4_0,
+        ),
+    ] {
+        let mut config = LLMConfig::new(path.clone());
+        config.context_size = 2048;
+        config.max_new_tokens = 8;
+        config.cache.swa = crate::engine::SwaCacheMode::Compact;
+        config.cache.key = key;
+        config.cache.value = value;
+        let cache = config.cache;
+        let runtime = AssistantRuntime::builder(test_engine())
+            .model("cache", config)
+            .max_contexts(2)
+            .build()
+            .expect("worker configuration")
+            .start()
+            .await
+            .expect("start cache worker");
+        assert!(
+            runtime
+                .cache_diagnostics()
+                .await
+                .expect("empty worker diagnostics")["cache"]
+                .contexts
+                .is_empty()
+        );
+        let first = runtime.chat();
+        let second = runtime.create_chat("cache").expect("second conversation");
+        for chat in [&first, &second] {
+            chat.request("A local assistant writes careful notes. ".repeat(100))
+                .mode(crate::chat::InputMode::Raw)
+                .run()
+                .await
+                .expect("native worker generation");
+        }
+        let reports = runtime
+            .cache_diagnostics()
+            .await
+            .expect("worker diagnostics");
+        let report = &reports["cache"];
+        assert_eq!(report.contexts.len(), 2);
+        assert!(report.contexts.iter().all(|c| c.requested == cache));
+        let one_weights: usize = report.contexts[0].memory.iter().map(|m| m.model).sum();
+        assert_eq!(
+            one_weights,
+            report.memory.iter().map(|m| m.model).sum::<usize>()
+        );
+        if std::env::var_os("ASSISTANT_CACHE_REQUIRE_VULKAN").is_some() {
+            assert!(
+                report
+                    .memory
+                    .iter()
+                    .any(|m| m.buft_name.starts_with("Vulkan") && m.context > 0)
+            );
+        }
+        drop(second);
+        assert_eq!(
+            runtime.cache_diagnostics().await.expect("released context")["cache"]
+                .contexts
+                .len(),
+            1
+        );
+        let replacement = runtime.create_chat("cache").expect("replacement chat");
+        replacement
+            .request("New independent state.")
+            .mode(crate::chat::InputMode::Raw)
+            .run()
+            .await
+            .expect("reallocate released slot");
+        assert_eq!(
+            runtime.cache_diagnostics().await.expect("new context")["cache"]
+                .contexts
+                .len(),
+            2
+        );
+        runtime.shutdown().await.expect("cache worker shutdown");
+    }
+}
+
+#[tokio::test]
 async fn admission_is_bounded_and_shutdown_waits_for_guards() {
     let control = RuntimeControl::new(1);
     let token = Cancellation::default();

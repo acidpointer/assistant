@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug)]
 enum Command {
+    Inspect(oneshot::Sender<ChatResult<Vec<crate::engine::CacheDiagnostics>>>),
     Generate {
         request: Box<ModelRequest>,
         turn: TurnContext,
@@ -48,6 +49,14 @@ pub(crate) struct WorkerHandle {
     event_capacity: usize,
 }
 impl WorkerHandle {
+    pub(crate) async fn inspect(&self) -> ChatResult<Vec<crate::engine::CacheDiagnostics>> {
+        let (sender, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::Inspect(sender))
+            .await
+            .map_err(|_| ChatError::Closed)?;
+        receiver.await.map_err(|_| ChatError::Closed)?
+    }
     pub(crate) async fn spawn(
         engine: &'static ModelEngine,
         config: LLMConfig,
@@ -249,6 +258,14 @@ fn worker_loop<'m>(
         }
         if let Some(command) = command {
             match command {
+                Command::Inspect(reply) => {
+                    contexts.retain(|_, entry| entry.lease.strong_count() > 0);
+                    let report = contexts
+                        .values()
+                        .map(|entry| entry.context.cache_diagnostics().map_err(ChatError::from))
+                        .collect();
+                    let _receiver_gone = reply.send(report);
+                }
                 Command::Stop => break,
                 Command::Wake => {}
                 Command::Generate {

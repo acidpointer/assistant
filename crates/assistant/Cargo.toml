@@ -21,6 +21,7 @@ default = ["vulkan"]
 cuda = ["llama_cpp/cuda"]
 metal = ["llama_cpp/metal"]
 vulkan = ["llama_cpp/vulkan"]
+turboquant = ["llama_cpp/turboquant"]
 
 [lints]
 workspace = true

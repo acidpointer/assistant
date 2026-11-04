@@ -10,6 +10,10 @@
 #include "chat_shim.h"
 #include "common_shim.h"
 
+#ifdef LLAMA_RS_TURBOQUANT
+#include "ggml-cpu.h"
+#endif
+
 // llama-ext.h lives in src/ but exports LLAMA_API entry points (pre-norm
 // embeddings setter/getters, memory-breakdown, etc). Pull it in so bindgen
 // emits the corresponding extern fns.

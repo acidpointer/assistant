@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "files": [
+    {
+      "file": "cache-quality-v1.json",
+      "sha256": "114637c3b6826abefeced7d20a10e5cc84cd3cd3c8ccf192118435269b62db78",
+      "fnv1a64": "00127a0cff646b88"
+    }
+  ],
+  "provenance": "Authored for this project; no external dataset or model downloads."
+}

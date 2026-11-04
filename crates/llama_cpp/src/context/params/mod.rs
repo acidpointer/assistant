@@ -552,7 +552,7 @@ impl LlamaContextParams {
     ///
     /// The default is `GgmlType::F16`.  Quantized types like `GgmlType::Q5_0`
     /// or `GgmlType::Q4_0` reduce VRAM usage significantly; combining them with
-    /// `TurboQuant` attention rotation (the default) keeps quality high.
+    /// native Hadamard rotation can reduce quantization error. Quality is model-dependent.
     ///
     /// # Examples
     ///
@@ -598,16 +598,13 @@ impl LlamaContextParams {
         self.context_params.type_v
     }
 
-    /// Control the `TurboQuant` attention-rotation feature (llama.cpp PR #21038).
+    /// Control native Hadamard attention rotation (llama.cpp PR #21038).
     ///
-    /// By default, llama.cpp applies a Hadamard rotation to Q/K/V tensors
-    /// before writing them into the KV cache.  This significantly improves
-    /// quantized KV-cache quality at near-zero overhead, and is enabled
-    /// automatically for models whose head dimension is a power of two.
-    ///
-    /// Set `disabled = true` to opt out (without modifying `LLAMA_ATTN_ROT_DISABLE`).
-    /// The env-var is applied just before the context is created and restored
-    /// afterwards, so this is safe to call from a single thread.
+    /// This is not the TurboQuant codec. Native rotation is conditional on cache
+    /// precision, model opt-outs and head alignment (multiples of 64 at this pin).
+    /// Set `disabled = true` to opt out for this context. This only sets a native
+    /// parameter; it does not modify the process environment. Global Rust and
+    /// external `LLAMA_ATTN_ROT_DISABLE` opt-outs still apply.
     ///
     /// # Examples
     ///
@@ -623,7 +620,7 @@ impl LlamaContextParams {
         self
     }
 
-    /// Returns `true` if `TurboQuant` attention rotation is disabled for this context.
+    /// Returns `true` if native attention rotation is disabled for this context.
     ///
     /// ```rust
     /// let params = llama_cpp::context::params::LlamaContextParams::default();

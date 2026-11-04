@@ -44,6 +44,12 @@ default features now actually disables Vulkan. `--thinking` enables supported
 template reasoning; `--raw` bypasses chat/tools for diagnostic completion.
 `--ctx-size`, `--batch-size`, `--max-tokens` and `--threads` control native budgets.
 `--timeout-seconds` sets the per-interaction deadline (default 120 seconds).
+Cache controls include `--cache-type-k`, `--cache-type-v`, `--swa-cache`,
+`--flash-attn`, `--attn-rotation`, and `--ubatch-size`. Defaults remain FP16/full
+SWA. `--diagnostics` prints native allocation/settings JSON to stderr; `--cpu`
+also disables attention/operator offloading. See the
+[cache baseline](docs/kv-cache-baseline.md) for contracts, measurements, and
+the repeatable benchmark/placement workflow.
 
 ## Library and extensions
 
@@ -85,16 +91,19 @@ For full inference coverage, place the upstream `stories260K.gguf` test model
 in `target/test-models/`, or set `LLAMA_TEST_MODEL` to an absolute GGUF path.
 Tests requiring a full model skip when one is unavailable.
 
-The assistant tests also exercise real LFM3 tool calls when the default local
-model file is present. Alternatively set `ASSISTANT_TEST_MODEL` to an absolute
-GGUF path for a model with a compatible tool-capable chat template:
+Live assistant tool-choice evaluations require `ASSISTANT_TEST_MODEL`, an
+absolute GGUF path with a compatible tool-capable chat template. Set
+`ASSISTANT_TEST_REQUIRE_MODEL=1` to fail rather than skip when absent:
 
 ```sh
 cargo test -p assistant -- --test-threads=1
 ```
 
 They check arithmetic, exact `date` output, and a conversation needing both
-tools. These tests use CPU inference and do not download model weights.
+tools. `ASSISTANT_TEST_GPU_LAYERS` selects weight offloading (default zero).
+Cache evaluations use separate required-model/GPU flags described in the
+[baseline guide](docs/kv-cache-baseline.md#test-categories-and-reproduction).
+Tests do not download model weights.
 
 ## Upstream sources
 
@@ -105,7 +114,7 @@ The Rust crates are ported from
 llama.cpp is pinned to
 [`a34de8618b25dfc32ee43749db47d767a9f0a25d`](https://github.com/ggml-org/llama.cpp/commit/a34de8618b25dfc32ee43749db47d767a9f0a25d)
 (`b12015`), upstream HEAD on October 30, 2026, including the LFM3 architecture.
-The sys crate applies five binding patches for speculative state, decode
+The sys crate always applies five binding patches for speculative state, decode
 lifecycle, context-local rotation, native logging safety, and Vulkan resource
 lifetime to a build-directory copy; the submodule stays unmodified. The runtime-safety patch appends a context
 parameter and adds a required ABI guard. See [binding compatibility notes](docs/bindings-fork.md#ownership-allocation-and-api-compatibility-2026-11-03)
@@ -132,3 +141,10 @@ git add crates/llama_cpp_sys/llama.cpp
 
 Update the revision above and adapt the shims or patches if upstream changes
 their APIs. Builds use the pinned source and do not fetch llama.cpp themselves.
+
+The opt-in `turboquant` feature additionally applies
+[`0008-pq3-cpu-format.patch`](crates/llama_cpp_sys/patches/0008-pq3-cpu-format.patch).
+It provides a guarded, model-free PQ3 CPU reference only. PQ3 inference, Vulkan
+kernels and CLI selection are pending; defaults remain FP16/full SWA. See the
+[format contract](docs/pq3-reference-contract.md) and
+[deterministic quality jobs](docs/cache-quality-evaluation.md).

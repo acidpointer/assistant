@@ -28,6 +28,7 @@ include = [
     # Crate sources
     "build.rs",
     "patch_verification.rs",
+    "patch_staging.rs",
     "prebuilt_download.rs",
     "wrapper.h",
     "/src",
@@ -65,6 +66,8 @@ include = [
     "/llama.cpp/include/llama-cpp.h",
     "/llama.cpp/src/**/*",
     "/llama.cpp/common/**/*",
+    # Base test CMake is patched by the experimental reference series.
+    "/llama.cpp/tests/**/*",
 
     # ggml cmake
     "/llama.cpp/ggml/CMakeLists.txt",
@@ -200,6 +203,7 @@ mpi = []
 rpc = []
 mtmd = []
 q1 = []
+turboquant = []
 prebuilt = []
 
 # By default, static libraries are built

@@ -793,6 +793,7 @@ dependencies = [
  "encoding_rs",
  "enumflags2",
  "llama_cpp_sys",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

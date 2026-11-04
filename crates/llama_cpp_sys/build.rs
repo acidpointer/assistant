@@ -3,6 +3,7 @@
 //! The upstream submodule is read-only. Native ABI guards prevent stale libraries
 //! from silently omitting the fork's runtime safety and callback contracts.
 
+mod patch_staging;
 mod patch_verification;
 use patch_verification::patches_match_new_side;
 
@@ -78,28 +79,10 @@ fn get_cargo_target_dir() -> Result<std::path::PathBuf, Box<dyn std::error::Erro
     Ok(target_dir.to_path_buf())
 }
 
-/// Compute a short hash over the contents of all `*.patch` files in `patches_dir`.
-/// Returns an empty string when the directory does not exist or contains no patches.
-fn patches_hash(patches_dir: &Path) -> String {
-    if !patches_dir.is_dir() {
-        return String::new();
-    }
-    let mut entries: Vec<_> = std::fs::read_dir(patches_dir)
-        .map(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).collect())
-        .unwrap_or_default();
-    entries.sort();
-    let mut hasher_val: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
-    for path in &entries {
-        if path.extension().map(|e| e == "patch").unwrap_or(false) {
-            if let Ok(bytes) = std::fs::read(path) {
-                for &b in &bytes {
-                    hasher_val ^= b as u64;
-                    hasher_val = hasher_val.wrapping_mul(0x100000001b3);
-                }
-            }
-        }
-    }
-    format!("{:016x}", hasher_val)
+/// Fail with a diagnostic rather than compiling against uncertain native inputs.
+fn native_input_error(error: &str) -> ! {
+    eprintln!("llama_cpp_sys: {error}");
+    std::process::exit(1);
 }
 
 /// Resolve the patch binary.
@@ -414,43 +397,10 @@ fn apply_patches(patches_dir: &Path, dst: &Path) {
     };
 
     if let Err(err) = res {
-        panic!(
-            "Patch application failed using engine '{engine}': {err}. \
-             The patch may need rebasing against the current llama.cpp submodule commit."
-        );
+        native_input_error(&format!(
+            "patch application failed using engine '{engine}': {err}"
+        ));
     }
-}
-
-fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
-    if staged_dir.exists() {
-        std::fs::remove_dir_all(staged_dir).expect("failed to clear staged llama.cpp patches");
-    }
-    std::fs::create_dir_all(staged_dir).expect("failed to create staged llama.cpp patches");
-    let always_active = [
-        "0003-exact-speculative-state.patch",
-        "0004-exact-decode-lifecycle-hooks.patch",
-        "0005-fail-closed-eagle3-process.patch",
-        "0006-runtime-state-safety.patch",
-        "0007-vulkan-resource-lifecycle.patch",
-    ];
-    for name in always_active {
-        let source = patches_dir.join(name);
-        assert!(
-            source.is_file(),
-            "required llama.cpp patch is absent: {}",
-            source.display()
-        );
-        std::fs::copy(&source, staged_dir.join(name))
-            .unwrap_or_else(|error| panic!("failed to stage {name}: {error}"));
-    }
-
-    // The `q1` feature used to stage `0001-q1-quantization.patch` here. Q1_0
-    // landed upstream (ftype 40, ggml type 41), the patch was deleted, and the
-    // `if source.exists()` guard quietly turned this into a no-op — so the
-    // feature looked alive while doing nothing. `q1` is now documented as a
-    // no-op in llama_cpp's manifest; there is nothing to stage.
-
-    true
 }
 
 /// Return a string that uniquely identifies the current state of the llama.cpp
@@ -460,22 +410,25 @@ fn stage_active_patches(patches_dir: &Path, staged_dir: &Path) -> bool {
 /// 1. The commit hash from the submodule's git HEAD (most precise).
 /// 2. The mtime of `CMakeLists.txt` (fallback for non-git trees).
 fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
-    const PATCH_STAGING_VERSION: &str = "2";
-    let ph = patches_hash(patches_dir);
+    const PATCH_STAGING_VERSION: &str = "3";
+    let ph = match patch_staging::fingerprint(patches_dir) {
+        Ok(value) => value,
+        Err(error) => native_input_error(&error),
+    };
     // In a git submodule the `.git` entry is a *file* whose content is:
     //   gitdir: ../../.git/modules/llama_cpp_sys/llama.cpp
     let git_file = src.join(".git");
     if git_file.is_file() {
         if let Ok(text) = std::fs::read_to_string(&git_file) {
             if let Some(rel) = text.strip_prefix("gitdir:").map(str::trim) {
-                let head_path = git_file.parent().unwrap().join(rel).join("HEAD");
+                let head_path = src.join(rel).join("HEAD");
                 if let Ok(head) = std::fs::read_to_string(&head_path) {
                     // HEAD is either a commit hash or "ref: refs/heads/…"
                     let head = head.trim();
                     if head.starts_with("ref:") {
                         // Resolve the ref to the actual commit hash.
                         let ref_path = head.strip_prefix("ref:").map(str::trim).unwrap_or(head);
-                        let commit_path = git_file.parent().unwrap().join(rel).join(ref_path);
+                        let commit_path = src.join(rel).join(ref_path);
                         if let Ok(hash) = std::fs::read_to_string(commit_path) {
                             return format!("{}:{}:{PATCH_STAGING_VERSION}", hash.trim(), ph);
                         }
@@ -493,11 +446,7 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
         .map(|t| format!("{t:?}"))
         .unwrap_or_else(|_| "unknown".to_owned());
     // Mix in patch contents so that updating patches forces a re-copy+re-patch.
-    format!(
-        "{}:{}:{PATCH_STAGING_VERSION}",
-        base,
-        patches_hash(patches_dir)
-    )
+    format!("{}:{}:{PATCH_STAGING_VERSION}", base, ph)
 }
 
 /// Copy a directory tree. This runs on the *host*, so cfg!(unix/windows) is
@@ -1076,6 +1025,11 @@ fn compile_shims(manifest_dir: &Path, llama_dst: &Path, target: &str) {
         any = true;
     }
 
+    if cfg!(feature = "turboquant") {
+        build
+            .define("LLAMA_RS_TURBOQUANT", "1")
+            .include(llama_dst.join("ggml/src"));
+    }
     if any {
         build.compile("llama_shims");
     }
@@ -2001,13 +1955,24 @@ fn main() {
     // We now store the current submodule HEAD (plus a hash of any local patches)
     // in a sentinel file and re-copy+re-patch whenever either changes.
     let patches_dir = Path::new(&manifest_dir).join("patches");
+    println!("cargo:rerun-if-changed={}", patches_dir.display());
     let sentinel = out_dir.join(".llama-src-version");
-    let current_version = llama_src_version(&llama_src, &patches_dir);
-    let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
     let staged_dir = out_dir.join("patches-active");
-    let staged_any = stage_active_patches(&patches_dir, &staged_dir);
-    let patches_applied = !staged_any
-        || patches_match_new_side(&staged_dir, &llama_src, &llama_dst).unwrap_or_else(|error| {
+    let codec = if cfg!(feature = "turboquant") {
+        patch_staging::CodecPatches::Pq3Reference
+    } else {
+        patch_staging::CodecPatches::Disabled
+    };
+    if let Err(error) = patch_staging::stage(&patches_dir, &staged_dir, codec) {
+        native_input_error(&error);
+    }
+    let current_version = llama_src_version(&llama_src, &staged_dir);
+    let stored_version = std::fs::read_to_string(&sentinel).unwrap_or_default();
+    // Mandatory safety patches also make generic upstream prebuilt archives
+    // incompatible, independently of the experimental feature selection.
+    let staged_any = true;
+    let patches_applied = patches_match_new_side(&staged_dir, &llama_src, &llama_dst)
+        .unwrap_or_else(|error| {
             debug_log!(
                 "Failed to verify the staged patch postcondition for {}: {}",
                 llama_dst.display(),
@@ -2022,23 +1987,22 @@ fn main() {
             debug_log!(
                 "Source version or patch postcondition changed — removing stale OUT_DIR copy"
             );
-            std::fs::remove_dir_all(&llama_dst).ok();
+            if let Err(error) = std::fs::remove_dir_all(&llama_dst) {
+                native_input_error(&format!("remove stale native source copy: {error}"));
+            }
         }
         debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
         copy_folder(&llama_src, &llama_dst);
 
-        if staged_any {
-            apply_patches(&staged_dir, &llama_dst);
-            if !patches_match_new_side(&staged_dir, &llama_src, &llama_dst)
-                .unwrap_or_else(|error| panic!("failed to verify applied patches: {error}"))
-            {
-                panic!(
-                    "llama.cpp patch application completed without satisfying the staged postcondition"
-                );
-            }
+        apply_patches(&staged_dir, &llama_dst);
+        match patches_match_new_side(&staged_dir, &llama_src, &llama_dst) {
+            Ok(true) => {}
+            Ok(false) => native_input_error("native patch postcondition was not satisfied"),
+            Err(error) => native_input_error(&format!("verify applied native patches: {error}")),
         }
-        std::fs::write(&sentinel, &current_version)
-            .expect("failed to write source version sentinel");
+        if let Err(error) = std::fs::write(&sentinel, &current_version) {
+            native_input_error(&format!("write native source version sentinel: {error}"));
+        }
     }
     // Tell cargo to rerun when the submodule HEAD changes.
     // In a git submodule, llama.cpp/.git is a file pointing at the real HEAD.
@@ -2264,6 +2228,10 @@ fn main() {
             .blocklist_type("mtmd_helper::.*")
             .blocklist_item("mtmd_helper::.*")
             .no_partialeq("mtmd_context_params");
+    }
+
+    if cfg!(feature = "turboquant") {
+        builder = builder.clang_arg("-DLLAMA_RS_TURBOQUANT=1");
     }
 
     let bindings = builder

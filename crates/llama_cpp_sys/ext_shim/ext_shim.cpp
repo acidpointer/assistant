@@ -3,9 +3,223 @@
 #include "fit.h"
 #include "ggml-backend.h"
 #include "llama-ext.h"
+#include "llama-context.h"
+#include "llama-model.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
+#include "shim_support_impl.hpp"
 
 #include <cstring>
 #include <vector>
+#include <stdexcept>
+
+#ifdef LLAMA_RS_TURBOQUANT
+#include "ggml-quants.h"
+#include "ggml-cpu.h"
+#include <cmath>
+
+namespace {
+void validate_pq3_input(const float * input, size_t count) {
+    if (!input || count != QK_PQ3_0) throw std::invalid_argument("PQ3 reference requires exactly 128 floats");
+    double squares = 0.0;
+    for (size_t i = 0; i < count; ++i) {
+        if (!std::isfinite(input[i])) throw std::invalid_argument("PQ3 reference input must be finite");
+        squares += double(input[i]) * input[i];
+    }
+    if (std::sqrt(squares) > 65504.0) throw std::invalid_argument("PQ3 block norm exceeds finite FP16 range");
+}
+block_pq3_0 read_pq3_block(const uint8_t * input, size_t bytes) {
+    if (!input || bytes != sizeof(block_pq3_0)) throw std::invalid_argument("PQ3 reference requires exactly 50 bytes");
+    // Bytes have no alignment guarantee. Keep native half/struct access local.
+    block_pq3_0 block{};
+    std::memcpy(&block, input, sizeof(block));
+    const float norm = ggml_fp16_to_fp32(block.d);
+    if (!std::isfinite(norm) || std::signbit(norm)) throw std::invalid_argument("PQ3 block has an invalid norm");
+    if (norm == 0.0f) {
+        for (uint8_t byte : block.qs) {
+            if (byte) throw std::invalid_argument("PQ3 zero block is not canonical");
+        }
+    }
+    return block;
+}
+}
+
+int32_t llama_pq3_encode_block_guarded(const float * input, size_t count, uint8_t * output, size_t bytes) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!output || bytes != sizeof(block_pq3_0)) return LLAMA_SHIM_INVALID_ARG;
+        validate_pq3_input(input, count);
+        block_pq3_0 block{};
+        quantize_row_pq3_0_ref(input, &block, QK_PQ3_0);
+        // Check rounded scale too; do not publish an infinite native block.
+        if (!std::isfinite(ggml_fp16_to_fp32(block.d))) throw std::invalid_argument("PQ3 norm rounded outside finite FP16 range");
+        std::memcpy(output, &block, sizeof(block));
+        return LLAMA_SHIM_OK;
+    });
+}
+int32_t llama_pq3_decode_block_guarded(const uint8_t * input, size_t bytes, float * output, size_t count) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!output || count != QK_PQ3_0) return LLAMA_SHIM_INVALID_ARG;
+        const auto block = read_pq3_block(input, bytes);
+        float values[QK_PQ3_0];
+        dequantize_row_pq3_0(&block, values, QK_PQ3_0);
+        std::memcpy(output, values, sizeof(values));
+        return LLAMA_SHIM_OK;
+    });
+}
+int32_t llama_pq3_dot_q8_guarded(const uint8_t * input, size_t bytes, const float * query, size_t count, float * output) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!output) return LLAMA_SHIM_INVALID_ARG;
+        const auto block = read_pq3_block(input, bytes);
+        validate_pq3_input(query, count);
+        block_q8_0 q8[QK_PQ3_0 / QK8_0];
+        quantize_row_q8_0_ref(query, q8, QK_PQ3_0);
+        float result;
+        if (ggml_pq3_cpu_reference_abi_v1() != 1) throw std::runtime_error("unsupported PQ3 CPU ABI");
+        const auto * traits = ggml_get_type_traits_cpu(GGML_TYPE_PQ3_0);
+        if (!traits->vec_dot || traits->vec_dot_type != GGML_TYPE_Q8_0 || traits->nrows != 1) throw std::runtime_error("incomplete PQ3 CPU traits");
+        traits->vec_dot(QK_PQ3_0, &result, 0, &block, 0, q8, 0, 1);
+        *output = result;
+        return LLAMA_SHIM_OK;
+    });
+}
+#endif
+
+namespace {
+// Fixed ABI strings must be complete: truncation could merge device identities.
+void copy_cache_name(char (&out)[128], const char * name) {
+    if (!name || std::strlen(name) >= sizeof(out)) {
+        throw std::runtime_error("invalid or oversized native buffer/device name");
+    }
+    std::memcpy(out, name, std::strlen(name) + 1);
+}
+
+uint32_t rotation_size(const std::vector<ggml_tensor *> & rotations) {
+    uint32_t size = 0;
+    for (const auto * tensor : rotations) {
+        if (tensor) {
+            if (size && size != tensor->ne[0]) {
+                throw std::runtime_error("inconsistent cache rotation dimensions");
+            }
+            size = static_cast<uint32_t>(tensor->ne[0]);
+        }
+    }
+    return size;
+}
+
+void append_cache(std::vector<llama_cache_state_info> & result, llama_kv_cache * cache, uint32_t kind) {
+    if (!cache) return;
+    const auto ids = cache->get_layer_ids();
+    // Native type_k/type_v index the first layer; an empty SWA arena is valid.
+    if (ids.empty()) return;
+    result.push_back({kind, cache->get_size(), static_cast<uint32_t>(ids.size()),
+        cache->get_n_stream(), static_cast<int32_t>(cache->type_k()),
+        static_cast<int32_t>(cache->type_v()), rotation_size(cache->get_k_rot()),
+        rotation_size(cache->get_v_rot())});
+}
+
+void append_swa(std::vector<llama_cache_state_info> & result, llama_kv_cache_iswa * cache) {
+    append_cache(result, cache->get_base(), 1);
+    append_cache(result, cache->get_swa(), 2);
+}
+} // namespace
+
+int32_t llama_context_synchronize_guarded(llama_context * ctx) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!ctx) return LLAMA_SHIM_INVALID_ARG;
+        llama_synchronize(ctx);
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t llama_memory_breakdown_collect_v2(const llama_context * ctx,
+        llama_memory_breakdown_entry * out, size_t capacity, size_t * required) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!ctx || !required || (!out && capacity)) return LLAMA_SHIM_INVALID_ARG;
+        const auto breakdown = llama_get_memory_breakdown(ctx);
+        *required = breakdown.size();
+        if (capacity < breakdown.size()) return LLAMA_SHIM_BUFFER_TOO_SMALL;
+        size_t i = 0;
+        for (const auto & [buft, memory] : breakdown) {
+            llama_memory_breakdown_entry entry{};
+            copy_cache_name(entry.buft_name, buft ? ggml_backend_buft_name(buft) : "");
+            entry.model = memory.model;
+            entry.context = memory.context;
+            entry.compute = memory.compute;
+            out[i++] = entry;
+        }
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t llama_model_cache_layers_collect(const llama_model * model,
+        llama_cache_layer_info * out, size_t capacity, size_t * required,
+        uint32_t * requires_equal_kv) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!model || !required || !requires_equal_kv || (!out && capacity)) return LLAMA_SHIM_INVALID_ARG;
+        const auto & hp = model->hparams;
+        if (hp.vocab_only) {
+            llama_shim::set_error("cache topology requires a full model");
+            return LLAMA_SHIM_INVALID_ARG;
+        }
+        *required = hp.n_layer_all;
+        *requires_equal_kv = hp.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41;
+        if (capacity < hp.n_layer_all) return LLAMA_SHIM_BUFFER_TOO_SMALL;
+        for (uint32_t il = 0; il < hp.n_layer_all; ++il) {
+            llama_cache_layer_info entry{};
+            entry.layer = il;
+            if (hp.is_recr(il)) {
+                entry.kind = 3;
+            } else if (hp.has_kv(il) && hp.n_head_kv(il)) {
+                entry.kind = hp.is_swa(il) ? 2 : 1;
+                entry.kv_heads = hp.n_head_kv(il);
+                entry.key_head_dim = hp.n_embd_head_k(il);
+                entry.value_head_dim = hp.n_embd_head_v(il);
+                entry.window = hp.is_swa(il) ? hp.n_swa : 0;
+            }
+            auto * device = model->dev_layer(il);
+            copy_cache_name(entry.device_name, device ? ggml_backend_dev_name(device) : "CPU");
+            out[il] = entry;
+        }
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t llama_context_cache_collect(const llama_context * ctx, llama_context_cache_info * info,
+        llama_cache_state_info * out, size_t capacity, size_t * required) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!ctx || !info || !required || (!out && capacity)) return LLAMA_SHIM_INVALID_ARG;
+        const auto & cp = ctx->get_cparams();
+        *info = {cp.n_ctx, cp.n_batch, cp.n_ubatch, cp.n_seq_max,
+            cp.flash_attn, cp.offload_kqv, cp.op_offload, 1};
+        const auto & model = ctx->get_model();
+        // MLA aliases/omits V storage. Native type_v() unconditionally
+        // dereferences layers[0].v, so it is unsafe even for a nonempty arena.
+        // Compressed attention needs a separate inspector, not invented K/V
+        // geometry or an exception barrier around a null dereference.
+        if (model.hparams.is_mla() || model.arch == LLM_ARCH_DEEPSEEK4 || model.arch == LLM_ARCH_DEEPSEEK41) {
+            info->inspection_available = 0;
+            *required = 0;
+            return LLAMA_SHIM_OK;
+        }
+        std::vector<llama_cache_state_info> result;
+        auto * memory = ctx->get_memory();
+        if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
+            append_swa(result, hybrid->get_mem_attn());
+        } else if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
+            append_cache(result, hybrid->get_mem_attn(), 1);
+        } else if (auto * swa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
+            append_swa(result, swa);
+        } else if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
+            append_cache(result, kv, 1);
+        } else {
+            info->inspection_available = 0;
+        }
+        *required = result.size();
+        if (capacity < result.size()) return LLAMA_SHIM_BUFFER_TOO_SMALL;
+        for (size_t i = 0; i < result.size(); ++i) out[i] = result[i];
+        return LLAMA_SHIM_OK;
+    });
+}
 
 size_t llama_memory_buffers_collect(
         llama_memory_t          mem,

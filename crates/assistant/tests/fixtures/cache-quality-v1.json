@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "identity": "assistant-authored-cache-quality-v1",
+  "clock": "Thu Jan 15 12:34:56 UTC 2026",
+  "system": "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly.",
+  "texts": [
+    {
+      "id": "journal-prose",
+      "text": "A local journal records a planned operation before it changes persistent data. After a restart, recovery reads complete records and discards an incomplete final record. A checksum detects damaged bytes but does not prove who wrote them. The recovery procedure must distinguish a missing record from a completed operation. Replaying an external side effect without an identifier can perform the action twice. A durable service therefore records the result and the identifier together.\n\nA bounded queue limits pending work. When the queue is full, a caller receives an explicit capacity error. Dropping an old request without telling its caller would violate the request contract. Cancellation prevents future work where possible, but cannot undo a side effect that already completed."
+    },
+    {
+      "id": "ownership-prose",
+      "text": "A resident language model owns shared immutable weights. Independent conversations keep separate mutable inference state. Each context belongs to one worker thread, and a diagnostic response contains copied values rather than borrowed native pointers. The context is destroyed before the model, and the model remains alive until every context using its weights has stopped.\n\nA memory report separates model allocations from context and compute allocations. Adding the model column from several contexts counts shared weights repeatedly. A host memory snapshot is also different from peak memory measured by a device driver. These measurements answer different questions and must retain their labels."
+    },
+    {
+      "id": "rust-code",
+      "text": "fn checked_total(items: &[u64], limit: u64) -> Option<u64> {\n    let mut total = 0_u64;\n    for value in items {\n        total = total.checked_add(*value)?;\n        if total > limit { return None; }\n    }\n    Some(total)\n}\n\nfn keep_prefix(previous: &[u32], desired: &[u32]) -> bool {\n    desired.starts_with(previous)\n}\n\n// Reject arithmetic overflow before accepting a requested allocation.\n// A valid prefix permits append; divergence requires rebuilding state.\n"
+    },
+    {
+      "id": "python-code",
+      "text": "def choose_ready(tasks, capacity):\n    ready = []\n    for task in tasks:\n        if task[\"cancelled\"]:\n            continue\n        if len(ready) == capacity:\n            break\n        ready.append(task[\"id\"])\n    return ready\n\nrecords = [{\"id\": \"alpha\", \"cancelled\": False},\n           {\"id\": \"beta\", \"cancelled\": True},\n           {\"id\": \"gamma\", \"cancelled\": False}]\nassert choose_ready(records, 2) == [\"alpha\", \"gamma\"]\n"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "multiply",
+      "kind": "tools",
+      "prompt": "What is 123 multiplied by 456?",
+      "integer": 56088,
+      "tools": [
+        "calculate"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "fixed-clock",
+      "kind": "tools",
+      "prompt": "What time is it? Return the date command's complete output verbatim.",
+      "expected": "Thu Jan 15 12:34:56 UTC 2026",
+      "tools": [
+        "current_time"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "two-tools",
+      "kind": "tools",
+      "prompt": "What time is it, and what is 19 times 23?",
+      "integer": 437,
+      "tools": [
+        "calculate",
+        "current_time"
+      ],
+      "smoke": true
+    },
+    {
+      "id": "read-code",
+      "kind": "answer",
+      "prompt": "Read this Rust code. What literal string does it return? Answer with that string only.\nfn select() -> &'static str { let active = 3; if active < 5 { \"CEDAR\" } else { \"MAPLE\" } }",
+      "expected": "CEDAR",
+      "tools": [],
+      "smoke": true
+    },
+    {
+      "id": "read-prose",
+      "kind": "answer",
+      "prompt": "A keeper moved the brass key from the desk to the green cabinet. The desk now contains only paper. Where is the brass key? Answer with the location only.",
+      "expected": "green cabinet",
+      "tools": [],
+      "smoke": true
+    }
+  ],
+  "retrieval": {
+    "target_user_tokens": [
+      1024,
+      3500
+    ],
+    "smoke_target_user_tokens": [
+      1024
+    ],
+    "positions": [
+      "start",
+      "middle",
+      "end"
+    ],
+    "smoke_positions": [
+      "middle"
+    ],
+    "records": [
+      {
+        "key": "river-gate",
+        "value": "ORCHID-72"
+      },
+      {
+        "key": "north-store",
+        "value": "COBALT-19"
+      }
+    ],
+    "filler": "Archive entry {index}: ordinary parcel number {number} is held for routine inspection. This entry assigns no access phrase.\n"
+  },
+  "acceptance": {
+    "scope": "experimental codec comparison; promotion needs broader data and hardware",
+    "max_mean_target_nll_increase_nats": 0.05,
+    "max_checkpoint_kl_reference_to_candidate": 0.05,
+    "max_lost_tasks_passed_by_fp16_and_q4": 0,
+    "max_retrieval_accuracy_drop": 0.0,
+    "throughput_regression_investigation_fraction": 0.05,
+    "numerical_token_stride": 32,
+    "fp16_repeats": 2
+  },
+  "scoring": {
+    "retrieval_and_literal_reading": "Exact answer after trimming whitespace and quote/backtick/asterisk wrappers; reasoning echoes and truncated explanations fail.",
+    "clock": "Expected complete fixed clock text must occur, with a successful current_time receipt.",
+    "arithmetic": "Expected integer in answer and successful calculate receipt with that value."
+  }
+}

@@ -12,13 +12,13 @@
 //! llama_cpp::model_quantize("model-f16.gguf", "model-q4km.gguf", &params).unwrap();
 //! ```
 //!
-//! # `TurboQuant` – attention rotation (PR #21038)
+//! # Native attention rotation (PR #21038)
 //!
-//! llama.cpp applies a Hadamard rotation to Q/K/V tensors before writing them into the KV cache.
-//! This significantly improves KV-cache quantization quality at near-zero cost, and is enabled by
-//! default for every model whose head dimension is a power of two.  You can opt out per-context
-//! with [`LlamaContextParams::with_attn_rot_disabled`] or globally with
-//! [`set_attn_rot_disabled`].
+//! Native Hadamard rotation can reduce error for existing quantized KV formats.
+//! It is not the TurboQuant codec. Applicability depends on cache precision,
+//! head alignment and model opt-outs. Disable it per context with
+//! [`LlamaContextParams::with_attn_rot_disabled`] or set a Rust process default
+//! with [`set_attn_rot_disabled`]. Neither setter mutates the environment.
 //!
 //! [`LlamaContextParams::with_attn_rot_disabled`]: crate::context::params::LlamaContextParams::with_attn_rot_disabled
 
@@ -429,6 +429,8 @@ pub enum GgmlType {
     Q1_0 = 41,
     /// `Q2_0` — 2 bpw binary.
     Q2_0 = 42,
+    /// Native eight-bit E4M3 floating-point storage; not an initial KV policy.
+    F8E4M3 = 43,
 }
 
 impl From<GgmlType> for llama_cpp_sys::ggml_type {
@@ -476,6 +478,7 @@ impl TryFrom<llama_cpp_sys::ggml_type> for GgmlType {
             40 => Ok(Self::NVFP4),
             41 => Ok(Self::Q1_0),
             42 => Ok(Self::Q2_0),
+            43 => Ok(Self::F8E4M3),
             _ => Err(v),
         }
     }
@@ -1033,15 +1036,14 @@ pub(crate) struct RawQuantizeParamsGuard<'a> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// TurboQuant – attention rotation
+// Native attention rotation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Control the `TurboQuant` attention-rotation feature globally.
+/// Control the native Hadamard attention-rotation preference globally.
 ///
-/// When enabled (the default), llama.cpp applies a Hadamard rotation to Q/K/V
-/// tensors before storing them in the KV cache.  This significantly improves
-/// quantization quality of the KV cache with near-zero overhead, as described
-/// in llama.cpp PR #21038.
+/// Native rotation is conditional on precision, model opt-outs and alignment.
+/// It can reduce quantization error; it is not the TurboQuant codec. See
+/// llama.cpp PR #21038.
 ///
 /// Set a process-wide default for subsequently created Rust contexts.
 ///

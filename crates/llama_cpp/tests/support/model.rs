@@ -11,17 +11,9 @@ use llama_cpp::llama_backend::LlamaBackend;
 use llama_cpp::model::params::LlamaModelParams;
 use llama_cpp::model::LlamaModel;
 
-/// Serialize *all* llama.cpp interaction across tests in this binary.
-///
-/// llama.cpp is not thread-safe for concurrent model loading, context creation,
-/// or decode. In particular, the `fit` / `get_device_memory_data` helpers
-/// install a **process-global** log callback that captures stack locals by
-/// reference to scrape device-memory info out of log text; a model load on
-/// another thread then emits a log line that invokes this foreign (often
-/// already-returned) callback, dereferencing freed stack memory —
-/// use-after-free that manifests as SIGSEGV/SIGABRT. Every test that touches a
-/// model must therefore hold this lock for its whole body, from before the
-/// model load through the last decode.
+/// Serialize tests that share mutable native configuration or fixture state.
+/// The maintained logging patch contains fitting callbacks on their thread;
+/// this lock does not substitute for individual native ownership contracts.
 pub static LLAMA_LOCK: Mutex<()> = Mutex::new(());
 
 /// Acquire the global llama.cpp test lock, recovering from a poisoned mutex
@@ -52,7 +44,7 @@ pub struct ModelFixture {
 
 /// Find a GGUF for tests. See module docs for search order.
 pub fn find_test_model() -> Option<ModelFixture> {
-    if let Ok(path) = std::env::var("LLAMA_TEST_MODEL") {
+    if let Some(path) = std::env::var_os("LLAMA_TEST_MODEL") {
         let p = PathBuf::from(path);
         if p.is_file() {
             return Some(ModelFixture {
@@ -60,7 +52,7 @@ pub fn find_test_model() -> Option<ModelFixture> {
                 vocab_only: false,
             });
         }
-        eprintln!("LLAMA_TEST_MODEL is set but not a file: {}", p.display());
+        panic!("LLAMA_TEST_MODEL must name an existing GGUF file");
     }
 
     if let Some(path) = default_cached_test_model() {
@@ -72,6 +64,10 @@ pub fn find_test_model() -> Option<ModelFixture> {
         }
     }
 
+    assert!(
+        std::env::var_os("LLAMA_TEST_REQUIRE_MODEL").is_none(),
+        "full-model coverage requires LLAMA_TEST_MODEL or the cached tiny model"
+    );
     vocab_only_fixture()
 }
 
@@ -103,7 +99,8 @@ pub fn load_model() -> Option<(LlamaModel, bool)> {
         params = params.with_vocab_only(true);
     }
     let params = std::pin::pin!(params);
-    let model = LlamaModel::load_from_file(backend(), &fixture.path, &params).ok()?;
+    let model = LlamaModel::load_from_file(backend(), &fixture.path, &params)
+        .expect("the selected GGUF fixture must load; load failures are not skips");
     Some((model, fixture.vocab_only))
 }
 

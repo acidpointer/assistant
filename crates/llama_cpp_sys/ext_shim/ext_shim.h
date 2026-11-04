@@ -10,12 +10,80 @@
 extern "C" {
 #endif
 
+#ifdef LLAMA_RS_TURBOQUANT
+// CPU reference only. Exactly 128 floats / 50 encoded bytes. Inputs to encode
+// and dot must be finite with block norm <= 65504. No graph rotation is applied.
+// Output is unchanged on error; shared status/TLS errors contain failures.
+int32_t llama_pq3_encode_block_guarded(const float * input, size_t count, uint8_t * output, size_t bytes);
+int32_t llama_pq3_decode_block_guarded(const uint8_t * input, size_t bytes, float * output, size_t count);
+int32_t llama_pq3_dot_q8_guarded(const uint8_t * input, size_t bytes, const float * query, size_t count, float * output);
+#endif
+
 struct llama_memory_breakdown_entry {
     char    buft_name[128];
     size_t  model;
     size_t  context;
     size_t  compute;
 };
+
+// Fallible size-query/fill API. Never returns a partial report as success.
+// required is mandatory; ctx must remain live and confined to the calling thread.
+int32_t llama_memory_breakdown_collect_v2(
+        const struct llama_context * ctx,
+        struct llama_memory_breakdown_entry * out,
+        size_t capacity,
+        size_t * required);
+
+// Complete pending work with the shared exception/TLS error contract.
+int32_t llama_context_synchronize_guarded(struct llama_context * ctx);
+
+// Owned scalar snapshots of the pinned C++ model/cache internals. No pointers
+// or C++ containers cross this ABI. kind: 0=no cache, 1=full, 2=SWA, 3=recurrent.
+struct llama_cache_layer_info {
+    uint32_t layer;
+    uint32_t kind;
+    uint32_t kv_heads;
+    uint32_t key_head_dim;
+    uint32_t value_head_dim;
+    uint32_t window;
+    char device_name[128];
+};
+
+struct llama_cache_state_info {
+    uint32_t kind;
+    uint32_t cells;
+    uint32_t layers;
+    uint32_t streams;
+    int32_t key_type;
+    int32_t value_type;
+    uint32_t key_rotation;
+    uint32_t value_rotation;
+};
+
+struct llama_context_cache_info {
+    uint32_t context_size;
+    uint32_t batch_size;
+    uint32_t microbatch_size;
+    uint32_t sequences;
+    uint32_t flash_attention;
+    uint32_t offload_kqv;
+    uint32_t op_offload;
+    uint32_t inspection_available;
+};
+
+int32_t llama_model_cache_layers_collect(
+        const struct llama_model * model,
+        struct llama_cache_layer_info * out,
+        size_t capacity,
+        size_t * required,
+        uint32_t * requires_equal_kv);
+
+int32_t llama_context_cache_collect(
+        const struct llama_context * ctx,
+        struct llama_context_cache_info * info,
+        struct llama_cache_state_info * out,
+        size_t capacity,
+        size_t * required);
 
 // Count the backend buffers a state write of `mem` would touch.
 //

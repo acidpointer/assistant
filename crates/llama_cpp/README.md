@@ -41,6 +41,7 @@ examples: `cargo doc -p llama_cpp --no-deps`.
 | `native` | no | CPU tuning for the build machine |
 | `dynamic-link` | no | Build shared libraries instead of static libraries |
 | `q1` | no | Compatibility no-op; Q1_0 is supported unconditionally |
+| `turboquant` | no | Experimental PQ3 CPU reference and guarded `pq3_reference::Pq3Block`; no live PQ3 cache selection |
 | `prebuilt` | no | Falls back to source while the required patches are active |
 
 Use `default-features = false` to select only the backends/APIs you need.
@@ -73,3 +74,19 @@ callbacks run outside locks and Rust unwinding is contained. Rotation defaults
 are atomic preferences for new Rust contexts and never rewrite the environment.
 See [fork maintenance](../../docs/bindings-fork.md) for the mandatory native
 patch, ABI guard, compatibility details, and regression-test contracts.
+
+Typed cache settings live in `context::cache::KvCacheConfig` (FP16, Q8_0,
+Q4_0; full/compact SWA; flash and rotation policy). Validate against
+`LlamaModel::cache_topology()` before allocating. `LlamaContext::cache_info()`
+returns effective arena geometry and rotation state; `try_memory_breakdown()`
+returns complete allocation accounting or an error. Use these fallible reports
+for diagnostics rather than the legacy best-effort collector. Context/compute
+bytes are per context; weight bytes refer to shared model allocations.
+`try_synchronize()` provides an exception-contained measurement boundary.
+See the [cache baseline](../../docs/kv-cache-baseline.md) for limitations and
+model/GPU validation coverage.
+
+The experimental [PQ3 reference contract](../../docs/pq3-reference-contract.md)
+freezes its native block/ABI and explains the remaining graph/Vulkan work.
+`cargo test -p llama_cpp --no-default-features --features turboquant --test test_pq3_reference`
+exercises the codec without a model or GPU.

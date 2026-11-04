@@ -22,6 +22,23 @@ use std::{
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 use worker::WorkerHandle;
 
+/// Owned reports for contexts sharing one worker's resident model weights.
+#[derive(Debug, Clone)]
+pub struct ModelCacheDiagnostics {
+    /// Per-context snapshots; their model columns refer to shared allocations.
+    pub contexts: Vec<crate::engine::CacheDiagnostics>,
+    /// Aggregate native buffer accounting, counting model weights once.
+    /// Empty before the first context is allocated; this is not a model-only census.
+    pub memory: Vec<llama_cpp::context::memory_breakdown::MemoryBreakdownEntry>,
+}
+impl ModelCacheDiagnostics {
+    /// Prompt/path-free diagnostic JSON.
+    #[must_use]
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({"contexts":self.contexts.iter().map(crate::engine::CacheDiagnostics::to_json).collect::<Vec<_>>(),"aggregate_memory":self.memory.iter().map(|m|serde_json::json!({"buffer":m.buft_name,"model_bytes":m.model,"context_bytes":m.context,"compute_bytes":m.compute})).collect::<Vec<_>>()})
+    }
+}
+
 #[derive(Debug)]
 struct Registration {
     cancellation: Cancellation,
@@ -431,6 +448,20 @@ pub struct RunningAssistant {
     shutdown_grace: Duration,
 }
 impl RunningAssistant {
+    /// Inspect resident contexts on their owning workers. No context is created
+    /// by this call. The aggregate counts shared weights once per worker.
+    /// # Errors
+    /// Returns closed-worker, inspection or accounting errors.
+    pub async fn cache_diagnostics(&self) -> ChatResult<BTreeMap<String, ModelCacheDiagnostics>> {
+        self.control.check_open()?;
+        let mut reports = BTreeMap::new();
+        for (name, worker) in &self.workers {
+            let contexts = worker.inspect().await?;
+            let memory = crate::engine::CacheDiagnostics::aggregate_memory(&contexts)?;
+            reports.insert(name.clone(), ModelCacheDiagnostics { contexts, memory });
+        }
+        Ok(reports)
+    }
     /// Clone the primary conversation handle. All clones share working state.
     #[must_use]
     pub fn chat(&self) -> Chat {

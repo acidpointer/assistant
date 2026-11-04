@@ -1585,6 +1585,15 @@ impl LlamaModel {
         unsafe { llama_model_n_devices(self.model.as_ptr()) }
     }
 
+    /// Snapshot loaded per-layer cache geometry and device selection.
+    /// # Errors
+    /// Rejects vocab-only models, native inspection failures and invalid ABI data.
+    pub fn cache_topology(
+        &self,
+    ) -> Result<crate::context::cache::ModelCacheTopology, crate::ShimError> {
+        crate::context::cache::inspect_model(self.model.as_ptr())
+    }
+
     /// Get the backend device at `index`.
     ///
     /// Valid indices satisfy `0 <= index < n_devices()`. Returns `None` for

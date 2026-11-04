@@ -1,0 +1,438 @@
+Subject: Add an opt-in PQ3 128-value CPU format/reference, with inference disabled
+Base: llama.cpp a34de8618b25dfc32ee43749db47d767a9f0a25d (b12015), after 0003-0007
+Donor: tetherto/qvac-fabric-llm.cpp PR 115, head 362003a25376555e5c01939ed82710bbb2c3bcf8
+License: MIT, Copyright (c) 2023-2024 The ggml authors; upstream LICENSE retained
+
+Why: the pin has rotation but no codebook KV format. Establish a deterministic
+CPU oracle before graph/Vulkan integration. Append type 44; preserve IDs 0-43.
+PQ3 stores 48 packed index bytes then a half L2 norm (50 bytes / 128 values).
+Keep donor codebook/packing, omit its mutable norm-policy/environment and sign
+initialization. Row functions accept already transformed coordinates. Canonicalize
+FP16 norm underflow to zero; guarded project shims reject nonfinite/oversized norms.
+No llama_context_params layout changes. ggml_pq3_reference_abi_v1 binds the layout.
+Cache selection and PQ3 model weights/quantization fail closed in this phase.
+Tests: test-pq3-reference (model/GPU independent), plus guarded Rust codec tests.
+The project feature stages this patch; no runtime CLI cache option is introduced.
+
+diff --git a/ggml/include/ggml.h b/ggml/include/ggml.h
+--- a/ggml/include/ggml.h
++++ b/ggml/include/ggml.h
+@@ -433,8 +433,12 @@
+         GGML_TYPE_Q1_0    = 41,
+         GGML_TYPE_Q2_0    = 42,
+         GGML_TYPE_F8_E4M3 = 43,
+-        GGML_TYPE_COUNT   = 44,
++        GGML_TYPE_PQ3_0   = 44, // experimental 128-value CPU reference, cache use not enabled
++        GGML_TYPE_COUNT   = 45,
+     };
++
++    // ABI v1: PQ3 type 44, 128 values, 50 bytes, fixed L2 scale/codebook.
++    GGML_API uint32_t ggml_pq3_reference_abi_v1(void);
+ 
+     // [TAG_GGML_PREC]
+     // this enum is used to declare the allowed numerical precision/data-types types that can be used during the compute of an op
+diff --git a/ggml/src/ggml-common.h b/ggml/src/ggml-common.h
+--- a/ggml/src/ggml-common.h
++++ b/ggml/src/ggml-common.h
+@@ -290,6 +290,17 @@
+ //
+ // Super-block quantization structures
+ //
++
++// Experimental PQ3 reference. Adapted from tetherto/qvac-fabric-llm.cpp
++// 362003a25376555e5c01939ed82710bbb2c3bcf8 (MIT; see root LICENSE).
++// Indices precede the FP16 L2 norm, matching that donor's 128-value layout.
++#define QK_PQ3_0 128
++#define PQ3_0_INDEX_BYTES 48
++typedef struct {
++    uint8_t qs[PQ3_0_INDEX_BYTES];
++    ggml_half d;
++} block_pq3_0;
++static_assert(sizeof(block_pq3_0) == 50, "wrong pq3_0 block size/padding");
+ 
+ // 2-bit quantization
+ // weight is represented as x = a * q + b
+diff --git a/ggml/include/ggml-cpu.h b/ggml/include/ggml-cpu.h
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -123,6 +123,8 @@
+ 
+     GGML_BACKEND_API const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type);
+ 
++    GGML_BACKEND_API uint32_t ggml_pq3_cpu_reference_abi_v1(void);
++
+     GGML_BACKEND_API void ggml_cpu_init(void);
+ 
+     //
+diff --git a/ggml/src/ggml-quants.h b/ggml/src/ggml-quants.h
+--- a/ggml/src/ggml-quants.h
++++ b/ggml/src/ggml-quants.h
+@@ -14,6 +14,12 @@
+ // NOTE: these functions are defined as GGML_API because they used by the CPU backend
+ 
+ // Quantization
++// PQ3 operates on already transformed coordinates; no rotation occurs here.
++// Internal row functions require complete 128-value blocks and finite values
++// whose block L2 norm fits FP16. Guarded callers validate these preconditions.
++GGML_API void quantize_row_pq3_0_ref(const float * GGML_RESTRICT x, block_pq3_0 * GGML_RESTRICT y, int64_t k);
++GGML_API void dequantize_row_pq3_0(const block_pq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
++GGML_API size_t quantize_pq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * weights);
+ GGML_API void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_RESTRICT y, int64_t k);
+ GGML_API void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k);
+ GGML_API void quantize_row_q4_0_ref(const float * GGML_RESTRICT x, block_q4_0 * GGML_RESTRICT y, int64_t k);
+diff --git a/ggml/src/ggml-quants.c b/ggml/src/ggml-quants.c
+--- a/ggml/src/ggml-quants.c
++++ b/ggml/src/ggml-quants.c
+@@ -31,6 +31,73 @@
+     int l = 15;
+     for (int k = 0; k < 15; ++k) l -= x < mid[k];
+     return l;
++}
++
++// PQ3 CPU reference, adapted from QVAC PR 115 at
++// 362003a25376555e5c01939ed82710bbb2c3bcf8, ggml-quants.c (MIT).
++// Rotation belongs to a future graph patch. No environment-dependent scales.
++static const float pq3_codebook_128[8] = {
++    -0.18839718597003241f, -0.11813976699668613f,
++    -0.06658560804735174f, -0.02160431064212660f,
++     0.02160431064212660f,  0.06658560804735174f,
++     0.11813976699668613f,  0.18839718597003241f,
++};
++
++uint32_t ggml_pq3_reference_abi_v1(void) { return 1; }
++
++size_t quantize_pq3_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
++        int64_t nrows, int64_t n_per_row, const float * weights) {
++    GGML_UNUSED(weights);
++    assert(nrows >= 0 && n_per_row >= 0 && n_per_row % QK_PQ3_0 == 0);
++    quantize_row_pq3_0_ref(src, (block_pq3_0 *) dst, nrows * n_per_row);
++    return (size_t) nrows * ggml_row_size(GGML_TYPE_PQ3_0, n_per_row);
++}
++
++void quantize_row_pq3_0_ref(const float * GGML_RESTRICT x, block_pq3_0 * GGML_RESTRICT y, int64_t k) {
++    assert(k >= 0 && k % QK_PQ3_0 == 0);
++    float boundaries[7];
++    for (int j = 0; j < 7; ++j) {
++        boundaries[j] = (pq3_codebook_128[j] + pq3_codebook_128[j + 1]) * 0.5f;
++    }
++    for (int64_t i = 0; i < k / QK_PQ3_0; ++i) {
++        const float * src = x + i * QK_PQ3_0;
++        float sum = 0.0f;
++        for (int j = 0; j < QK_PQ3_0; ++j) sum += src[j] * src[j];
++        const float norm = sqrtf(sum);
++        y[i].d = GGML_FP32_TO_FP16(norm);
++        // Canonical zero also covers subnormals whose norm underflows FP16.
++        if (y[i].d == 0) { memset(y[i].qs, 0, sizeof(y[i].qs)); continue; }
++        const float inv_norm = 1.0f / norm;
++        for (int group = 0; group < QK_PQ3_0 / 8; ++group) {
++            uint32_t bits = 0;
++            for (int lane = 0; lane < 8; ++lane) {
++                const float value = src[group * 8 + lane] * inv_norm;
++                // Midpoint ties choose the higher centroid, including zero.
++                uint32_t index = 0;
++                while (index < 7 && !(value < boundaries[index])) ++index;
++                bits |= index << (lane * 3);
++            }
++            y[i].qs[group * 3 + 0] = (uint8_t) bits;
++            y[i].qs[group * 3 + 1] = (uint8_t) (bits >> 8);
++            y[i].qs[group * 3 + 2] = (uint8_t) (bits >> 16);
++        }
++    }
++}
++
++void dequantize_row_pq3_0(const block_pq3_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
++    assert(k >= 0 && k % QK_PQ3_0 == 0);
++    for (int64_t i = 0; i < k / QK_PQ3_0; ++i) {
++        const float norm = GGML_FP16_TO_FP32(x[i].d);
++        if (norm == 0.0f) { memset(y + i * QK_PQ3_0, 0, QK_PQ3_0 * sizeof(float)); continue; }
++        for (int group = 0; group < QK_PQ3_0 / 8; ++group) {
++            const uint32_t bits = (uint32_t) x[i].qs[group * 3 + 0]
++                | ((uint32_t) x[i].qs[group * 3 + 1] << 8)
++                | ((uint32_t) x[i].qs[group * 3 + 2] << 16);
++            for (int lane = 0; lane < 8; ++lane) {
++                y[i * QK_PQ3_0 + group * 8 + lane] = pq3_codebook_128[(bits >> (lane * 3)) & 7] * norm;
++            }
++        }
++    }
+ }
+ 
+ // reference implementation for deterministic creation of model files
+@@ -5541,6 +5608,18 @@
+             {
+                 VALIDATE_ROW_DATA_DM_F16_IMPL(block_q5_1, data, nb, d, m);
+             } break;
++        case GGML_TYPE_PQ3_0:
++            {
++                for (size_t i = 0; i < nb; ++i) {
++                    block_pq3_0 block;
++                    memcpy(&block, (const uint8_t *) data + i * sizeof(block), sizeof(block));
++                    const float norm = GGML_FP16_TO_FP32(block.d);
++                    if (!isfinite(norm) || signbit(norm)) return false;
++                    if (norm == 0.0f) {
++                        for (size_t j = 0; j < sizeof(block.qs); ++j) if (block.qs[j]) return false;
++                    }
++                }
++            } break;
+         case GGML_TYPE_Q8_0:
+             {
+                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q8_0, data, nb);
+diff --git a/ggml/src/ggml.c b/ggml/src/ggml.c
+--- a/ggml/src/ggml.c
++++ b/ggml/src/ggml.c
+@@ -683,6 +683,14 @@
+         .is_quantized             = true,
+         .to_float                 = (ggml_to_float_t) dequantize_row_q1_0,
+         .from_float_ref           = (ggml_from_float_t) quantize_row_q1_0_ref,
++    },
++    [GGML_TYPE_PQ3_0] = {
++        .type_name                = "pq3_0",
++        .blck_size                = QK_PQ3_0,
++        .type_size                = sizeof(block_pq3_0),
++        .is_quantized             = true,
++        .to_float                 = (ggml_to_float_t) dequantize_row_pq3_0,
++        .from_float_ref           = (ggml_from_float_t) quantize_row_pq3_0_ref,
+     },
+     [GGML_TYPE_Q2_0] = {
+         .type_name                = "q2_0",
+@@ -8178,6 +8186,7 @@
+     size_t result = 0;
+ 
+     switch (type) {
++        case GGML_TYPE_PQ3_0:   result = quantize_pq3_0(src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+         case GGML_TYPE_Q1_0:    result = quantize_q1_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+         case GGML_TYPE_Q2_0:    result = quantize_q2_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+         case GGML_TYPE_Q4_0:    result = quantize_q4_0   (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+diff --git a/ggml/src/ggml-cpu/quants.h b/ggml/src/ggml-cpu/quants.h
+--- a/ggml/src/ggml-cpu/quants.h
++++ b/ggml/src/ggml-cpu/quants.h
+@@ -12,6 +12,8 @@
+ #endif
+ 
+ // Quantization
++void quantize_row_pq3_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
++void ggml_vec_dot_pq3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
+ void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+ void quantize_row_q2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+ void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
+diff --git a/ggml/src/ggml-cpu/quants.c b/ggml/src/ggml-cpu/quants.c
+--- a/ggml/src/ggml-cpu/quants.c
++++ b/ggml/src/ggml-cpu/quants.c
+@@ -22,6 +22,35 @@
+ #define GROUP_MAX_EPS_IQ1_S 1e-12f
+ 
+ #define UNUSED GGML_UNUSED
++
++// Deliberately scalar reference: decode PQ3 and Q8 query blocks explicitly.
++// This is not a fused attention kernel or a model-weight quantization format.
++uint32_t ggml_pq3_cpu_reference_abi_v1(void) { return 1; }
++
++void quantize_row_pq3_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
++    quantize_row_pq3_0_ref(x, (block_pq3_0 *) y, k);
++}
++
++void ggml_vec_dot_pq3_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
++        const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
++    assert(n >= 0 && n % QK_PQ3_0 == 0 && nrc == 1);
++    UNUSED(bs); UNUSED(bx); UNUSED(by); UNUSED(nrc);
++    const block_pq3_0 * x = (const block_pq3_0 *) vx;
++    const block_q8_0 * y = (const block_q8_0 *) vy;
++    float sum = 0.0f;
++    for (int i = 0; i < n / QK_PQ3_0; ++i) {
++        float key[QK_PQ3_0];
++        dequantize_row_pq3_0(x + i, key, QK_PQ3_0);
++        for (int j = 0; j < QK_PQ3_0 / QK8_0; ++j) {
++            float query[QK8_0];
++            dequantize_row_q8_0(y + i * (QK_PQ3_0 / QK8_0) + j, query, QK8_0);
++            float partial = 0.0f;
++            for (int lane = 0; lane < QK8_0; ++lane) partial += key[j * QK8_0 + lane] * query[lane];
++            sum += partial;
++        }
++    }
++    *s = sum;
++}
+ 
+ void quantize_row_q1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+     quantize_row_q1_0_ref(x, y, k);
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -270,6 +270,12 @@
+         .from_float               = quantize_row_q5_1,
+         .vec_dot                  = ggml_vec_dot_q5_1_q8_1,
+         .vec_dot_type             = GGML_TYPE_Q8_1,
++        .nrows                    = 1,
++    },
++    [GGML_TYPE_PQ3_0] = {
++        .from_float               = quantize_row_pq3_0,
++        .vec_dot                  = ggml_vec_dot_pq3_0_q8_0,
++        .vec_dot_type             = GGML_TYPE_Q8_0,
+         .nrows                    = 1,
+     },
+     [GGML_TYPE_Q8_0] = {
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -4103,6 +4103,11 @@
+         return nullptr;
+     }
+ 
++    if (params.type_k == GGML_TYPE_PQ3_0 || params.type_v == GGML_TYPE_PQ3_0) {
++        LLAMA_LOG_ERROR("%s: PQ3 is CPU-reference-only; cache graph/attention support is not enabled\n", __func__);
++        return nullptr;
++    }
++
+     if (params.n_batch == 0 && params.n_ubatch == 0) {
+         LLAMA_LOG_ERROR("%s: n_batch and n_ubatch cannot both be zero\n", __func__);
+         return nullptr;
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -740,6 +740,9 @@
+             const ggml_tensor * tensor = w.tensor;
+ 
+             enum ggml_type type = tensor->type;
++            if (type == GGML_TYPE_PQ3_0) {
++                throw std::runtime_error("PQ3 is a cache/reference format, not a model-weight format");
++            }
+ 
+             n_type[type]++;
+ 
+diff --git a/src/llama-quant.cpp b/src/llama-quant.cpp
+--- a/src/llama-quant.cpp
++++ b/src/llama-quant.cpp
+@@ -761,6 +761,14 @@
+ 
+ // outer wrapper: determine the ggml_type that this tensor should be quantized to
+ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_model_quantize_params * params, const ggml_tensor * tensor, ggml_type default_type, const tensor_metadata & tm) {
++    if (default_type == GGML_TYPE_PQ3_0 || params->output_tensor_type == GGML_TYPE_PQ3_0 || params->token_embedding_type == GGML_TYPE_PQ3_0) {
++        throw std::runtime_error("PQ3 is not supported for model-weight quantization");
++    }
++    for (const auto & pattern : qs.tensor_type_patterns) {
++        if (pattern.second == GGML_TYPE_PQ3_0) {
++            throw std::runtime_error("PQ3 tensor overrides are cache/reference-only");
++        }
++    }
+     if (!tensor_allows_quantization(params, qs.model.arch, tensor)) {
+         return tensor->type;
+     }
+diff --git a/tests/test-pq3-reference.cpp b/tests/test-pq3-reference.cpp
+--- /dev/null
++++ b/tests/test-pq3-reference.cpp
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: MIT
++// Model-free PQ3 format/CPU oracle. No backend, rotation or cache support claim.
++#include "ggml.h"
++#include "ggml-cpu.h"
++#include "ggml-quants.h"
++#include <array>
++#include <cmath>
++#include <cstddef>
++#include <cstdio>
++#include <cstring>
++#include <stdexcept>
++
++static void require(bool condition, const char * message) {
++    if (!condition) throw std::runtime_error(message);
++}
++static void check_reference() {
++    require(ggml_pq3_reference_abi_v1() == 1, "ABI version");
++    require(GGML_TYPE_F8_E4M3 == 43 && GGML_TYPE_PQ3_0 == 44, "type IDs");
++    require(ggml_blck_size(GGML_TYPE_PQ3_0) == 128, "block width");
++    require(ggml_type_size(GGML_TYPE_PQ3_0) == 50 && offsetof(block_pq3_0, d) == 48, "layout");
++    require(ggml_row_size(GGML_TYPE_PQ3_0, 256) == 100, "row size");
++    std::array<float, 256> input{};
++    std::array<block_pq3_0, 2> blocks{};
++    std::array<float, 256> decoded{};
++    quantize_row_pq3_0_ref(input.data(), blocks.data(), input.size());
++    for (const auto & b : blocks) {
++        require(b.d == 0, "zero norm");
++        for (auto byte : b.qs) require(byte == 0, "canonical zero");
++    }
++    // Golden positive constant: normalized coordinates 1/sqrt(128), index 5.
++    input.fill(1.0f);
++    quantize_row_pq3_0_ref(input.data(), blocks.data(), input.size());
++    for (const auto & b : blocks) {
++        for (int g = 0; g < 16; ++g) {
++            require(b.qs[g*3] == 0x6d && b.qs[g*3+1] == 0xdb && b.qs[g*3+2] == 0xb6, "golden 3-bit packing");
++        }
++        require(std::fabs(ggml_fp16_to_fp32(b.d) - std::sqrt(128.0f)) < 0.004f, "stored L2 norm");
++    }
++    dequantize_row_pq3_0(blocks.data(), decoded.data(), decoded.size());
++    require(std::fabs(decoded[0] - 0.06658560804735174f * ggml_fp16_to_fp32(blocks[0].d)) < 1e-7f, "codebook reconstruction");
++    // Arbitrary packed indices exercise every bit boundary independently of encoder.
++    block_pq3_0 ramp{}; ramp.d = ggml_fp32_to_fp16(1.0f);
++    for (int g = 0; g < 16; ++g) { ramp.qs[g*3]=0x88; ramp.qs[g*3+1]=0xc6; ramp.qs[g*3+2]=0xfa; }
++    dequantize_row_pq3_0(&ramp, decoded.data(), 128);
++    const float codebook[8]={-0.18839718597003241f,-0.11813976699668613f,-0.06658560804735174f,-0.02160431064212660f,0.02160431064212660f,0.06658560804735174f,0.11813976699668613f,0.18839718597003241f};
++    for (int i=0;i<128;++i) require(decoded[i] == codebook[i%8], "independent index unpacking");
++    // Midpoint zero must choose the upper centroid. Use one nonzero coordinate
++    // to keep the norm nonzero without affecting the remaining exact zero ties.
++    input.fill(0.0f); input[127]=1.0f; input[255]=-1.0f;
++    quantize_row_pq3_0_ref(input.data(), blocks.data(), input.size());
++    require((blocks[0].qs[0]&7)==4 && (blocks[1].qs[0]&7)==4, "midpoint tie");
++    for (size_t i=0;i<input.size();++i) input[i]=std::sin(float(i)*0.31f)*0.3f;
++    quantize_row_pq3_0_ref(input.data(), blocks.data(), input.size());
++    std::array<block_pq3_0,2> repeated{};
++    quantize_row_pq3_0_ref(input.data(), repeated.data(), input.size());
++    require(std::memcmp(blocks.data(),repeated.data(),sizeof(blocks))==0,"repeatability");
++    dequantize_row_pq3_0(blocks.data(),decoded.data(),decoded.size());
++    std::array<block_q8_0,8> q8{}; std::array<float,256> query{};
++    quantize_row_q8_0_ref(input.data(),q8.data(),input.size());
++    dequantize_row_q8_0(q8.data(),query.data(),query.size());
++    const auto * traits=ggml_get_type_traits_cpu(GGML_TYPE_PQ3_0);
++    require(traits->from_float && traits->vec_dot && traits->vec_dot_type==GGML_TYPE_Q8_0 && traits->nrows==1,"CPU traits");
++    float actual=0.0f; traits->vec_dot(256,&actual,0,blocks.data(),0,q8.data(),0,1);
++    double expected=0.0, mse=0.0, energy=0.0;
++    for (size_t i=0;i<input.size();++i) { expected+=double(decoded[i])*query[i]; mse+=std::pow(double(decoded[i])-input[i],2); energy+=double(input[i])*input[i]; }
++    require(std::fabs(actual-expected)<1e-5*std::fmax(1.0,std::fabs(expected)),"dot against independently reconstructed Q8 query");
++    require(mse/energy<0.1,"reference reconstruction stress bound");
++    // Single-query attention: native CPU scores versus independently decoded
++    // F64 dots, followed by separately computed normalization/value sums.
++    std::array<float,256> values{};
++    for (size_t i=0;i<values.size();++i) values[i]=std::cos(float(i)*0.17f)*0.2f;
++    std::array<block_pq3_0,2> encoded_values{};
++    quantize_row_pq3_0_ref(values.data(),encoded_values.data(),values.size());
++    dequantize_row_pq3_0(encoded_values.data(),values.data(),values.size());
++    double reference_scores[2]{};float scores[2]{};
++    for (int row=0;row<2;++row) {
++        traits->vec_dot(128,&scores[row],0,&blocks[row],0,q8.data(),0,1);
++        scores[row]/=std::sqrt(128.0f);
++        for (int i=0;i<128;++i) reference_scores[row]+=double(decoded[row*128+i])*query[i]/std::sqrt(128.0);
++    }
++    const double reference_weight=1.0/(1.0+std::exp(reference_scores[1]-reference_scores[0]));
++    const float weight=1.0f/(1.0f+std::exp(scores[1]-scores[0]));
++    for (int i=0;i<128;++i) {
++        const double expected_value=reference_weight*values[i]+(1.0-reference_weight)*values[128+i];
++        const float actual_value=weight*values[i]+(1.0f-weight)*values[128+i];
++        require(std::fabs(actual_value-expected_value)<1e-6,"reference attention value aggregation");
++    }
++    std::array<block_pq3_0,2> chunk{};
++    require(ggml_quantize_chunk(GGML_TYPE_PQ3_0,input.data(),chunk.data(),0,2,128,nullptr)==100,"generic row quantization");
++    require(std::memcmp(chunk.data(),blocks.data(),sizeof(blocks))==0,"generic/reference packing agreement");
++    require(ggml_validate_row_data(GGML_TYPE_PQ3_0,chunk.data(),sizeof(chunk)),"valid row bytes");
++    chunk[0].d=0x7c00;
++    require(!ggml_validate_row_data(GGML_TYPE_PQ3_0,chunk.data(),sizeof(chunk)),"invalid row bytes");
++    // Underflow is deterministic and does not read partially written blocks.
++    input.fill(1e-30f); quantize_row_pq3_0_ref(input.data(),blocks.data(),input.size());
++    for (const auto & block:blocks) { require(block.d==0,"tiny norm"); for(auto v:block.qs) require(v==0,"tiny canonical payload"); }
++}
++int main() {
++    ggml_context * context=ggml_init({4096,nullptr,true});
++    if (!context) return 1;
++    try { check_reference(); }
++    catch(const std::exception & e) { std::fprintf(stderr,"PQ3 reference failed: %s\n",e.what()); ggml_free(context); return 1; }
++    ggml_free(context); std::puts("PQ3 CPU reference passed"); return 0;
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -419,3 +419,9 @@
+     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
+     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
+ endif()
++
++# Added only by the opt-in PQ3 reference patch. Uses internal block declarations.
++llama_build_and_test(test-pq3-reference.cpp LABEL "behavior cpu" LINK ggml ggml-cpu)
++target_include_directories(test-pq3-reference PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
++
++

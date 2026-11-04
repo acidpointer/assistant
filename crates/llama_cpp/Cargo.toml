@@ -23,6 +23,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+serde_json = "1.0"
 encoding_rs = { workspace = true }
 criterion = { workspace = true }
 
@@ -48,6 +49,7 @@ ggml = []
 # upstream now (ftype 40, ggml type 41) and unconditional, and the patch this
 # used to stage is gone — see the note on `GgmlType::Q1_0`.
 q1 = ["llama_cpp_sys/q1"]
+turboquant = ["llama_cpp_sys/turboquant"]
 prebuilt = ["llama_cpp_sys/prebuilt"]
 [lints]
 workspace = true

@@ -39,7 +39,8 @@ logic belongs elsewhere; see `../AGENTS.md` §2.
 
 At a high level:
 
-1. Read the submodule revision and a hash of the active patch set.
+1. Stage the exact selected patch allowlist, fail if any required file is absent,
+   and read the submodule revision plus a hash of active patch names/contents.
 2. Copy `llama.cpp` into the cargo `OUT_DIR`.
 3. Apply `patches/*.patch` to that copy, never to the submodule.
 4. Configure and build llama/ggml with CMake.
@@ -73,6 +74,15 @@ exists and which upstream API or behavior forced it.
 | `0005-fail-closed-eagle3-process.patch` | Replaces process-aborting `GGML_ABORT`/`GGML_ASSERT` paths in EAGLE-3 with recoverable errors for bad model pairs. |
 | `0006-runtime-state-safety.patch` | Appends a context-local attention-rotation opt-out with an ABI guard; synchronizes native logger pairs and confines fitting log scopes to their thread. |
 | `0007-vulkan-resource-lifecycle.patch` | Retires idle Vulkan logical devices before NVIDIA driver finalization, preserves registry descriptors across cache recreation, and destroys the instance from an ordered process-exit handler. |
+| `0008-pq3-cpu-format.patch` | Opt-in `turboquant` CPU/reference format (type 44, 128 values / 50 bytes), base/CPU ABI guards and numerical tests; rejects live cache and weight use until graph/kernels exist. |
+
+Patches 0003–0007 are mandatory. `patch_staging.rs` adds 0008 only for the
+`turboquant` feature; feature selection and patch contents change source-copy
+identity. Generated FFI and shim defines follow that same selection. Native
+`tests/` sources are packaged so the experimental test/CMake patch applies to
+packaged builds. See the [PQ3 contract](pq3-reference-contract.md) and
+[quality evaluation](cache-quality-evaluation.md). Real-series tests compare
+CLI and Rust patch engines at each increment, including overlapping/new files.
 
 Rules:
 
@@ -392,3 +402,23 @@ on a later failure. Review that native operation's exception guarantee when
 updating the upstream pin. All guarded failures use the shared thread-local error
 channel. Fallible render grammar construction preserves lazy triggers and
 propagates generation-prefix tokenization/acceptance errors.
+
+## Cache inspection and policy (2026-11-04)
+
+`ext_shim` now exposes versioned fallible memory collection, owned scalar
+model/cache inspection and guarded synchronization. Its inspection code depends
+on the pinned model/context and full/SWA/hybrid cache classes; review those
+accessors during an upstream update. No private C++ container or native pointer
+is returned to Rust callers. All new entry points use the shared exception/TLS
+error barrier. Names must fit the fixed ABI field completely; truncation fails.
+The cache inspector skips empty arenas before calling native type getters,
+which index their first layer. MLA/compressed layouts are rejected before
+those getters: MLA can have a null V tensor even in a nonempty cache. Unknown
+memory classes explicitly report that inspection is unavailable. The old best-effort collector remains compatible.
+
+The additive `context::cache` API restricts the initial supported cache policies
+to FP16/Q8_0/Q4_0 and validates model geometry independently of parameter
+application. Native backend checks remain required. These APIs and all new
+shim symbols require rebuilding the sys crate; the native pin, parameter layout,
+existing ABI guard and patch series are unchanged. See the
+[baseline record](kv-cache-baseline.md) for API usage and validation evidence.

@@ -3,7 +3,7 @@
 //! loaded wrapper can be shared while each context stays thread-confined.
 use super::{EngineError, EngineResult, LLMContext, ModelEngine};
 use llama_cpp::{
-    context::params::LlamaContextParams,
+    context::{cache::KvCacheConfig, params::LlamaContextParams},
     model::{LlamaModel, params::LlamaModelParams},
 };
 use std::{num::NonZeroU32, path::PathBuf};
@@ -31,6 +31,12 @@ pub struct LLMConfig {
     pub context_size: u32,
     /// Maximum tokens evaluated in one prefill step.
     pub batch_size: u32,
+    /// Physical prefill microbatch; unset resolves to `min(batch_size, 512)`.
+    pub microbatch_size: Option<NonZeroU32>,
+    /// Immutable attention-cache policy for every context using these weights.
+    pub cache: KvCacheConfig,
+    /// Disable KQV and operator offloading as well as GPU weights for a CPU reference.
+    pub execution: ExecutionMode,
     /// CPU threads for both prefill and decoding.
     pub threads: u32,
     /// Default generated-token ceiling, including protocol and reasoning.
@@ -47,6 +53,9 @@ impl LLMConfig {
             gpu_layers: 1000,
             context_size: 4096,
             batch_size: 512,
+            microbatch_size: None,
+            cache: KvCacheConfig::default(),
+            execution: ExecutionMode::Auto,
             threads: 4,
             max_new_tokens: 512,
             thinking: Thinking::Disabled,
@@ -56,6 +65,20 @@ impl LLMConfig {
     /// # Errors
     /// Returns a description of an invalid field or combination.
     pub fn validate(&self) -> EngineResult<()> {
+        self.cache.validate()?;
+        if self
+            .microbatch_size
+            .is_some_and(|size| size.get() > self.batch_size)
+        {
+            return Err(EngineError::Configuration(
+                "microbatch_size exceeds batch_size",
+            ));
+        }
+        if self.execution == ExecutionMode::Cpu && self.gpu_layers != 0 {
+            return Err(EngineError::Configuration(
+                "CPU execution requires gpu_layers = 0",
+            ));
+        }
         if self.context_size == 0 || self.context_size > i32::MAX as u32 {
             return Err(EngineError::Configuration(
                 "context_size must fit a positive native position",
@@ -80,6 +103,17 @@ impl LLMConfig {
     }
 }
 
+/// Operator placement policy; CPU mode is useful for verified reference runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExecutionMode {
+    /// Allow native operator/KQV offloading independently of weight placement.
+    #[default]
+    Auto,
+    /// Disable operator and KQV offloading; requires zero GPU weight layers.
+    Cpu,
+}
+
 /// Loaded model weights. Construct through [`ModelEngine::load_llm`].
 #[derive(Debug)]
 pub struct LLMModel<'engine> {
@@ -92,6 +126,7 @@ impl<'engine> LLMModel<'engine> {
         config.validate()?;
         let params = LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers);
         let model = LlamaModel::load_from_file(engine.backend_ref(), &config.model_path, &params)?;
+        config.cache.validate_for(&model.cache_topology()?)?;
         Ok(Self {
             engine,
             model,
@@ -119,9 +154,51 @@ impl<'engine> LLMModel<'engine> {
         let params = LlamaContextParams::default()
             .with_n_ctx(Some(n_ctx))
             .with_n_batch(self.config.batch_size)
+            .with_n_ubatch(
+                self.config
+                    .microbatch_size
+                    .map_or(self.config.batch_size.min(512), NonZeroU32::get),
+            )
+            .with_offload_kqv(self.config.execution != ExecutionMode::Cpu)
+            .with_op_offload(self.config.execution != ExecutionMode::Cpu)
             .with_n_threads(threads)
             .with_n_threads_batch(threads);
+        let params = self.config.cache.apply(params)?;
         let native = self.model.new_context(self.engine.backend_ref(), params)?;
         LLMContext::new(native, self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{KvCacheType, LlamaFlashAttnType};
+    #[test]
+    fn invalid_cache_microbatch_and_cpu_policies_fail_before_loading() {
+        let mut config = LLMConfig::new("not-a-model.gguf");
+        config.batch_size = 8;
+        config.microbatch_size = NonZeroU32::new(9);
+        assert!(matches!(
+            config.validate(),
+            Err(EngineError::Configuration(_))
+        ));
+        config.microbatch_size = None;
+        config
+            .validate()
+            .expect("unset microbatch supports small batches");
+        config.cache.value = KvCacheType::Q4_0;
+        config.cache.flash_attention = LlamaFlashAttnType::Disabled;
+        assert!(matches!(
+            config.validate(),
+            Err(EngineError::CacheConfig(_))
+        ));
+        config.cache = KvCacheConfig::default();
+        config.execution = ExecutionMode::Cpu;
+        assert!(matches!(
+            config.validate(),
+            Err(EngineError::Configuration(_))
+        ));
+        config.gpu_layers = 0;
+        config.validate().expect("explicit CPU placement policy");
     }
 }

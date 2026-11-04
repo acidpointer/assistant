@@ -21,6 +21,9 @@ pub enum EngineError {
     /// Invalid application configuration.
     #[error("invalid configuration: {0}")]
     Configuration(&'static str),
+    /// The requested attention cache is incompatible with the model or algorithm.
+    #[error(transparent)]
+    CacheConfig(#[from] llama_cpp::context::cache::CacheConfigError),
     /// Input and reserved output do not fit the allocated sequence.
     #[error("context budget exceeded: {input} input + {output} output > {capacity} capacity")]
     Budget {

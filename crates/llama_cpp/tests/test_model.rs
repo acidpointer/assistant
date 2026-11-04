@@ -28,7 +28,7 @@ fn load_test_model() -> Option<(&'static LlamaBackend, LlamaModel, bool)> {
 
 #[test]
 fn test_model_desc() {
-    let Some((_backend, model, _)) = load_test_model() else {
+    let Some(model) = support::model::load_full_model() else {
         eprintln!("SKIP: no test model available");
         return;
     };
@@ -38,7 +38,7 @@ fn test_model_desc() {
 
 #[test]
 fn test_model_display() {
-    let Some((_backend, model, _)) = load_test_model() else {
+    let Some(model) = support::model::load_full_model() else {
         eprintln!("SKIP: no test model available");
         return;
     };
@@ -53,7 +53,7 @@ fn test_model_display() {
 
 #[test]
 fn test_model_numeric_properties() {
-    let Some((_backend, model, _)) = load_test_model() else {
+    let Some(model) = support::model::load_full_model() else {
         eprintln!("SKIP: no test model available");
         return;
     };
@@ -62,7 +62,10 @@ fn test_model_numeric_properties() {
     assert!(model.n_layer() > 0);
     assert!(model.n_layer_nextn() >= 0);
     assert!(model.n_head() > 0);
-    assert!(model.n_head_kv() > 0);
+    assert!(
+        model.n_head_kv() > 0 || (model.n_head_kv() == 0 && model.is_hybrid()),
+        "a hybrid may start with a recurrent layer"
+    );
     assert!(model.n_vocab() > 0);
     assert!(model.n_embd_inp() > 0);
     assert!(model.n_embd_out() > 0);
@@ -89,7 +92,7 @@ fn test_model_boolean_properties() {
 
 #[test]
 fn test_model_rope_properties() {
-    let Some((_backend, model, _)) = load_test_model() else {
+    let Some(model) = support::model::load_full_model() else {
         eprintln!("SKIP: no test model available");
         return;
     };

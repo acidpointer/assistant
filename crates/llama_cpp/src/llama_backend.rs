@@ -52,6 +52,10 @@ impl LlamaBackend {
         // with a successful compare-exchange.
         unsafe {
             let _ = llama_cpp_sys::llama_cpp_rs_runtime_safety_abi_v1();
+            #[cfg(feature = "turboquant")]
+            let _ = llama_cpp_sys::ggml_pq3_reference_abi_v1();
+            #[cfg(feature = "turboquant")]
+            let _ = llama_cpp_sys::ggml_pq3_cpu_reference_abi_v1();
             llama_cpp_sys::llama_backend_init();
         }
         let backend = Self {

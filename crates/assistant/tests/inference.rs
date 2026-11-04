@@ -48,8 +48,8 @@ fn generates_after_a_prompt_larger_than_one_batch() {
 }
 
 // The tiny story model verifies decoding, but was not trained to call tools.
-// These tests need a real instruction/tool model. Use the existing local LFM3
-// file, or set ASSISTANT_TEST_MODEL to another compatible GGUF's absolute path.
+// These model-quality evaluations require an explicit instruction/tool model.
+// Set ASSISTANT_TEST_MODEL; absence is a skip unless required mode is enabled.
 fn tool_model() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ASSISTANT_TEST_MODEL") {
         let path = PathBuf::from(path);
@@ -59,17 +59,26 @@ fn tool_model() -> Option<PathBuf> {
         );
         return Some(path);
     }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../LFM3-1.7B-Heretic-Abliterated-Q6_K.gguf");
-    if !path.is_file() {
-        eprintln!("SKIP: set ASSISTANT_TEST_MODEL to exercise real tool calling");
-        return None;
-    }
-    Some(path)
+    assert!(
+        std::env::var_os("ASSISTANT_TEST_REQUIRE_MODEL").is_none(),
+        "model-quality coverage requires ASSISTANT_TEST_MODEL"
+    );
+    eprintln!("SKIP: set ASSISTANT_TEST_MODEL to run model-quality evaluations");
+    None
 }
 
 fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
     let model = tool_model()?;
+    let profile = std::env::var("ASSISTANT_TEST_CACHE_PROFILE").unwrap_or_else(|_| "f16".into());
+    let (key, value) = match profile.as_str() {
+        "f16" => ("f16", "f16"),
+        "q8" => ("q8_0", "q8_0"),
+        "q8-q4" => ("q8_0", "q4_0"),
+        "q4" => ("q4_0", "q4_0"),
+        _ => panic!("unknown ASSISTANT_TEST_CACHE_PROFILE"),
+    };
+    let swa = std::env::var("ASSISTANT_TEST_SWA").unwrap_or_else(|_| "full".into());
+    let gpu_layers = std::env::var("ASSISTANT_TEST_GPU_LAYERS").unwrap_or_else(|_| "0".into());
     let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
         .arg("--model")
         .arg(model)
@@ -78,7 +87,13 @@ fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
             "300",
             "--trace",
             "--gpu-layers",
-            "0",
+            &gpu_layers,
+            "--cache-type-k",
+            key,
+            "--cache-type-v",
+            value,
+            "--swa-cache",
+            &swa,
             "--prompt",
             prompt,
         ])
@@ -90,6 +105,29 @@ fn ask_with_tools(prompt: &str) -> Option<(String, String)> {
         String::from_utf8(output.stdout).expect("UTF-8 answer"),
         logs,
     ))
+}
+
+#[test]
+fn invalid_cache_policy_is_rejected_before_model_loading() {
+    let output = Command::new(env!("CARGO_BIN_EXE_assistant"))
+        .args([
+            "--model",
+            "missing.gguf",
+            "--cache-type-v",
+            "q4_0",
+            "--flash-attn",
+            "off",
+            "--prompt",
+            "unused",
+        ])
+        .output()
+        .expect("run invalid cache policy");
+    assert!(!output.status.success());
+    let logs = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        logs.contains("quantized value cache requires flash attention"),
+        "{logs}"
+    );
 }
 
 fn result_for(logs: &str, tool: &str) -> Value {

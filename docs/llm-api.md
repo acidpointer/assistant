@@ -108,6 +108,12 @@ reason to replay tools.
 
 ## Working context
 
+Model-level cache configuration, microbatch resolution, owned worker diagnostics,
+and the measured compact-SWA/Q8/Q4 baseline are documented in the
+[cache guide](kv-cache-baseline.md). Defaults remain FP16/full SWA. Runtime
+diagnostics inspect existing contexts on their owner threads without allocating
+a new context or including prompt/model paths.
+
 Three distinct states exist:
 
 | State | Owner | Lifetime |

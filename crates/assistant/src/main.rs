@@ -1,14 +1,18 @@
 //! Thin manual adapter over the library. One-shot and stdin interactions use the
-//! same persistent runtime. Diagnostic content is printed only with `--trace`.
+//! same persistent runtime. Tools and native diagnostics have explicit stderr flags.
 use assistant::{
     AssistantRuntime, RunEvent,
     chat::{InputMode, RunLimits, ToolUse},
-    engine::{LLMConfig, ModelEngine, Thinking},
+    engine::{
+        AttentionRotation, ExecutionMode, KvCacheType, LLMConfig, LlamaFlashAttnType, ModelEngine,
+        SwaCacheMode, Thinking,
+    },
     tools::builtin::{Calculator, CurrentTime},
 };
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::{
     io::{self, Write},
+    num::NonZeroU32,
     path::PathBuf,
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -36,6 +40,24 @@ struct Args {
     ctx_size: u32,
     #[arg(long, default_value_t = 512)]
     batch_size: u32,
+    #[arg(long)]
+    ubatch_size: Option<NonZeroU32>,
+    #[arg(long, value_enum, default_value = "f16")]
+    cache_type_k: CacheType,
+    #[arg(long, value_enum, default_value = "f16")]
+    cache_type_v: CacheType,
+    #[arg(long, value_enum, default_value = "full")]
+    swa_cache: SwaMode,
+    #[arg(long, value_enum, default_value = "auto")]
+    flash_attn: FlashMode,
+    #[arg(long, value_enum, default_value = "auto")]
+    attn_rotation: RotationMode,
+    /// Force CPU weights, attention and operators for reference measurements.
+    #[arg(long)]
+    cpu: bool,
+    /// Emit owned native cache/memory snapshots to stderr after each interaction.
+    #[arg(long)]
+    diagnostics: bool,
     #[arg(long, default_value_t = 512)]
     max_tokens: usize,
     #[arg(long, default_value_t = 4)]
@@ -54,22 +76,46 @@ struct Args {
     trace: bool,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CacheType {
+    F16,
+    #[value(name = "q8_0")]
+    Q8,
+    #[value(name = "q4_0")]
+    Q4,
+}
+impl From<CacheType> for KvCacheType {
+    fn from(value: CacheType) -> Self {
+        match value {
+            CacheType::F16 => Self::F16,
+            CacheType::Q8 => Self::Q8_0,
+            CacheType::Q4 => Self::Q4_0,
+        }
+    }
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum SwaMode {
+    Full,
+    Compact,
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum FlashMode {
+    Auto,
+    On,
+    Off,
+}
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RotationMode {
+    Auto,
+    Disabled,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    let config = model_config(&args)?;
     ModelEngine::init()?;
     let engine = ModelEngine::get_instance()?;
-    let mut config = LLMConfig::new(&args.model);
-    config.gpu_layers = args.gpu_layers;
-    config.context_size = args.ctx_size;
-    config.batch_size = args.batch_size;
-    config.max_new_tokens = args.max_tokens;
-    config.threads = args.threads;
-    config.thinking = if args.thinking {
-        Thinking::Enabled
-    } else {
-        Thinking::Disabled
-    };
     let system = "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly.";
     let mut builder = AssistantRuntime::builder(engine)
         .model("main", config)
@@ -131,6 +177,9 @@ async fn main() -> anyhow::Result<()> {
             println!();
             eprintln!("Prompt: {} tokens", response.usage.input_tokens);
             eprintln!("Generated {} tokens", response.usage.generated_tokens);
+            if args.diagnostics {
+                print_diagnostics(&runtime).await?;
+            }
         } else {
             eprintln!("Enter messages; EOF ends the runtime.");
             let mut lines = BufReader::new(tokio::io::stdin()).lines();
@@ -141,6 +190,9 @@ async fn main() -> anyhow::Result<()> {
                 let response = ask(line).run().await?;
                 println!();
                 eprintln!("Generated {} tokens", response.usage.generated_tokens);
+                if args.diagnostics {
+                    print_diagnostics(&runtime).await?;
+                }
                 if args.raw {
                     chat.clear_working_history().await;
                 }
@@ -156,4 +208,51 @@ async fn main() -> anyhow::Result<()> {
         (_, Err(error)) => Err(error.into()),
         (Ok(()), Ok(())) => Ok(()),
     }
+}
+
+async fn print_diagnostics(runtime: &assistant::runtime::RunningAssistant) -> anyhow::Result<()> {
+    let reports = runtime.cache_diagnostics().await?;
+    let reports: std::collections::BTreeMap<_, _> = reports
+        .into_iter()
+        .map(|(name, report)| (name, report.to_json()))
+        .collect();
+    eprintln!("{}", serde_json::to_string(&reports)?);
+    Ok(())
+}
+
+fn model_config(args: &Args) -> assistant::engine::EngineResult<LLMConfig> {
+    let mut config = LLMConfig::new(&args.model);
+    config.gpu_layers = if args.cpu { 0 } else { args.gpu_layers };
+    config.execution = if args.cpu {
+        ExecutionMode::Cpu
+    } else {
+        ExecutionMode::Auto
+    };
+    config.context_size = args.ctx_size;
+    config.batch_size = args.batch_size;
+    config.microbatch_size = args.ubatch_size;
+    config.cache.key = args.cache_type_k.into();
+    config.cache.value = args.cache_type_v.into();
+    config.cache.swa = match args.swa_cache {
+        SwaMode::Full => SwaCacheMode::Full,
+        SwaMode::Compact => SwaCacheMode::Compact,
+    };
+    config.cache.flash_attention = match args.flash_attn {
+        FlashMode::Auto => LlamaFlashAttnType::Auto,
+        FlashMode::On => LlamaFlashAttnType::Enabled,
+        FlashMode::Off => LlamaFlashAttnType::Disabled,
+    };
+    config.cache.rotation = match args.attn_rotation {
+        RotationMode::Auto => AttentionRotation::Auto,
+        RotationMode::Disabled => AttentionRotation::Disabled,
+    };
+    config.max_new_tokens = args.max_tokens;
+    config.threads = args.threads;
+    config.thinking = if args.thinking {
+        Thinking::Enabled
+    } else {
+        Thinking::Disabled
+    };
+    config.validate()?;
+    Ok(config)
 }

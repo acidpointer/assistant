@@ -220,6 +220,44 @@ pub struct LLMContext<'model> {
     epoch: Option<Arc<()>>,
 }
 impl<'model> LLMContext<'model> {
+    /// Evaluate a prepared prompt without sampling. Exact-prefix reuse follows
+    /// the same rules as generation. Completes pending work before returning,
+    /// making this an explicit prefill timing/inspection boundary.
+    /// # Errors
+    /// Requires one free output position, as generation does. Returns validation,
+    /// decode or synchronization errors. Native failures
+    /// invalidate reuse so the next operation rebuilds the prompt.
+    pub fn prefill(&mut self, input: &PreparedInput<'model>) -> EngineResult<Usage> {
+        let mut state = self.begin(
+            input,
+            GenerationOptions {
+                max_new_tokens: Some(1),
+                ..GenerationOptions::default()
+            },
+        )?;
+        while state.cursor < input.token_count() {
+            self.advance(&mut state)?;
+        }
+        self.synchronize()?;
+        Ok(state.usage)
+    }
+    /// Wait for pending native work before ending a measurement interval.
+    /// # Errors
+    /// Returns synchronization failure and invalidates cache reuse.
+    pub fn synchronize(&mut self) -> EngineResult<()> {
+        if let Err(error) = self.native.try_synchronize() {
+            self.cache.valid = false;
+            self.cache.logits = false;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+    /// Owned cache/allocation snapshot, safe to send off this worker thread.
+    /// # Errors
+    /// Returns native inspection, corrupt-result or checked-accounting failures.
+    pub fn cache_diagnostics(&self) -> EngineResult<super::CacheDiagnostics> {
+        super::CacheDiagnostics::collect(&self.native, self.model)
+    }
     pub(super) fn new(
         native: LlamaContext<'model>,
         model: &'model LLMModel<'model>,
@@ -635,5 +673,7 @@ impl StopBuffer {
     }
 }
 
+#[cfg(test)]
+mod cache_tests;
 #[cfg(test)]
 mod tests;

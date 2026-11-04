@@ -116,6 +116,8 @@ pub use llama_cpp_sys::FILE;
 pub mod model;
 pub mod mtp;
 pub mod ngram;
+#[cfg(feature = "turboquant")]
+pub mod pq3_reference;
 pub mod prelude;
 pub mod quantize;
 pub mod runtime;

@@ -37,6 +37,7 @@ use crate::{
 /// that only ever goes up cannot be reused that way.
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(0);
 
+pub mod cache;
 pub mod kv_cache;
 pub mod memory_breakdown;
 pub mod params;
@@ -644,6 +645,17 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
+    /// Complete pending native work through an exception-contained boundary.
+    /// # Errors
+    /// Returns a guarded native synchronization failure.
+    pub fn try_synchronize(&mut self) -> Result<(), crate::ShimError> {
+        // SAFETY: exclusive access retains this context and all its backends;
+        // the shim catches exceptions and supplies the shared error status.
+        crate::shim::check_status(unsafe {
+            llama_cpp_sys::llama_context_synchronize_guarded(self.context.as_ptr())
+        })
+    }
+
     /// Get all embeddings for the current context.
     ///
     /// Returns a slice of all embeddings from the last decoded batch.
@@ -845,8 +857,25 @@ impl<'model> LlamaContext<'model> {
     /// }
     /// ```
     #[must_use]
+    /// Legacy best-effort collector: names/results may be truncated. Use
+    /// [`Self::try_memory_breakdown`] for diagnostics or resource accounting.
     pub fn memory_breakdown(&self) -> Vec<memory_breakdown::MemoryBreakdownEntry> {
         memory_breakdown::collect_memory_breakdown(self.context.as_ptr())
+    }
+
+    /// Complete owned native allocation accounting. Model bytes are shared
+    /// between contexts and must be counted only once per loaded model.
+    /// # Errors
+    /// Returns a native error, incomplete report, invalid name or allocation error.
+    pub fn try_memory_breakdown(&self) -> Result<Vec<MemoryBreakdownEntry>, crate::ShimError> {
+        memory_breakdown::try_collect(self.context.as_ptr())
+    }
+
+    /// Snapshot effective native cache settings, without asserting GPU placement.
+    /// # Errors
+    /// Returns native inspection failures or incompatible ABI data.
+    pub fn cache_info(&self) -> Result<cache::ContextCacheInfo, crate::ShimError> {
+        cache::inspect_context(self.context.as_ptr())
     }
 
     /// Enable or disable extraction of input embeddings for a transformer layer.

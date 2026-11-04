@@ -2,6 +2,19 @@
 
 Status: research and implementation proposal, 2026-11-04.
 
+This preserves the inspected pre-implementation source baseline. Existing-cache
+configuration, diagnostics, compact SWA and Q8/Q4 evaluation have since been
+implemented; use the [measured baseline](kv-cache-baseline.md) for current APIs,
+runtime behavior and results. The experimental
+[PQ3 CPU reference](pq3-reference-contract.md) is now implemented as patch
+0008; live TurboQuant cache inference and Vulkan kernels remain proposed.
+
+The [TurboQuant implementation plan](turboquant-implementation-plan.md) defines
+the next native patch series and its runtime/validation gates.
+
+The [KV cache preparation plan](kv-cache-preparation-plan.md) sequences the
+existing-engine work to complete before the native codec experiment.
+
 The first useful memory reduction is already available in the pinned engine:
 configure quantized KV caches and evaluate compact sliding-window allocation.
 Both are exposed by the Rust bindings. Full TurboQuant support requires native
