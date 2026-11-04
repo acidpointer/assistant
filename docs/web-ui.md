@@ -261,10 +261,26 @@ accounting. An unreported final native step is not counted or fabricated.
 
 CPU uses all daemon threads over monotonic phase boundaries; 100% is one core
 and multicore work can exceed 100%. It includes other daemon work in the same
-window. Linux RSS/PSS come from `/proc/self/smaps_rollup`. Dedicated VRAM is
-optional driver-reported NVML per-PID memory, deduplicated between compute and
-graphics queues and summed across physical devices. Other drivers/platforms
-currently show **Unavailable**, not zero or an allocator estimate. Unified memory
+window. Linux RSS/PSS come from `/proc/self/smaps_rollup`. VRAM covers process
+residency **only on GPUs with actual non-host allocations
+for the primary model or its contexts**. The native owner publishes owned PCI
+identities from model/cache/compute allocation snapshots; available-device lists
+and instantaneous utilization never select the scope. A model on one card counts
+only that card; a model split across cards counts each participant once. CPU-only
+models report zero even when GPU backends registered/probed other cards. Resident
+weights/cache still count while generation is idle.
+
+NVIDIA uses per-PID NVML queries for the matching PCI device, deduplicating
+compute/graphics process records. AMD uses Linux DRM fdinfo resident VRAM, with
+client-ID deduplication; the documented amdgpu legacy residency alias is accepted.
+Multiple resident clients with unknown/shared attribution cannot produce a precise
+total. The aggregate is **Unavailable** if placement or any participating device's
+counter is unavailable, rather than silently publishing a partial NVIDIA/AMD sum.
+The expandable panel identifies the model GPUs, PCI addresses and counter sources.
+Other allocations on unrelated GPUs are excluded. Process residency on a selected
+GPU can still include other daemon work; it is not an exclusive allocation cost
+for a message/model. Native buffer bytes establish device participation and are
+never substituted for driver residency. Unified memory
 is not added to RAM as fictitious dedicated VRAM. Memory windows retain baseline,
 last observation and maximum observed bytes, not exclusive per-message cost or
 continuous peak allocation. Resident model/cache memory can stay flat after a run.

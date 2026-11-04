@@ -267,3 +267,50 @@ mod tests {
         assert_eq!(entry.checked_context_compute(), None);
     }
 }
+
+/// An owned device identity backed by actual non-host model/context allocations.
+/// Enumeration alone is insufficient: unused GPUs may still be registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuAllocation {
+    /// Driver-provided hardware description, or the unidentifiable buffer name.
+    pub name: String,
+    /// Stable device ID (normally a PCI address), absent when native code cannot identify it.
+    pub device_id: Option<String>,
+    /// Native buffer bytes establishing participation; excludes driver overhead.
+    pub allocated_bytes: u64,
+}
+pub(crate) fn gpu_allocations(
+    model: &crate::model::LlamaModel,
+    context: Option<&crate::context::LlamaContext<'_>>,
+) -> Result<Vec<GpuAllocation>, ShimError> {
+    let empty = llama_cpp_sys::llama_gpu_allocation_v1 {
+        name: [0; 128],
+        device_id: [0; 128],
+        allocated_bytes: 0,
+    };
+    let records = read_records(empty, |output, capacity, required| {
+        // SAFETY: borrowed model/context own live native resources and retain the
+        // backend lease. The guarded shim validates matching ownership. Output
+        // points to the bounded initialized storage managed by read_records.
+        unsafe {
+            llama_cpp_sys::llama_gpu_allocations_collect_v1(
+                model.model.as_ptr(),
+                context.map_or(std::ptr::null(), |ctx| ctx.context.as_ptr()),
+                output,
+                capacity,
+                required,
+            )
+        }
+    })?;
+    records
+        .into_iter()
+        .map(|record| {
+            let id = decode_name(&record.device_id)?;
+            Ok(GpuAllocation {
+                name: decode_name(&record.name)?,
+                device_id: (!id.is_empty()).then_some(id),
+                allocated_bytes: record.allocated_bytes,
+            })
+        })
+        .collect()
+}

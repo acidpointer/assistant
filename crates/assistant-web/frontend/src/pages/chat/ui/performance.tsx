@@ -41,6 +41,19 @@ export function OverallPerformance() {
       </summary>
       <div className="metrics-popover">
         <strong>Daemon resources</strong>
+        <p>Model GPUs</p>
+        {sample?.vram_devices == null ? (
+          <small>Model placement unavailable</small>
+        ) : sample.vram_devices.length === 0 ? (
+          <small>CPU only</small>
+        ) : (
+          sample.vram_devices.map((device) => (
+            <small key={device.pci_bus_id ?? device.name}>
+              {device.name} · {device.pci_bus_id ?? 'identity unavailable'} · {memory(device.bytes)}{' '}
+              ({device.source ?? 'counter unavailable'})
+            </small>
+          ))
+        )}
         <p>
           RAM (RSS) <b>{memory(sample?.ram_rss_bytes)}</b>
         </p>
@@ -95,8 +108,14 @@ export function MessagePerformance({ performance }: { performance: Performance |
           {timing?.first_token_ns == null ? '—' : `${(timing.first_token_ns / 1e6).toFixed(1)} ms`}
         </span>
         <small>
-          Memory is the daemon's observed footprint during this message, including resident weights.
-          It is not an exclusive allocation cost or a continuous peak.
+          Model GPUs:{' '}
+          {performance.resources.after?.vram_devices?.map((device) => device.name).join(', ') ||
+            (performance.resources.after?.vram_devices ? 'CPU only' : 'unavailable')}
+        </small>
+        <small>
+          VRAM covers daemon memory on the model's participating GPUs, including resident weights.
+          RAM and CPU cover the daemon during this message. It is not an exclusive allocation cost
+          or a continuous peak.
         </small>
       </div>
     </details>

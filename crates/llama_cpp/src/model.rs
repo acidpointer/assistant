@@ -1576,6 +1576,16 @@ impl LlamaModel {
         unsafe { llama_model_n_expert(self.model.as_ptr()) }
     }
 
+    /// Devices with actual non-host resident weight allocations, before a context exists.
+    /// This excludes registered GPUs that did not receive model buffers.
+    /// # Errors
+    /// Returns native inspection, allocation, or invalid identity failures.
+    pub fn gpu_allocations(
+        &self,
+    ) -> Result<Vec<crate::context::memory_breakdown::GpuAllocation>, crate::ShimError> {
+        crate::context::memory_breakdown::gpu_allocations(self, None)
+    }
+
     /// Number of backend devices the model tensors are spread across.
     ///
     /// Use with [`Self::get_device`] to inspect each device. Returns `0` when

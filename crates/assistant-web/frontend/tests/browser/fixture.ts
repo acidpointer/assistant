@@ -29,7 +29,15 @@ export const sample: ResourceSample = {
   ram_rss_bytes: 1024 ** 3,
   ram_pss_bytes: 1024 ** 3 / 2,
   vram_bytes: 2 * 1024 ** 3,
-  vram_source: 'nvml_process_v2',
+  vram_devices: [
+    {
+      name: 'Fixture GPU',
+      pci_bus_id: '0000:25:00.0',
+      bytes: 2 * 1024 ** 3,
+      source: 'nvml_process_v2',
+    },
+  ],
+  vram_source: 'model_devices',
   ram_source: 'linux_smaps_rollup',
 };
 export const message = (
@@ -146,6 +154,17 @@ export async function fixture() {
         submissions.push(input);
         if (input.input.text === 'lost-both') {
           res.destroy();
+          return;
+        }
+        // Browsers may transparently retry a dropped connection. Match the
+        // daemon's request-key deduplication before creating any presentation.
+        const existing = snapshot.recent_runs.find(
+          (run) =>
+            run.client_id === input.client_id && run.client_request_id === input.client_request_id,
+        );
+        if (existing) {
+          res.writeHead(202);
+          res.end(JSON.stringify(existing));
           return;
         }
         const id = `run${submissions.length}`;

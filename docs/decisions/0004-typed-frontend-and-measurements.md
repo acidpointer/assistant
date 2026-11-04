@@ -48,9 +48,10 @@ Measure sampled non-EOG tokens and active owner-thread prompt/decode time.
 Do not substitute visible text, SSE chunks or end-to-end run duration. Preserve
 partial measurement provenance on cancellation; unreported native work is not
 invented. CPU is all-thread daemon CPU time over a monotonic phase window,
-with 100% representing one core. Linux RAM uses smaps_rollup RSS/PSS. Dedicated
-VRAM uses optional per-process NVML compute/graphics accounting. Unsupported
-providers return unavailable. Observed memory maxima include resident/shared
+with 100% representing one core. Linux RAM uses smaps_rollup RSS/PSS. Dedicated VRAM uses process residency on allocation-backed primary-model GPU
+devices, via PCI-matched NVML or Linux DRM resident counters. CPU-only scopes are
+zero; unknown placement or incomplete counter coverage is unavailable. See
+[ADR 0005](0005-model-scoped-vram.md). Observed memory maxima include resident/shared
 state and are neither exclusive per-message costs nor continuous allocation peaks.
 
 One sampler serves every transport/tab: 250 ms while running, one second with

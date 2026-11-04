@@ -19,7 +19,7 @@ use std::{
     sync::{Arc, Weak},
     thread,
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 #[derive(Debug)]
 enum Command {
@@ -45,6 +45,7 @@ enum TurnEvent {
 /// Async handle containing no native state.
 #[derive(Debug, Clone)]
 pub(crate) struct WorkerHandle {
+    gpu_scope: watch::Receiver<crate::telemetry::ModelGpuScope>,
     sender: mpsc::Sender<Command>,
     defaults: LLMConfig,
     event_capacity: usize,
@@ -69,6 +70,7 @@ impl WorkerHandle {
     ) -> ChatResult<(Self, thread::JoinHandle<()>)> {
         let (sender, receiver) = mpsc::channel(queue_capacity);
         let (started, ready) = oneshot::channel();
+        let (placement, gpu_scope) = watch::channel(None);
         let defaults = config.clone();
         let thread = thread::Builder::new()
             .name(format!("assistant-model-{name}"))
@@ -80,10 +82,11 @@ impl WorkerHandle {
                         return;
                     }
                 };
+                placement.send_replace(gpu_scope_snapshot(&model, &BTreeMap::new()));
                 if started.send(Ok(())).is_err() {
                     return;
                 }
-                worker_loop(&model, receiver, max_contexts, &control);
+                worker_loop(&model, receiver, max_contexts, &control, &placement);
             })
             .map_err(|error| {
                 ChatError::Configuration(format!("cannot start model worker: {error}"))
@@ -91,6 +94,7 @@ impl WorkerHandle {
         match ready.await {
             Ok(Ok(())) => Ok((
                 Self {
+                    gpu_scope,
                     sender,
                     defaults,
                     event_capacity,
@@ -135,6 +139,13 @@ impl Drop for WakeOnDrop {
     }
 }
 impl ModelBackend for WorkerHandle {
+    fn model_gpu_scope(&self) -> crate::telemetry::ModelGpuScope {
+        if self.gpu_scope.has_changed().is_err() {
+            None
+        } else {
+            self.gpu_scope.borrow().clone()
+        }
+    }
     fn default_max_tokens(&self) -> usize {
         self.defaults.max_new_tokens
     }
@@ -268,10 +279,12 @@ fn worker_loop<'m>(
     mut commands: mpsc::Receiver<Command>,
     max_contexts: usize,
     control: &RuntimeControl,
+    placement: &watch::Sender<crate::telemetry::ModelGpuScope>,
 ) {
     let mut contexts: BTreeMap<u64, ContextEntry<'m>> = BTreeMap::new();
     let mut active: VecDeque<Active<'m>> = VecDeque::new();
     let mut waiting = true;
+    let mut inspected_at = std::time::Instant::now();
     loop {
         if control.is_closed() {
             break;
@@ -288,6 +301,7 @@ fn worker_loop<'m>(
             match command {
                 Command::Inspect(reply) => {
                     contexts.retain(|_, entry| entry.lease.strong_count() > 0);
+                    placement.send_replace(gpu_scope_snapshot(model, &contexts));
                     let report = contexts
                         .values()
                         .map(|entry| entry.context.cache_diagnostics().map_err(ChatError::from))
@@ -312,8 +326,12 @@ fn worker_loop<'m>(
                         max_contexts,
                     );
                     match result {
-                        Ok(generation) => active.push_back(generation),
+                        Ok(generation) => {
+                            placement.send_replace(gpu_scope_snapshot(model, &contexts));
+                            active.push_back(generation);
+                        }
                         Err(error) => {
+                            placement.send_replace(gpu_scope_snapshot(model, &contexts));
                             // A fresh output queue is empty; failure is bounded and
                             // returned without blocking other active contexts.
                             let _recipient_gone =
@@ -358,6 +376,10 @@ fn worker_loop<'m>(
                 continue;
             };
             let event = step(&mut entry.context, &mut generation);
+            if generation.done || inspected_at.elapsed() >= std::time::Duration::from_millis(250) {
+                placement.send_replace(gpu_scope_snapshot(model, &contexts));
+                inspected_at = std::time::Instant::now();
+            }
             progress = true;
             if let Some(event) = event {
                 match generation.output.try_send(event) {
@@ -373,11 +395,46 @@ fn worker_loop<'m>(
                 active.push_back(generation);
             }
         }
+        let retained = contexts.len();
         contexts.retain(|_, entry| entry.lease.strong_count() > 0);
+        if contexts.len() != retained {
+            placement.send_replace(gpu_scope_snapshot(model, &contexts));
+        }
         // Idle workers and backpressured streams sleep until an acknowledged
         // read, cancellation, or another command. There is no periodic tick.
         waiting = !progress;
     }
+}
+/// Allocation-backed identities, collected only on the native owner. Registration
+/// and model device lists can include GPUs that hold no model buffers.
+fn gpu_scope_snapshot(
+    model: &LLMModel<'_>,
+    contexts: &BTreeMap<u64, ContextEntry<'_>>,
+) -> crate::telemetry::ModelGpuScope {
+    let mut allocations = model.model_ref().gpu_allocations().ok()?;
+    for context in contexts.values() {
+        allocations.extend(context.context.gpu_allocations().ok()?);
+    }
+    let mut devices = BTreeMap::new();
+    for allocation in allocations {
+        let pci = allocation
+            .device_id
+            .as_deref()
+            .and_then(crate::telemetry::pci_id);
+        let key = pci
+            .clone()
+            .unwrap_or_else(|| format!("unidentified:{}", allocation.name));
+        devices
+            .entry(key)
+            .or_insert(crate::telemetry::ModelGpuDevice {
+                name: allocation.name,
+                pci_bus_id: pci,
+            });
+    }
+    if devices.len() > 32 {
+        return None;
+    }
+    Some(devices.into_values().collect())
 }
 fn begin<'m>(
     model: &'m LLMModel<'m>,

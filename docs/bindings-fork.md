@@ -425,3 +425,17 @@ application. Native backend checks remain required. These APIs and all new
 shim symbols require rebuilding the sys crate; the native pin, parameter layout,
 existing ABI guard and patch series are unchanged. See the
 [baseline record](kv-cache-baseline.md) for API usage and validation evidence.
+
+## Allocation-backed GPU identities
+
+`llama_gpu_allocations_collect_v1` is an additive guarded size-query/fill API in
+`ext_shim`. It inspects allocated model buffers, optionally including a matching
+context's cache/compute buffers. Host buffers and empty allocations are excluded;
+non-host allocations without an attributable device remain unknown. No-allocation
+fit models are rejected. Fixed strings fail instead of truncating identities.
+`LlamaModel::gpu_allocations` and `LlamaContext::gpu_allocations` return owned
+`GpuAllocation` records; no backend handles or borrowed pointers cross threads.
+Context records include shared model weights, so their byte counts must not be
+summed across contexts. The runtime unions PCI identities rather than allocation
+bytes. This proves placement, not driver residency or actual operator execution.
+The pinned submodule and existing memory-breakdown ABI are unchanged.

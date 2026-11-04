@@ -12,6 +12,7 @@
 #include <cstring>
 #include <vector>
 #include <stdexcept>
+#include <limits>
 
 #ifdef LLAMA_RS_TURBOQUANT
 #include "ggml-quants.h"
@@ -161,6 +162,54 @@ int32_t llama_context_synchronize_guarded(llama_context * ctx) {
     return llama_shim::guard([&]() -> int32_t {
         if (!ctx) return LLAMA_SHIM_INVALID_ARG;
         llama_synchronize(ctx);
+        return LLAMA_SHIM_OK;
+    });
+}
+
+int32_t llama_gpu_allocations_collect_v1(const llama_model * model,
+        const llama_context * ctx, llama_gpu_allocation_v1 * out,
+        size_t capacity, size_t * required) {
+    return llama_shim::guard([&]() -> int32_t {
+        if (!model || !required || (!out && capacity) ||
+                (ctx && llama_get_model(ctx) != model)) return LLAMA_SHIM_INVALID_ARG;
+        if (model->no_alloc()) throw std::invalid_argument("GPU placement requires an allocated model");
+        std::vector<llama_gpu_allocation_v1> result;
+        auto append = [&](ggml_backend_buffer_type_t buft, uint64_t bytes) {
+            if (!bytes || !buft || ggml_backend_buft_is_host(buft)) return;
+            llama_gpu_allocation_v1 item{};
+            auto dev = ggml_backend_buft_get_device(buft);
+            if (dev) {
+                const auto type = ggml_backend_dev_type(dev);
+                if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU &&
+                        type != GGML_BACKEND_DEVICE_TYPE_META) return;
+                ggml_backend_dev_props props{};
+                ggml_backend_dev_get_props(dev, &props);
+                copy_cache_name(item.name, props.description ? props.description : props.name);
+                copy_cache_name(item.device_id, props.device_id ? props.device_id : "");
+            } else {
+                // Unattributable non-host memory must remain visible as unknown;
+                // dropping it would manufacture a falsely complete CPU/VRAM total.
+                copy_cache_name(item.name, ggml_backend_buft_name(buft));
+            }
+            item.allocated_bytes = bytes;
+            result.push_back(item);
+        };
+        if (ctx) {
+            for (const auto & [buft, usage] : llama_get_memory_breakdown(ctx)) {
+                uint64_t bytes = usage.model;
+                for (const auto value : {usage.context, usage.compute}) {
+                    if (value > std::numeric_limits<uint64_t>::max() - bytes)
+                        throw std::overflow_error("GPU allocation accounting overflow");
+                    bytes += value;
+                }
+                append(buft, bytes);
+            }
+        } else {
+            for (const auto & [buft, bytes] : model->memory_breakdown()) append(buft, bytes);
+        }
+        *required = result.size();
+        if (capacity < result.size()) return LLAMA_SHIM_BUFFER_TOO_SMALL;
+        for (size_t i = 0; i < result.size(); ++i) out[i] = result[i];
         return LLAMA_SHIM_OK;
     });
 }

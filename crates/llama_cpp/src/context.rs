@@ -875,6 +875,16 @@ impl<'model> LlamaContext<'model> {
         memory_breakdown::try_collect(self.context.as_ptr())
     }
 
+    /// Devices holding actual non-host weights, cache or compute buffers.
+    /// The snapshot owns its identities; no device handles cross threads.
+    /// # Errors
+    /// Returns native inspection, allocation, or invalid identity failures.
+    pub fn gpu_allocations(
+        &self,
+    ) -> Result<Vec<memory_breakdown::GpuAllocation>, crate::ShimError> {
+        memory_breakdown::gpu_allocations(self.model, Some(self))
+    }
+
     /// Snapshot effective native cache settings, without asserting GPU placement.
     /// # Errors
     /// Returns native inspection failures or incompatible ABI data.

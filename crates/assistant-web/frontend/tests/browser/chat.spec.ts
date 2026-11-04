@@ -42,6 +42,10 @@ test('safe streaming Markdown, stop, metrics and draft preservation', async ({ p
   await expect(page.locator('.token.keyword')).toHaveText('fn');
   await page.locator('.message-metrics summary').click();
   await expect(page.locator('.message-metric-details')).toContainText('125.0%');
+  await page.getByLabel('Performance details').click();
+  await expect(page.locator('.metrics-popover')).toContainText('Fixture GPU');
+  await expect(page.locator('.metrics-popover')).toContainText('0000:25:00.0');
+  await expect(page.locator('.metrics-popover')).toContainText('2.00 GiB');
   await expect(page.getByLabel('Message Assistant')).toHaveValue('Next question');
   expect(errors).toEqual([]);
 });
@@ -83,7 +87,17 @@ for (const input of ['finish-before-ack', 'drop-ack'])
       await expect(page.locator('.markdown')).toHaveText('Already complete');
       await expect(page.getByRole('button', { name: 'Send message' })).toBeVisible();
     } else await expect(page.getByRole('button', { name: 'Stop', exact: false })).toBeVisible();
-    expect(host.submissions).toHaveLength(1);
+    expect(host.submissions.length).toBeGreaterThanOrEqual(1);
+    const first = host.submissions[0];
+    expect(
+      host.submissions.every(
+        (request) =>
+          request.client_id === first?.client_id &&
+          request.client_request_id === first.client_request_id,
+      ),
+    ).toBe(true);
+    expect(host.snapshot.recent_runs).toHaveLength(1);
+    await expect(page.getByRole('article', { name: 'user message' })).toHaveCount(1);
   });
 test('wall clock changes preserve ambiguous request keys', async ({ page }) => {
   await ready(page);
@@ -187,7 +201,13 @@ test('long streams preserve nodes, manual scroll and input latency', async ({ pa
 test('unsupported GPU measurements stay unavailable and reduced motion disables animation', async ({
   page,
 }) => {
-  host.snapshot.resources = { ...sample, vram_bytes: null, vram_source: null };
+  host.snapshot.resources = {
+    ...sample,
+    vram_bytes: null,
+    vram_source: null,
+    vram_devices:
+      sample.vram_devices?.map((device) => ({ ...device, bytes: null, source: null })) ?? null,
+  };
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await ready(page);
   await expect(page.locator('.overall-metrics summary')).toContainText('Unavailable');

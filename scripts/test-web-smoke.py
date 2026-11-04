@@ -24,9 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run(binary: Path, model: Path, stop_signal: signal.Signals, contract_output: Path | None) -> None:
+def run(binary: Path, model: Path, stop_signal: signal.Signals, contract_output: Path | None, execution: str) -> None:
     process = subprocess.Popen(
-        [str(binary), "--model", str(model), "--port", "0", "--cpu", "--no-tools",
+        [str(binary), "--model", str(model), "--port", "0", *(["--cpu"] if execution == "cpu" else []), "--no-tools",
          "--ctx-size", "1024", "--batch-size", "32", "--max-tokens", "64"],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         text=True,
@@ -141,6 +141,14 @@ def run(binary: Path, model: Path, stop_signal: signal.Signals, contract_output:
         assert terminal["status"] in {"completed", "truncated"}, terminal
         snapshot = request(f"/api/v1/chats/{chat}")
         assert any(item["role"] == "assistant" and item["text"] for item in snapshot["messages"])
+        resources = snapshot["resources"]
+        assert resources is not None and resources["vram_devices"] is not None, "model placement missing"
+        if execution == "cpu":
+            assert resources["vram_devices"] == [] and resources["vram_bytes"] == 0, "CPU model counted unrelated GPU allocations"
+        else:
+            assert resources["vram_devices"], "GPU smoke did not offload model buffers"
+            assert all(device["pci_bus_id"] and device["bytes"] is not None for device in resources["vram_devices"]), "participating GPU residency unavailable"
+            assert resources["vram_bytes"] == sum(device["bytes"] for device in resources["vram_devices"])
         assert terminal["performance"], "native measurements missing"
         assert sum(turn["generated_tokens"] for turn in terminal["performance"]) == terminal["generated_tokens"]
         assert all(turn["measurement_complete"] and turn["timing"]["generation_ns"] > 0 for turn in terminal["performance"])
@@ -182,6 +190,7 @@ def main() -> None:
     parser.add_argument("--model", type=Path, default=ROOT / "target/test-models/stories260K.gguf")
     parser.add_argument("--require-model", action="store_true")
     parser.add_argument("--contract-output", type=Path, help="Write the observed JSON snapshot for the TypeScript contract test")
+    parser.add_argument("--execution", choices=("cpu", "vulkan"), default="cpu", help="Vulkan requires GPU drivers; GGML_VK_VISIBLE_DEVICES may restrict the test")
     parser.add_argument("--signal", choices=("SIGTERM", "SIGINT"), default="SIGTERM")
     args = parser.parse_args()
     if not args.model.is_file():
@@ -189,7 +198,7 @@ def main() -> None:
             parser.error("a local model is required")
         print("SKIP: no local smoke-test model")
         return
-    run(args.binary.resolve(), args.model.resolve(), getattr(signal, args.signal), args.contract_output)
+    run(args.binary.resolve(), args.model.resolve(), getattr(signal, args.signal), args.contract_output, args.execution)
 
 
 if __name__ == "__main__":

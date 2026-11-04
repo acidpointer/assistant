@@ -1,6 +1,6 @@
 //! Transport-neutral process telemetry. A sampler is owned by one blocking task;
 //! no native inference handles cross this boundary. Linux RSS/PSS use rollup page
-//! accounting; GPU memory is driver-reported per PID through optional NVML.
+//! accounting; model-scoped GPU residency uses optional NVML or DRM counters.
 //! Unsupported or inaccessible counters are `None`, never invented zeroes.
 //! Snapshots are observations, not allocation traces or exclusive message costs.
 
@@ -25,13 +25,50 @@ pub struct ResourceSample {
     pub ram_rss_bytes: Option<u64>,
     /// Proportional resident process pages.
     pub ram_pss_bytes: Option<u64>,
-    /// Dedicated device memory charged to this PID, summed across devices.
+    /// Process residency summed only across the primary model's allocated GPUs.
     pub vram_bytes: Option<u64>,
-    /// Driver/accounting provider, absent when unsupported.
+    /// Authoritative model devices and their readings. None means unknown
+    /// placement; an empty list establishes CPU-only model/context allocation.
+    pub vram_devices: Option<Vec<VramDevice>>,
+    /// Aggregate accounting scope, absent when any participant is unmeasurable.
     pub vram_source: Option<&'static str>,
     /// Process RAM source, absent when unavailable.
     pub ram_source: Option<&'static str>,
 }
+/// Owned identity of a device with actual non-host model/context buffers.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ModelGpuDevice {
+    pub name: String,
+    pub pci_bus_id: Option<String>,
+}
+/// Driver accounting for one GPU participating in the primary model.
+#[derive(Debug, Clone, Serialize)]
+pub struct VramDevice {
+    /// Native hardware description, not an enumeration index.
+    pub name: String,
+    /// Canonical PCI identity used to match the provider; None is unattributable.
+    pub pci_bus_id: Option<String>,
+    /// Process residency on this device; absent when accounting is unavailable.
+    pub bytes: Option<u64>,
+    /// Driver source for this specific observation.
+    pub source: Option<&'static str>,
+}
+/// Normalize driver/backend PCI spellings before sysfs, DRM and NVML matching.
+pub(crate) fn pci_id(value: &str) -> Option<String> {
+    let parts = value.split(':').collect::<Vec<_>>();
+    if parts.len() != 3 {
+        return None;
+    }
+    let domain = u32::from_str_radix(parts[0], 16).ok()?;
+    let bus = u8::from_str_radix(parts[1], 16).ok()?;
+    let (device, function) = parts[2].split_once('.')?;
+    let device = u8::from_str_radix(device, 16).ok()?;
+    let function = u8::from_str_radix(function, 16).ok()?;
+    (device <= 31 && function <= 7)
+        .then(|| format!("{domain:04x}:{bus:02x}:{device:02x}.{function:x}"))
+}
+pub(crate) type ModelGpuScope = Option<Vec<ModelGpuDevice>>;
+
 /// Bounded aggregate for a run or model-turn window; includes other daemon work.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResourceWindow {
@@ -89,6 +126,12 @@ impl ResourceWindow {
         self.max_observed_vram_bytes = maximum(self.max_observed_vram_bytes, sample.vram_bytes);
     }
 }
+/// A missing participating device invalidates the total; it is never a subtotal.
+fn total_vram(devices: Option<&[VramDevice]>) -> Option<u64> {
+    devices?
+        .iter()
+        .try_fold(0_u64, |total, device| total.checked_add(device.bytes?))
+}
 fn maximum(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     match (a, b) {
         (Some(a), Some(b)) => Some(a.max(b)),
@@ -100,18 +143,10 @@ fn maximum(a: Option<u64>, b: Option<u64>) -> Option<u64> {
 pub(crate) struct Sampler {
     previous: Option<(u64, u64)>,
     #[cfg(target_os = "linux")]
-    gpu: Option<linux::Nvml>,
-    initialized: bool,
+    gpu: linux::GpuProviders,
 }
 impl Sampler {
-    pub(crate) fn sample(&mut self) -> ResourceSample {
-        if !self.initialized {
-            #[cfg(target_os = "linux")]
-            {
-                self.gpu = linux::Nvml::open();
-            }
-            self.initialized = true;
-        }
+    pub(crate) fn sample(&mut self, devices: Option<&[ModelGpuDevice]>) -> ResourceSample {
         let mut sample = ResourceSample {
             monotonic_ns: monotonic_ns(),
             sampled_at_unix_ms: None,
@@ -126,10 +161,25 @@ impl Sampler {
                     sample.ram_source = Some("linux_smaps_rollup");
                 }
             }
-            sample.vram_bytes = self.gpu.as_ref().and_then(linux::Nvml::memory);
-            if sample.vram_bytes.is_some() {
-                sample.vram_source = Some("nvml_process_v2");
-            }
+            sample.vram_devices = devices.map(|devices| self.gpu.sample(devices));
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            sample.vram_devices = devices.map(|devices| {
+                devices
+                    .iter()
+                    .map(|device| VramDevice {
+                        name: device.name.clone(),
+                        pci_bus_id: device.pci_bus_id.clone(),
+                        bytes: None,
+                        source: None,
+                    })
+                    .collect()
+            });
+        }
+        sample.vram_bytes = total_vram(sample.vram_devices.as_deref());
+        if sample.vram_bytes.is_some() {
+            sample.vram_source = Some("model_devices");
         }
         // Pair CPU and monotonic counters after provider reads; variable driver
         // latency must not skew the utilization denominator or phase windows.
@@ -159,155 +209,53 @@ impl Sampler {
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
-    //! Process-local Linux accounting and optional NVML C ABI. The sampler alone
-    //! owns the library; pointers never escape a synchronous provider query.
-    use libloading::Library;
-    use std::{ffi::c_void, mem::MaybeUninit};
-    pub(super) fn kilobytes(text: &str, key: &str) -> Option<u64> {
-        text.lines().find_map(|line| {
-            let mut parts = line.split_whitespace();
-            if parts.next()? != key {
-                return None;
-            }
-            let value = parts.next()?.parse::<u64>().ok()?;
-            (parts.next()? == "kB").then_some(value)?.checked_mul(1024)
-        })
+mod linux;
+
+#[cfg(test)]
+mod tests {
+    //! Scope semantics do not depend on a live GPU or GPU utilization.
+    use super::*;
+    #[test]
+    fn mixed_gpu_totals_never_hide_a_missing_participating_device() {
+        let mut devices = vec![
+            VramDevice {
+                name: "AMD".into(),
+                pci_bus_id: Some("0000:28:00.0".into()),
+                bytes: Some(4096),
+                source: Some("test"),
+            },
+            VramDevice {
+                name: "NVIDIA".into(),
+                pci_bus_id: Some("0000:25:00.0".into()),
+                bytes: None,
+                source: None,
+            },
+        ];
+        assert_eq!(total_vram(Some(&devices)), None);
+        devices[1].bytes = Some(8192);
+        assert_eq!(total_vram(Some(&devices)), Some(12288));
+        assert_eq!(
+            total_vram(Some(&devices[..1])),
+            Some(4096),
+            "only the model's selected device contributes"
+        );
     }
-    pub(super) fn cpu_time() -> Option<u64> {
-        // CLOCK_PROCESS_CPUTIME_ID sums all process threads with nanosecond units.
-        let mut time = MaybeUninit::<libc::timespec>::uninit();
-        // SAFETY: the pointer addresses writable storage of the required ABI type.
-        if unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, time.as_mut_ptr()) } != 0 {
-            return None;
-        }
-        // SAFETY: a successful clock_gettime initializes both fields.
-        let time = unsafe { time.assume_init() };
-        u64::try_from(time.tv_sec)
-            .ok()?
-            .checked_mul(1_000_000_000)?
-            .checked_add(u64::try_from(time.tv_nsec).ok()?)
-    }
-    /// NVML v2's stable process ABI. MIG IDs participate only in driver reporting;
-    /// PID/device memory is deduplicated across compute and graphics queues.
-    #[repr(C)]
-    #[derive(Clone, Copy, Default)]
-    struct Process {
-        pid: u32,
-        memory: u64,
-        gpu_instance: u32,
-        compute_instance: u32,
-    }
-    type Status = u32;
-    type Device = *mut c_void;
-    type Processes = unsafe extern "C" fn(Device, *mut u32, *mut Process) -> Status;
-    pub(super) struct Nvml {
-        library: Library,
-    }
-    impl std::fmt::Debug for Nvml {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("Nvml")
+    #[test]
+    fn pci_identity_is_canonical_and_rejects_paths() {
+        assert_eq!(pci_id("00000000:25:00.0").as_deref(), Some("0000:25:00.0"));
+        assert_eq!(pci_id("0000:2A:1F.7").as_deref(), Some("0000:2a:1f.7"));
+        for id in ["../../device", "0:25:20.0", "0:25:00.8", "Metal"] {
+            assert!(pci_id(id).is_none());
         }
     }
-    impl Nvml {
-        pub(super) fn open() -> Option<Self> {
-            // SAFETY: loads the system NVIDIA management library, never model data.
-            // All symbols use NVIDIA's documented C ABI and remain library-bound.
-            let library = unsafe { Library::new("libnvidia-ml.so.1") }.ok()?;
-            // SAFETY: the versioned symbol has the NVML initialization signature.
-            let status = unsafe {
-                library
-                    .get::<unsafe extern "C" fn() -> Status>(b"nvmlInit_v2\0")
-                    .ok()?()
-            };
-            if status == 0 {
-                Some(Self { library })
-            } else {
-                None
-            }
-        }
-        pub(super) fn memory(&self) -> Option<u64> {
-            // SAFETY: all pointers below point to live stack storage. Handles come
-            // from NVML and are used only while initialized and library is alive.
-            // Fixed process arrays bound work and fail closed on insufficient size.
-            unsafe {
-                let count_fn = self
-                    .library
-                    .get::<unsafe extern "C" fn(*mut u32) -> Status>(b"nvmlDeviceGetCount_v2\0")
-                    .ok()?;
-                let handle_fn = self
-                    .library
-                    .get::<unsafe extern "C" fn(u32, *mut Device) -> Status>(
-                        b"nvmlDeviceGetHandleByIndex_v2\0",
-                    )
-                    .ok()?;
-                let mut count = 0;
-                if count_fn(&raw mut count) != 0 || count > 32 {
-                    return None;
-                }
-                let mut total = 0_u64;
-                for index in 0..count {
-                    let mut device = std::ptr::null_mut();
-                    if handle_fn(index, &raw mut device) != 0 {
-                        return None;
-                    }
-                    let mut device_bytes = None;
-                    for name in [
-                        b"nvmlDeviceGetComputeRunningProcesses_v2\0".as_slice(),
-                        b"nvmlDeviceGetGraphicsRunningProcesses_v2\0".as_slice(),
-                    ] {
-                        let processes = self.library.get::<Processes>(name).ok()?;
-                        let mut entries = [Process::default(); 128];
-                        let mut length = 128;
-                        let status = processes(device, &raw mut length, entries.as_mut_ptr());
-                        if status == 3 {
-                            continue;
-                        } // This queue class is unsupported.
-                        if status != 0 || length > 128 {
-                            return None;
-                        }
-                        let mut bytes = 0_u64;
-                        for process in &entries[..length as usize] {
-                            if process.pid == std::process::id() {
-                                if process.memory == u64::MAX {
-                                    return None;
-                                }
-                                bytes = bytes.checked_add(process.memory)?;
-                            }
-                        }
-                        device_bytes = Some(device_bytes.map_or(bytes, |n: u64| n.max(bytes)));
-                    }
-                    total = total.checked_add(device_bytes?)?;
-                }
-                (count > 0).then_some(total)
-            }
-        }
-    }
-    impl Drop for Nvml {
-        fn drop(&mut self) {
-            // SAFETY: balances this instance's successful nvmlInit_v2. No symbols
-            // or device handles outlive the library; provider owns no other tasks.
-            unsafe {
-                if let Ok(shutdown) = self
-                    .library
-                    .get::<unsafe extern "C" fn() -> Status>(b"nvmlShutdown\0")
-                {
-                    let _ = shutdown();
-                }
-            }
-        }
-    }
-    #[cfg(test)]
-    mod tests {
-        //! Deterministic source parsing; no GPU is required.
-        #[test]
-        fn rollup_units_and_missing_fields_are_explicit() {
-            assert_eq!(
-                super::kilobytes("Rss: 12 kB\nPss: 5 kB\n", "Rss:"),
-                Some(12288)
-            );
-            assert_eq!(super::kilobytes("Rss: 12 MB", "Rss:"), None);
-            assert_eq!(super::kilobytes("", "Pss:"), None);
-        }
+    #[test]
+    fn cpu_only_scope_excludes_all_registered_gpus_and_unknown_scope_stays_unknown() {
+        let mut sampler = Sampler::default();
+        let cpu = sampler.sample(Some(&[]));
+        assert_eq!(cpu.vram_bytes, Some(0));
+        assert!(cpu.vram_devices.expect("known CPU scope").is_empty());
+        let unknown = sampler.sample(None);
+        assert!(unknown.vram_bytes.is_none());
+        assert!(unknown.vram_devices.is_none());
     }
 }

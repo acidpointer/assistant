@@ -23,6 +23,9 @@ pub(crate) trait ModelBackend: fmt::Debug + Send + Sync {
         turn: TurnContext,
         events: EventSink,
     ) -> BoxFuture<'_, Result<ModelTurn, ModelFailure>>;
+    fn model_gpu_scope(&self) -> crate::telemetry::ModelGpuScope {
+        None
+    }
     fn wake(&self) {}
 }
 #[derive(Debug, Clone)]
@@ -123,6 +126,9 @@ impl Drop for ChatInner {
 #[derive(Debug, Clone)]
 pub struct Chat(Arc<ChatInner>);
 impl Chat {
+    pub(crate) fn model_gpu_scope(&self) -> crate::telemetry::ModelGpuScope {
+        self.0.backend.model_gpu_scope()
+    }
     pub(crate) fn new(
         id: u64,
         system: String,

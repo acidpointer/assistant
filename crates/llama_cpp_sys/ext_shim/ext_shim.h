@@ -43,6 +43,19 @@ struct llama_memory_breakdown_entry {
     size_t  compute;
 };
 
+// Owned identities of devices with actual non-host allocations. This is not the
+// list of available/selected backend devices. A missing PCI id remains empty.
+struct llama_gpu_allocation_v1 {
+    char name[128];
+    char device_id[128];
+    uint64_t allocated_bytes;
+};
+// ctx may be null to inspect resident weights before any context exists. If
+// supplied, it must belong to model and remain confined to the calling thread.
+int32_t llama_gpu_allocations_collect_v1(const struct llama_model * model,
+        const struct llama_context * ctx, struct llama_gpu_allocation_v1 * out,
+        size_t capacity, size_t * required);
+
 // Fallible size-query/fill API. Never returns a partial report as success.
 // required is mandatory; ctx must remain live and confined to the calling thread.
 int32_t llama_memory_breakdown_collect_v2(

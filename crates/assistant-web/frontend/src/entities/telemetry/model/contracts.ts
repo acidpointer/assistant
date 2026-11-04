@@ -1,6 +1,12 @@
 import * as v from 'valibot';
 const counter = v.pipe(v.number(), v.finite(), v.minValue(0));
 const optionalCounter = v.nullable(counter);
+const gpuSchema = v.object({
+  name: v.pipe(v.string(), v.maxLength(128)),
+  pci_bus_id: v.nullable(v.string()),
+  bytes: optionalCounter,
+  source: v.nullable(v.string()),
+});
 export const resourceSchema = v.object({
   sampled_at_unix_ms: optionalCounter,
   monotonic_ns: counter,
@@ -9,6 +15,7 @@ export const resourceSchema = v.object({
   ram_rss_bytes: optionalCounter,
   ram_pss_bytes: optionalCounter,
   vram_bytes: optionalCounter,
+  vram_devices: v.nullable(v.pipe(v.array(gpuSchema), v.maxLength(32))),
   vram_source: v.nullable(v.string()),
   ram_source: v.nullable(v.string()),
 });

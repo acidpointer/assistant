@@ -802,7 +802,8 @@ impl Coordinator {
             tokio::select! {
                 () = tokio::time::sleep_until(sample_at), if sampler.is_some() && (self.active.is_some() || self.outgoing.receiver_count() > 0) && !stopping => {
                     if let Some(mut provider) = sampler.take() {
-                        observations.spawn_blocking(move || { let sample = provider.sample(); (provider, sample) });
+                        let devices = self.chat.model_gpu_scope();
+                        observations.spawn_blocking(move || { let sample = provider.sample(devices.as_deref()); (provider, sample) });
                     }
                 }
                 Some(result) = observations.join_next(), if !observations.is_empty() => {
@@ -853,7 +854,8 @@ impl Coordinator {
                                 sampler = Some(provider); self.observe(sample);
                             }
                             if let Some(mut provider) = sampler.take() {
-                                let (provider, sample) = tokio::task::spawn_blocking(move || { let sample = provider.sample(); (provider, sample) }).await.map_err(|_| ChatError::Configuration("telemetry provider task failed".into()))?;
+                                let devices = self.chat.model_gpu_scope();
+                                let (provider, sample) = tokio::task::spawn_blocking(move || { let sample = provider.sample(devices.as_deref()); (provider, sample) }).await.map_err(|_| ChatError::Configuration("telemetry provider task failed".into()))?;
                                 sampler = Some(provider); self.observe(sample);
                             }
                             self.finish(result);

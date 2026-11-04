@@ -270,6 +270,12 @@ impl<'model> LLMContext<'model> {
         }
         Ok(())
     }
+    /// Allocation-backed device identities, collected on the context owner.
+    pub(crate) fn gpu_allocations(
+        &self,
+    ) -> EngineResult<Vec<llama_cpp::context::memory_breakdown::GpuAllocation>> {
+        self.native.gpu_allocations().map_err(EngineError::from)
+    }
     /// Owned cache/allocation snapshot, safe to send off this worker thread.
     /// # Errors
     /// Returns native inspection, corrupt-result or checked-accounting failures.
