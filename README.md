@@ -1,63 +1,93 @@
 # assistant
 
-A local, resident assistant with streaming chat and tools. One executable serves
-both the model runtime and the web UI. Chats live in memory and reset on restart.
+A local AI assistant with streaming chat, tools, and an extensible Rust core.
+The model stays ready between messages. The runtime and the entire web UI ship
+in one executable.
 
-## Run a prebuilt binary
+[Quickstart](#quickstart) · [Build from source](#build-from-source) ·
+[Development](#development) · [Documentation](docs/docs-map.md)
 
-Use an `assistant` binary built for your OS, CPU architecture and GPU backend,
-and a local GGUF model supported by the bundled llama.cpp version.
+## Why assistant?
+
+- **Run your own model.** Local GGUF inference through a maintained llama.cpp
+  binding. No cloud account required.
+- **Deploy one executable.** HTML, JavaScript, CSS, fonts, and workers are embedded.
+  Add your model file and the system runtime libraries.
+- **Stay ready between messages.** Model weights remain loaded while the daemon
+  waits for the next request.
+- **Chat comfortably.** Streaming Markdown, syntax highlighting, keyboard shortcuts,
+  prompt recall, and a responsive UI.
+- **See what it costs.** Native token throughput and VRAM on the model's GPUs,
+  with CPU, RAM, and per-message measurements in the details.
+- **Build on the core.** Typed tools, plugins, hooks, middleware, and a shared
+  application API. HTTP/WebUI is the first transport plugin.
+
+> **Early development.** Today: one ongoing chat, local inference, and tools.
+> Conversation history is in memory and resets on restart. Durable history and
+> additional transports are future work.
+
+## Quickstart
+
+With a prebuilt `assistant` for your OS, CPU architecture, and GPU backend, plus a
+supported local GGUF model:
 
 ```sh
 chmod +x ./assistant
 ./assistant --model /absolute/path/to/model.gguf
 ```
 
-Open **http://127.0.0.1:8080**. The server stays in the foreground; Ctrl+C or
-SIGTERM shuts it down cleanly. A different listen address or port is optional:
+Open **http://127.0.0.1:8080**. The daemon runs in the foreground; Ctrl+C or SIGTERM
+shuts it down cleanly. The model stays external; the frontend is already inside
+the executable. No Node.js, npm, Rust, or frontend directory is needed to run it.
+
+### Runtime libraries and GPU drivers
+
+The default build uses Vulkan. Linux needs the Vulkan loader, a working GPU Vulkan
+driver, and the executable's system libraries (usually glibc, libstdc++, and
+libgcc; OpenMP if enabled when building). A prebuilt binary must be compatible
+with the destination's system-library versions. Inspect a trusted binary with:
 
 ```sh
-./assistant --model /absolute/path/to/model.gguf --host 127.0.0.1 --port 9000
+ldd ./assistant
 ```
 
-**The entire frontend is embedded in the executable**, including HTML, JavaScript,
-CSS, fonts and other assets. No frontend directory, Node.js, npm, Rust or build
-tools are needed on the destination machine. The GGUF remains external and is
-selected with `--model`; the assistant does not download models.
-
-The default build uses Vulkan. Linux needs the Vulkan loader and a working GPU
-Vulkan driver, plus the executable's system libraries (usually glibc, libstdc++
-and libgcc; OpenMP if enabled when building). Inspect a trusted binary with
-`ldd ./assistant` to identify missing shared libraries. A prebuilt binary must
-also be compatible with the destination's system-library versions.
-
-For GPU drivers, follow your distribution's instructions. On Arch Linux the
-userspace packages include `vulkan-radeon` for AMD, `vulkan-intel` for Intel, or
-`nvidia-utils` with the matching NVIDIA kernel driver; see the
+Follow your distribution's GPU driver instructions. On Arch Linux, userspace
+packages include `vulkan-radeon` for AMD, `vulkan-intel` for Intel, or `nvidia-utils`
+with the matching NVIDIA kernel driver; see the
 [Arch Vulkan guide](https://wiki.archlinux.org/title/Vulkan#Installation).
+GPU placement may span multiple visible GPUs. `--cpu` disables GPU inference;
+a Vulkan-linked binary still needs its loader.
 
-Useful modes:
+### Run it your way
 
 ```sh
-# CPU inference with the web UI; a Vulkan-linked binary still needs its loader.
+# Choose a listen address and port.
+./assistant --model /absolute/path/to/model.gguf --host 127.0.0.1 --port 9000
+
+# CPU inference with the web UI.
 ./assistant --model /absolute/path/to/model.gguf --cpu
 
-# Headless resident service: no HTTP listener or web tasks.
+# Headless resident service.
 ./assistant --model /absolute/path/to/model.gguf --no-web
+```
 
-# One-shot diagnostics: print an answer and exit.
+### One-shot and terminal diagnostics
+
+```sh
+# Print an answer and exit.
 ./assistant --model /absolute/path/to/model.gguf --no-web --prompt 'Hello'
 
-# Interactive terminal diagnostics.
+# Interactive terminal session.
 ./assistant --model /absolute/path/to/model.gguf --no-web --interactive
 ```
 
 `--prompt` and `--interactive` require `--no-web`: they are testing modes, while
 the web server is a resident service. Explicit `--host`/`--port` conflict with
-`--no-web`. Run `./assistant --help` for generation, context and cache settings.
-GPU placement may span multiple visible GPUs; `--cpu` disables GPU inference.
+`--no-web`. Run `./assistant --help` for generation, context, and cache settings.
 
-For systemd, adapt the paths in the example
+### Run as a systemd user service
+
+Adapt the executable and model paths in the example
 [user service](packaging/systemd/assistant.service), install it as
 `~/.config/systemd/user/assistant.service`, then run:
 
@@ -81,7 +111,7 @@ The commands below cover Linux with Vulkan, the default backend.
 | Vulkan | Vulkan headers and loader development files, `glslc`, SPIR-V headers with the `SPIRV-Headers` CMake package, and a GPU driver to run inference. |
 | Workspace checks | rustfmt, Clippy, Bash, and OpenMP support for the binding crate's default features. Python 3 for smoke/evaluation scripts. |
 
-**Arch Linux** — native dependencies:
+#### Arch Linux
 
 ```sh
 sudo pacman -Syu --needed base-devel git cmake ninja clang openmp \
@@ -92,7 +122,7 @@ Here, [`shaderc`](https://archlinux.org/packages/extra/x86_64/shaderc/files/)
 provides `glslc`; [`spirv-headers`](https://archlinux.org/packages/extra/any/spirv-headers/)
 is a separate requirement.
 
-**Debian 13** — native dependencies:
+#### Debian 13
 
 ```sh
 sudo apt update
@@ -101,11 +131,12 @@ sudo apt install build-essential git cmake ninja-build clang libclang-dev \
 ```
 
 Debian's [`spirv-headers`](https://packages.debian.org/trixie/all/spirv-headers/filelist)
-includes the required CMake configuration. On other distributions, install the
-equivalent development packages. A Vulkan driver is separate from the headers
-and loader. Install Rust and a supported Node.js version separately; an older
-distribution-provided Node.js may not satisfy the frontend's version requirement.
-If bindgen cannot locate libclang, set `LIBCLANG_PATH` to its library directory.
+includes the required CMake configuration.
+
+On other distributions, install equivalent development packages. A Vulkan driver
+is separate from the headers and loader. Install Rust and a supported Node.js
+version separately; distribution packages may provide an older Node.js. If bindgen
+cannot locate libclang, set `LIBCLANG_PATH` to its library directory.
 
 ### 2. Initialize the repository
 
@@ -154,6 +185,8 @@ executable; `dist/` and `node_modules/` stay on the build machine. Supply the mo
 separately and retain the relevant project/native license notices. The UI embeds
 its frontend dependency notices. System/GPU runtime libraries remain external.
 
+### Other backends
+
 Other backends replace the default Vulkan feature and require their own native
 toolkits. The frontend build above is still required:
 
@@ -168,7 +201,7 @@ cargo build --locked --release -p assistant-daemon --no-default-features --featu
 cargo build --locked --release -p assistant-daemon --no-default-features --features metal
 ```
 
-## Development and checks
+## Development
 
 After preparing the frontend, `cargo run -- --model /absolute/path/to/model.gguf`
 starts the daemon. In another terminal, enable frontend hot reload:
@@ -200,7 +233,7 @@ skip when weights are absent. See the [web guide](docs/web-ui.md#typed-frontend-
 for real-daemon smoke tests and the [cache guide](docs/kv-cache-baseline.md#test-categories-and-reproduction)
 for required-model/GPU evaluations.
 
-## Project map
+## Inside the project
 
 | Crate | Responsibility |
 | --- | --- |
@@ -209,8 +242,14 @@ for required-model/GPU evaluations.
 | `assistant-web` | HTTP/WebUI plugin and embedded frontend |
 | `llama_cpp` / `llama_cpp_sys` | Safe Rust API, FFI and maintained native fork |
 
-[Documentation index](docs/docs-map.md) · [Architecture](docs/architecture.md) ·
-[Assistant API](docs/llm-api.md) · [HTTP API](docs/web-api.yaml)
+| Explore | Start here |
+| --- | --- |
+| Understand the runtime and extension boundaries | [Architecture](docs/architecture.md) |
+| Add tools, hooks, or plugins | [Assistant API](docs/llm-api.md) |
+| Build a client or work on the UI | [Web guide](docs/web-ui.md) · [HTTP API](docs/web-api.yaml) |
+| Find the rest of the documentation | [Documentation index](docs/docs-map.md) |
+
+## Acknowledgments
 
 Bindings derive from
 [eugenehp/llama-cpp-rs](https://github.com/eugenehp/llama-cpp-rs/commit/1d62841020af8a309ab749b64ac3688919f383df)
@@ -218,5 +257,6 @@ Bindings derive from
 [`a34de8618b25dfc32ee43749db47d767a9f0a25d`](https://github.com/ggml-org/llama.cpp/commit/a34de8618b25dfc32ee43749db47d767a9f0a25d)
 (`b12015`). Native linking is static by default. See the
 [binding maintenance guide](docs/bindings-fork.md) for patches and upstream updates.
+
 The experimental `turboquant` feature remains opt-in and
 [has not passed quality gates](docs/pq3-inference-evaluation.md).
