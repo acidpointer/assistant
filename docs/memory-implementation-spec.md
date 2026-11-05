@@ -1,7 +1,8 @@
 # Memory, personality and assistant loop: implementation specification
 
-The [integration plan](memory-integration-plan.md) audits the first storage
-milestone and refines the delivery order below; this specification remains the
+The [final integration plan](memory-integration-plan.md) audits the committed
+storage foundation and specifies one complete remaining delivery, including
+model qualification and end-to-end acceptance. This specification remains the
 authority for selected v1 behavior.
 
 Status: implementation design baseline, 2026-11-05. Application code remains
@@ -533,10 +534,12 @@ Concrete v2 route mapping (all IDs are opaque; scope comes from the session):
 | --- | --- |
 | `POST /session`, `DELETE /session` | Pairing exchange; logout/revoke current session |
 | `POST /runs`, `GET /operations/{id}`, `POST /runs/{id}/cancel` | Durable submit; status/receipt reconciliation; cancel |
+| `POST /operations/lookup` | Authorized lookup by original client namespace/ID/request key when an admission reply was lost; no new execution |
 | `GET /snapshot`, `GET /events` | Atomic display snapshot; authenticated fetch-SSE |
 | `POST /memory/search`, `GET /memory/evidence/{id}` | Query/filter/budget; bounded source inspection |
 | `POST /memory/remember`, `POST /memory/corrections` | Literal source capture; identified correction |
 | `POST /memory/forget-preview`, `POST /memory/forget` | Selection/revision preview token; execute suppression workflow |
+| `GET /memory/forget/{id}` | Durable suppression/journal/publication-barrier/purge progress |
 | `GET /personality`, `PATCH /personality`, `PUT /personality` | Inspect; patch expected revision; full replacement |
 | `PUT /disposition` | Expiring owner override with expected state revision |
 | `GET /inbox`, `POST /inbox/{id}/actions` | Paginated notices; seen/dismiss/snooze with expected revision |

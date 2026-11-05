@@ -1,488 +1,509 @@
-# Memory integration: audited next steps
+# Memory system: final implementation delivery
 
-Status: proposed implementation sequence after source review, 2026-11-05.
-Application/runtime wiring below remains planned; the library package is recorded separately.
+Status: final remaining implementation plan, 2026-11-05.
+Audited baseline: `0205229` (`feat: initial comprehensive memory system`).
+This change is research/documentation; application and binding changes below
+have not been implemented.
 
-Progress: change 1's library storage package is implemented, including ordered
-migrations, critical/finalization lanes, reservations, operation/tool/source
-commands, deferred formation, consumer cursors and explicit history pagination.
-The failure tests now execute the quota finding below. See
-[the current storage contract](memory-storage.md). Changes 2-7 remain planned;
-the source-audit tables record the pre-package baseline, not unresolved defects
-where change 1 now supplies the fix.
+The next implementation task delivers the complete remaining memory experience
+in one integrated delivery. The order below is an internal build/test sequence,
+not another series of storage-only milestones. Completion requires working
+headless and authenticated web journeys, real model evidence and owner controls.
+Do not stop after registering a plugin, wiring literal storage or passing mock
+model tests.
 
-The next milestone is a durable, authorized conversation that remembers across
-restart and can explain where its recalled facts came from. Opening the database
-from a plugin does not establish that contract. Admission, tool dispatch,
-finalization, evidence delivery and shutdown must participate together.
+The [implementation specification](memory-implementation-spec.md) remains the
+v1 behavior authority. This plan replaces the earlier incremental integration
+sequence and closes its remaining execution details. The
+[storage contract](memory-storage.md) describes the implemented foundation;
+[original research](memory-system-plan.md) supplies rationale and alternatives.
 
-The [implementation specification](memory-implementation-spec.md) remains the v1
-design authority. This document turns its P1-P8 work packages into smaller
-integration changes based on the actual code. The
-[storage documentation](memory-storage.md) describes what exists; the
-[original research](memory-system-plan.md) explains the alternatives and quality
-targets. This plan does not relax their qualification gates.
+## Final delivery contract
 
-## Outcome and scope
-
-The desired experience has four independently testable properties:
-
-| User expectation | Required behavior |
+| Experience | Required finished behavior |
 | --- | --- |
-| “Remember this.” | The literal source is committed before confirmation, remains inspectable after restart, and reports whether extraction/indexing is still pending. |
-| “You understand my situation.” | Relevant people, preferences, goals, reasons and unfinished commitments are recalled with attribution, corrections and uncertainty. Bounded recent context resolves conversational references. |
-| “Connect what you already know.” | Retrieval finds complete supporting paths across sessions; missing premises cause qualification or abstention. Similarity and graph connectivity alone do not establish truth. |
-| “Sometimes take the initiative.” | Durable commitments and goal changes can produce useful, deduplicated inbox items, then opt-in live delivery under owner policy. |
+| Remember | Accepted dialogue and explicit preservation survive restart. Confirmation identifies the committed literal source and distinguishes structuring/indexing coverage. |
+| Understand current context | Every authorized product interaction recalls relevant people, preferences, goals, stated reasons, questions and unfinished commitments before its first model turn. Recent referents remain bounded. |
+| Connect knowledge | Exact, lexical, semantic and typed graph recall produce complete supporting paths, including inverse navigation, attribution and time. Missing premises lead to qualification or abstention. |
+| Update knowledge | Identified corrections take effect synchronously; ambiguous corrections remain visible and unresolved. Old jobs and active answers cannot overwrite or continue publishing invalidated evidence. |
+| Have a stable character | Editable personality and expiring disposition compile deterministically; one behavior snapshot is pinned per operation. Voice changes do not change facts or permissions. |
+| Take useful initiative | Due commitments and resolved blockers produce durable, deduplicated inbox items. Qualified, owner-enabled live notices obey quiet hours, activity deferral and quotas. |
+| Give the owner control | Inspection, correction, preservation, forget preview/progress, export, backup and safe restore work through authorized core commands and the installed adapters. |
+| Recover honestly | Lost replies, cancellation, storage failure and restart preserve durable identity and known tool outcomes. Uncertain effects remain uncertain; tools are never automatically replayed. |
 
-Keep bounded working history for immediate conversation and tool protocol. Prove
-long-term recall after deliberately clearing that history. Eliminating history
-entirely is unnecessary and would make short referents harder to resolve.
-“Unlimited memory” is not a capacity promise: storage, indexing, investigation
-and background compute remain explicitly bounded.
+Complete v1 retains one Linux owner, one assistant identity, one active product
+interaction, SQLite authority, exact vector search and named JSON proposals.
+HTTP is optional; memory/background/inbox behavior must work without it.
+Memory-disabled behavior remains supported. Keep bounded working history for
+immediate referents and tool protocol; prove permanent recall with that history
+cleared. No graph server, ANN migration, compact language, recurring calendar,
+external autonomous action, dynamic plugin loader or unrelated native update is
+needed to finish this delivery.
 
-Memory works through the same application commands in headless and web modes.
-HTTP is an optional adapter. Memory-disabled operation remains a supported
-configuration. The first integrated milestone is an intermediate release;
-personality, qualified semantic recall and initiative remain required for the
-complete v1 described in the specification.
+## What the code actually contains
 
-## Source audit
+The working tree was clean at the start of this review. The previous milestone
+records 645 passing workspace tests, 14 ignored, and 37 Rust 1.88 storage tests.
+Those are existing storage/runtime regression results, not memory-model or
+end-to-end qualification. This research did not rerun that suite.
 
-This review inspected the storage implementation, application coordinator,
-chat/tool execution, runtime service/worker lifecycle, HTTP policy and the
-implementation/research contracts. References below name symbols as well as
-files because source line numbers will move during integration.
-
-### Must fix before personal chat integration
-
-| Finding and evidence | Failure mode | Smallest credible change |
+| Area | Implemented baseline | Remaining integration |
 | --- | --- | --- |
-| `Database::suppress_source` calls generic `mutate`, whose quota check rejects when used bytes plus 64 MiB reach quota. See [database.rs](../crates/assistant/src/memory/store/database.rs), `mutate` and `suppress_source`. | A new forget command returns `Capacity` near the ordinary-write threshold before suppression or journal acknowledgment. The emergency margin currently cannot serve this operation. | Give suppression, required receipts and finalization explicit critical capacity/reservation rules; pause optional growth first. Test near-quota forgetting and real write failure separately. |
-| `Worker::call` always acquires an ordinary permit; the 64-entry queue has 56 ordinary permits but no critical-command entry point. See [store/mod.rs](../crates/assistant/src/memory/store/mod.rs). | Spare slots do not reserve an admitted run's ability to persist a receipt or terminal outcome. Generic write headroom also does not reserve its bytes. | Add a private, bounded critical path, admission-owned finalization reservation and accounting for outstanding reservations. Mandatory calls must not compete for ordinary permits. |
-| `Coordinator::admit` creates a volatile record, publishes `Accepted` and inserts the user message. IDs include the daemon instance; deduplication is in memory. See [application/mod.rs](../crates/assistant/src/application/mod.rs). | An accepted request disappears after restart; a timed-out retry can become another execution. Storage command receipts currently do not describe a product run. | Commit a durable product operation and source before acceptance; reconcile by stable owner/client request identity. Keep the coordinator's display state as a projection. |
-| `Request::execute` performs the run inside cancellation/deadline selection; `Pipeline::finished` is an optional, one-second observer. Tool receipts are accumulated in `RunContext`. See [chat/mod.rs](../crates/assistant/src/chat/mod.rs), [runner.rs](../crates/assistant/src/chat/runner.rs) and [pipeline/mod.rs](../crates/assistant/src/pipeline/mod.rs). | Persistence in hooks can be skipped, timed out or bypassed by middleware. A side effect can occur without a durable intent/result. | Add one mandatory persistence participant outside optional middleware and cancellable generation, including owned receipt/finalization work and recovery of unknown effects. |
-| `activate_services` starts the application before activating services; shutdown closes runtime services before joining native workers. See [runtime/mod.rs](../crates/assistant/src/runtime/mod.rs). | Registration order can expose a partially ready assistant or close memory before job users finish. Presence in `Services` is not readiness. | Add composite readiness and explicit drain/ownership barriers. Storage closes after mandatory users settle. |
-| HTTP `policy` validates authority/origin/client headers, but has no owner authentication. `submit` uses the literal scope `web`. See [http.rs](../crates/assistant-web/src/http.rs). | Another local client can reach personal chat indirectly through ordinary chat/snapshot/SSE routes if recall is enabled there. | Implement the selected owner pairing/session flow and authenticate every personal route before enabling memory on HTTP. No legacy route bypass. |
-| Storage suppression cannot revoke copied evidence, chat history, in-flight deltas or queued network responses. See [memory-storage.md](memory-storage.md). | A forgotten source can be published after a misleading product-level “forgotten” receipt. | Coordinate publication generations, active-run invalidation, transport queues and prompt/cache clearing; acknowledge logical forgetting only after the barrier. |
+| Storage | Migrations 1/2, durable product/tool commands, attributed sources, priority/reservations, suppression/journal/purge, FTS/qualified edges, fenced jobs, consumer cursors and backup candidates. | New domain records, eligibility/dependency queries, richer jobs and product outcomes; reuse the existing writer. |
+| Product coordinator | [`Coordinator::admit`](../crates/assistant/src/application/mod.rs) accepts and deduplicates in memory, then creates instance-scoped run IDs. | Required durable admission/status/finalization; stable operation identity and reconstructed views. |
+| Chat/tools | [`Request::execute`](../crates/assistant/src/chat/mod.rs) selects over cancellation; [`RunContext::execute_tool`](../crates/assistant/src/chat/runner.rs) has no durable authority/receipt participant. | Mandatory persistence outside optional middleware; effective dispatch/capture policy and owned settlement. |
+| Lifecycle | [`activate_services` / `shutdown`](../crates/assistant/src/runtime/mod.rs) start the application before service activation and close services before native worker joins. | Composite readiness, supervision and a storage-last drain barrier. |
+| Internal inference | [`runtime/worker.rs`](../crates/assistant/src/runtime/worker.rs) has rotating active contexts and synchronous preparation, but no execution class or internal structured job API. | Reserved foreground capacity, priority before preparation/prefill, isolated JSON jobs and measured accounting. |
+| Knowledge | Current jobs offer whole sources, fixed input reservation and add-only changes. Graph reads return outgoing edges. | Chunk coverage, correction/read sets, aliases, paths, semantic vectors, situation and attention. |
+| Personality | No implemented personality/state module. | Versioned repository, compiler/reducer, profile editing and behavior snapshots. |
+| Web | Authority/origin checks in [`http.rs`](../crates/assistant-web/src/http.rs); no owner sessions. Frontend connection uses `EventSource`; submission abandons restart recovery and limits retries to nine minutes. | Pairing/authentication, v2 contracts, authenticated fetch streams, durable reconciliation and owner UI. |
+| Daemon | [`cli.rs`](../crates/assistant-daemon/src/cli.rs) requires a model for the existing command shape; prompt/stdin paths use ephemeral `Chat`. | Memory configuration, a pairing command without model startup, and authorized durable headless interactions. |
 
-The quota finding originally followed from the reviewed control flow; change 1
-now includes its fix and an executed near-quota regression. Other entries distinguish
-missing integration contracts from defects in an already integrated product.
+Audit anchors at this commit: application admission line 360; chat execution
+line 289 and tool dispatch line 325; runtime activation line 493 and shutdown
+line 588; worker prompt preparation line 507. The frontend connection constructs
+`EventSource` at line 83 of
+[`assistant-connection.tsx`](../crates/assistant-web/frontend/src/app/connection/assistant-connection.tsx);
+[`submission.ts`](../crates/assistant-web/frontend/src/pages/chat/model/submission.ts)
+contains the restart reset and retry-window checks around lines 49-65. Embedding
+sequence slices start at `context.rs:413`; converter vocabulary selection starts
+at `conversion/bert.py:38`, and native WordPiece selection at
+`src/llama-vocab.cpp:2283` inside the pinned submodule.
 
-### Must fix before automatic formation and semantic recall
+The full specification still requires application work in human-owned crates.
+Implementation should proceed only when requested, then carry this entire scope
+through acceptance rather than treating the storage baseline as the product.
 
-| Current boundary | Required extension |
-| --- | --- |
-| [Production schema](../crates/assistant/src/memory/store/schema.sql) has storage commands, sources and jobs, but no durable product-operation lifecycle, source speaker, extraction cursor or consumer cursor. | Add ordered migrations and typed operation/source/event records. Do not substitute the research SQL sketch for the production schema. |
-| `Database::open` accepts schema version 1 only when the entire compiled schema hash matches. | Preserve the initial schema as migration 1; add checksummed upgrade steps, interruption tests and an old-store fixture before changing it. Never require deleting a user's store to upgrade. |
-| `claim_extraction_job` offers a whole source and reserves 1,024 input tokens. `finish_extraction_job` accepts add-only changes and host-supplied usage; it checks source/fence/deletion but no graph read set. See [jobs.rs](../crates/assistant/src/memory/store/jobs.rs). | Offer bounded excerpts with absolute spans, measured full-prompt reservations, corrections, read/scope sets, source coverage, heartbeats, hard lifetime and retry timing. A 1,024-token excerpt plus instructions is larger than a 1,024-token total prompt allowance. |
-| Every `remember` queues a job; durable pending-job quota, consumer progress and scheduling health are absent. | Enforce the 10,000 pending-job bound, coalesce work and expose backlog/qualification. Preserve admitted literal capture when optional formation cannot be scheduled. |
-| `follow` returns qualified outgoing edges, not proof paths or inverse navigation; `claim_history` silently caps at 256 versions. See [graph.rs](../crates/assistant/src/memory/store/graph.rs). | Build typed bidirectional path retrieval, cumulative investigation limits and truthful pagination/truncation. Reuse qualified edges, not generic reachability as an inference engine. |
-| Embedding slices use `model.n_embd()` in [context.rs](../crates/llama_cpp/src/context.rs), while the pinned native code distinguishes output embedding dimensions and rank output counts. | Complete the binding length/index/pooling/lifetime audit before any embedding worker is enabled. Wrong slice lengths can be a memory-safety issue on incompatible models. |
+## Research findings that change the implementation order
 
-### Choices retained
+### Qualify the actual model path first
 
-Keep SQLite as the single durable authority, with qualified graph tables and
-derived lexical/vector indexes. There is no demonstrated need to add a graph
-server, vector service or second authoritative store. Keep exact vector search
-as a bounded reference implementation until measurements justify another index.
+The workspace inventory contains the local LFM3-1.7B Q6 derivative and no E5 GGUF
+or memory embedding manifest. The recorded chat artifact SHA-256 is
+`077f001fa1ba64e49190e4b2a83035e886e3c22f74d0a331843925b1d7fa3a2f`;
+recheck it at implementation time. The existing
+[tokenizer artifact](benchmarks/compact-protocol-tokens-2026-11-05.json) explicitly
+contains no generation or extraction-quality measurement.
 
-Use named JSON and the existing constrained-output facilities. The compact
-protocol artifact measures tokenizer payloads only; it provides no evidence of
-better generation quality or end-to-end latency. Codec experiments remain
-optional work after integration.
+E5-small's published configuration names `BertModel` and
+`XLMRobertaTokenizer`. The pinned converter's
+[`BertModel.set_vocab`](../crates/llama_cpp_sys/llama.cpp/conversion/bert.py)
+emits `tokenizer_model=bert`, which the pinned native vocabulary loader selects
+as WordPiece. Separate XLM-Roberta vocabulary helpers exist. This is a concrete
+conversion compatibility risk, not proof of a failed conversion experiment:
+no E5 conversion was run in this review.
+[Published E5 configuration](https://huggingface.co/intfloat/multilingual-e5-small/raw/main/config.json).
 
-## Integration architecture
+Therefore require token-ID, normalization, special-token and position-embedding
+parity before vector parity. An adapter must preserve this model's BERT position
+semantics; relabeling its architecture as XLM-Roberta is not a qualification.
+Keep conversion changes in repository-owned tooling or build-copy patches, never
+inside the pinned submodule. Do not silently switch model families to avoid the
+problem. The selected E5 contract remains mean pooling, L2 normalization,
+384 dimensions, query/passage prefixes and at most 512 total input tokens.
+[E5 model card](https://huggingface.co/intfloat/multilingual-e5-small).
+
+The Rust embedding accessors in
+[`context.rs`](../crates/llama_cpp/src/context.rs) still construct slices from
+`n_embd`; native output dimensions/rank counts and invalid-index behavior require
+an audit before inference. Existing model APIs already expose `n_embd_out` and
+`n_cls_out`; reuse them and add a checked shim only where native guards require it.
+
+### Close product contracts before connecting callbacks
+
+These choices are required in the final implementation, not future API research:
+
+1. **Authority:** host-issued owner/session scope is required for personal reads,
+   writes, subscriptions and tool dispatch. A string such as `web` is a client
+   namespace, not authentication. No global recall hook grants private access.
+2. **Client identity:** hash a versioned canonical client command, excluding host
+   observation time, current default budgets and newly resolved profile state.
+   Explicit client options belong in the digest; the originally resolved limits,
+   behavior and policy revisions are stored at first admission. Retries after a
+   config/profile change return the original operation, not a fresh run/conflict
+   caused solely by new defaults. Version the digest format and support legacy
+   stored requests explicitly; preserve existing receipt/spent-key semantics.
+3. **Lookup:** add authorized lookup by original client key, because a lost
+   admission reply leaves the client without an operation ID. Old acceptance
+   receipts identify an operation; current status comes from the operation store.
+4. **Outcome:** persist terminal reason, truncation/deadline status, limit reason
+   and honest bounded usage/measurement availability. The current coarse storage
+   state cannot reconstruct every `RunView` outcome. Do not invent zero metrics
+   or a successful full answer after restart.
+5. **Tool ordering:** all confirmed receipt/unknown-outcome writes settle before
+   finalization is enqueued. The writer prioritizes finalization over other
+   critical work, so cross-queue FIFO must never be assumed.
+6. **Actual dispatch:** validate effective arguments after trusted middleware,
+   persist intent before the real handler, and persist its bounded result before
+   publication/continuation. A middleware short circuit is recorded as such;
+   it must not pretend an external handler executed. Apply capture policy before
+   serialization, including failure and cancellation paths.
+7. **Read sets:** persist operation evidence/source dependencies, predicate-scope
+   revisions and derived eligibility epochs. Source-only deletion checks cannot
+   protect an answer based on changed blockers or an older conclusion.
+8. **Preservation:** preserving an already accepted source is a retention command,
+   not another copy of the whole conversation or a new model-work allowance.
+   Coalesce source-family evidence and jobs; assistant prose is not independent
+   corroboration of a user fact.
+
+## One implementation pass, ordered internally
 
 ```mermaid
 flowchart TD
-    H[Owner CLI / trusted host] --> A[Application commands]
-    W[Optional authenticated WebUI] --> A
-    A --> D[Required durability participant]
-    D --> S[Single SQLite writer / bounded readers]
-    A --> R[Recall and evidence preparation]
-    R --> S
-    R --> G[Interactive chat / typed tools]
-    G --> D
-    G --> P[Publication coordinator]
-    S --> E[Durable events and job cursors]
-    E --> J[Internal job supervisor]
-    J --> N[Native owner workers / isolated contexts]
-    N --> V[Host proposal validation]
-    V --> S
-    S --> I[Situation and attention rules]
-    I --> P
-    P --> H
-    P --> W
+    A[Artifact and model preflight] --> B[Authorized durable runtime]
+    B --> C[Formation, hybrid recall and situation]
+    C --> D[Personality and attention]
+    B --> E[Authenticated adapters and owner controls]
+    D --> F[Complete publication, forgetting and recovery]
+    E --> F
+    F --> G[Native, headless, browser and load acceptance]
+    A --> G
 ```
 
-The composite memory/personality runtime factory owns the store and supervised
-consumers. It registers inert restricted handles during build, recovers before
-traffic, and releases a shared readiness latch only when required participants
-are ready. Web binding may reserve a listener early; product access stays closed
-until readiness and authentication are established.
+Every section below belongs to the same final delivery. Small reviewable code
+changes are appropriate; a new planning/approval cycle between them is not an
+implementation requirement. Keep independent work moving if an empirical gate
+fails, but do not report an unqualified channel as complete.
 
-Keep generic execution contracts in `application`, `chat` and `runtime`;
-implement memory behavior behind them in `memory`. Avoid a second chat runner,
-a pipeline reference cycle, or exposing a database/model handle through tools.
-The exact Rust signatures should be finalized with each small implementation
-change, using these responsibilities:
+### A. Artifact preflight and executable qualification harness
 
-| Proposed contract | Owner and purpose |
+Touch binding wrappers/shims as necessary, repository-owned model-preparation
+and evaluation tooling, memory fixtures and benchmark manifests.
+
+- Read [binding maintenance](bindings-fork.md); preserve the native pin and
+  patches. Fix embedding dimension/pooling/rank/index/lifetime contracts, with
+  error containment and real embedding tests. No unsafe slice from a guessed
+  shape; invalid native indices must not abort the daemon.
+- Prepare the selected E5 artifact from a fixed upstream revision. Record source,
+  license, converter/options, tokenizer/model hashes, pooling/precision/prefixes
+  and reference-vector fixtures. Development/reference Python dependencies may
+  be isolated in preparation tooling; the daemon remains native Rust/llama.cpp.
+  Do not commit weights or machine-local paths; startup never downloads models.
+- Check tokenizer parity on English/Ukrainian, punctuation, normalization,
+  special tokens, maximum input and mixed batches. Require matched-FP32 vector
+  cosine >=0.999, correct dimension/norm, and batch isolation.
+- Run real named-JSON extraction with the selected local chat artifact using
+  the binding's existing template/parser/schema/grammar path. Inspect complete
+  output, termination reason, exact quotation entailment, identity and correction
+  behavior. Fix prompt/chunk/handle selection within the selected budgets;
+  do not lower semantic validation or count repaired syntax as semantic success.
+- Build the complete quality harness now. Freeze development versus held-out
+  data before tuning. Seeded graphs, scripted models and actual model-produced
+  memory are different test tracks and receive separate results.
+
+This stage uses development cases for early preflight. Full held-out quality is
+measured through the integrated implementation in G, not inferred from that
+preflight or the converter's supported-architecture registry.
+
+If the current chat artifact cannot pass Q4, compare a more capable explicitly
+configured local extraction model within the same runtime/resource contracts.
+An unresolved artifact/quality failure is a release blocker, not permission to
+omit semantic memory or rename literal search as the final brain.
+
+### B. Authorized durable runtime and conversation
+
+Touch `application`, `chat`, `tools`, `runtime/{mod,services,worker}`, daemon
+assembly and compiled memory/personality plugin glue.
+
+- Select `MemoryMode::Disabled/Required`; exactly one mandatory persistence
+  participant lives outside cancellable generation and optional hooks. Keep
+  restricted handles inert until the composite factory completes recovery,
+  required model/profile validation and consumer activation.
+- Add private `OperationContext`, pinned `BehaviorSnapshot`, `EvidenceLease` and
+  publication generation to the run. Restrict diagnostic `Chat` to an isolated
+  ephemeral context without private history, persona, memory tools or recall;
+  it must not alias a product chat containing personal working state.
+- Make coordinator admission asynchronous and owned. Track the pending key as
+  well as the active run so cancellation/status/health remain responsive.
+  Acknowledge/publish acceptance after the atomic storage commit only. Lost
+  receivers do not cancel admitted work or generate a new request key.
+- Wire `admit_operation`, start, effective tool intent/result and terminal
+  settlement. Cover early backend admission failure, lock-wait cancellation,
+  middleware short circuits, tool/model errors and shutdown. Await receipt
+  settlement before terminal settlement; await terminal commit before durable
+  `Finished`. Streamed deltas remain provisional until then.
+- Pass bounded visible-output/captured-receipt DTOs to persistence; never serialize
+  raw `ChatResponse.messages`, hidden reasoning, system prompts or working context
+  as a convenient terminal transcript.
+- Introduce typed internal inference with a distinct execution class and owned
+  completion. It uses resident model weights and isolated contexts, never the
+  primary chat, ordinary tools, product submit or recursive transcript ingestion.
+- Give foreground work priority before dispatch, allocation, rendering and every
+  native prefill/decode boundary. Reserve an interactive context/permit and one
+  query-embedding slot. Count paused context residency. If resources cannot fit,
+  expose background unavailability rather than consuming interactive capacity.
+- Prepare storage before model startup; release readiness before enabling
+  authorized traffic. Supervise required consumers/writers/model users. On
+  shutdown close admission/claiming, cancel generation, settle owned work, join
+  native users, then close storage. A timeout never abandons finalization owners.
+
+Prove an authorized headless exchange, lost reply, restart reconciliation,
+confirmed/unknown tool outcome and unchanged memory-disabled behavior before
+building further product surfaces. Continue the same implementation task.
+
+### C. Form, retrieve and maintain the knowledge state
+
+Touch `memory/{extract,retrieve,situation}`, job scheduling, store transactions,
+model-worker preparation and typed memory tools.
+
+- Generalize jobs to include kind, next due, attempts, lease heartbeat/hard end,
+  attributed source excerpt, absolute spans, coverage cursor, read set and
+  dependency/policy versions. Current whole-source/add-only leases are a starting
+  point, not the extraction runtime contract.
+- Count the actual full rendered input before compute reservation, including
+  instructions, handles, schema/template and retry prefill. Keep the selected
+  1,024-token excerpt ceiling, 128 overlap, four-claim/512-output bound, one repair,
+  four passes/4,096 input/1,024 output per root and daily 60K/10K/300 seconds.
+  Shrink excerpts when the full prompt cannot fit. Record model/tokenizer identity
+  with usage; embedding work also consumes its declared compute allowance.
+- Enforce 60-second leases, 20-second heartbeat, 120-second hard lifetime and two
+  transient retries at 5/30 seconds. Expiry/reclaim advances fences. Complete
+  source/graph/scope/generation checks and effects in one writer transaction.
+  Partial coverage never advances an unlocated prefix; truncation applies no
+  proposal. Deferred/unresolved literals remain searchable.
+- Implement ambiguity-preserving aliases, source-family deduplication, typed
+  inverse navigation and proof paths. Search exact/FTS/E5 candidates, fuse ranks
+  using the specified constant 60, and investigate finite patterns under cumulative
+  node/edge/depth/token limits. No arbitrary SQL or model-defined graph code.
+- Implement versioned vector manifests/generations, finite normalized f32 storage,
+  bounded exact scans and authoritative eligibility hydration. Expose index
+  coverage/watermarks, building/unavailable/partial states and rebuild/switch
+  behavior. Keep full source/span mappings through E5's 384/64-token chunks.
+- Run E5 through a dedicated native owner worker with noncausal batch decode and
+  pooling, initially on CPU. Give query work priority over document batches and
+  copy vectors into owned results before crossing threads. Do not send an
+  embedding model through the generative chat-template/`Generate` path.
+- Build `EvidenceBundle` and `SituationSnapshot` before each product interaction,
+  without a planning-model call for normal recall. Pack through the actual chat
+  tokenizer: reserve current input, active tool protocol and minimum output,
+  then the persona and 1,024-token evidence allowance. Keep complete premises,
+  qualifications and pending corrections; never retain a stale fact alone.
+- Offer scoped `memory.search`/`memory.follow` investigation and current-source
+  preservation. Host-issued handles/intent control correction and destructive
+  actions. Recalled prose cannot grant authority, edit personality or execute code.
+- Apply identified corrections synchronously. Keep ambiguous targets unresolved;
+  do not confidently present the old value while hiding pending correction words.
+  Derive active goals, explicit reasons, blockers, questions and commitments from
+  checked premises. Connectivity alone proves neither causality nor transitivity.
+
+All named entities, typed claims and conclusions retain source role, evidence,
+valid/recorded time and revisions. Assistant promises can create assistant
+commitments, not new purported user facts. Unknown motives stay unknown.
+
+### D. Personality, situation-driven attention and delivery
+
+Touch `personality`, `memory/attention`, revisioned repositories, scheduler and
+application events. Use one agent identity/repository and the same writer.
+
+- Implement the specification's bounded profile, integer traits, compiler,
+  disposition reducer/expiry and replacement generations. Default automatic
+  disposition changes off; profile prose remains within 512 chat tokens.
+  Pin revisions at admission. Neutral behavior works without a personality
+  plugin; reject incompatible persistence-requiring configuration explicitly.
+- Make profile/disposition edit, replacement and activation modes real owner
+  commands. `interrupt_active` uses cancellation, mandatory finalization and the
+  publication barrier. It never retries completed tool effects or deletes facts.
+- Implement only the selected notice rules: due pending one-shot commitment or
+  resolved blocker of an active goal. Check every remaining blocker. Civil-time
+  resolution uses `chrono`/`chrono-tz`; ambiguous/nonexistent local times require
+  clarification. Reject recurrence rather than making an unsupported promise.
+- Persist subscriptions, fan-out cursors, cause/occurrence identity, notice state,
+  draft versions, expiry, seen/dismiss/snooze and delivery records. Publish the
+  notice plus quota/dedup state atomically. Disconnect/restart/redrafting cannot
+  create another cause or refill its budget.
+- Wake on durable changes/due time/resume; no periodic model inference. Native
+  drafting runs only after deterministic eligibility/budget checks. Revalidate
+  premise/profile/policy revisions before publication. Template factual inbox
+  cards handle drafting failure; unqualified prose never reaches live delivery.
+- Deliver typed assistant notices without manufacturing user turns. Preserve
+  inbox items while no transport is connected. UI deduplicates stable IDs;
+  published, client-acknowledged and owner-dismissed states remain distinct.
+- Enforce default live opt-out, owner-capped 0/1/2 per rolling day, two-hour gap,
+  quiet hours, five-minute activity deferral, expiry and permanent same-cause
+  dismissal. Background telemetry/heartbeats do not count as owner activity.
+
+The feature is fully implemented even while its live promotion gate is closed;
+there must be no placeholder timer, fake canned proactive conversation or
+unimplemented user action left in this delivery.
+
+### E. Optional authenticated web and durable headless adapters
+
+Touch `assistant-web`, frontend FSD features/contracts, daemon CLI, OpenAPI and
+packaging. The core above has no dependency on web types or browser sessions.
+
+- Add opt-in startup memory configuration with explicit data/model manifest,
+  budgets, timezone, profile and owner attention policy. Keep existing default
+  invocation compatibility. In enabled mode, `--no-web --prompt` and
+  `--no-web --interactive` use authorized durable product commands; raw decoder
+  diagnostics require memory disabled. Headless resident jobs/inbox keep working.
+- Parse `assistant pair` without requiring/loading a model. Install its private
+  0600 Unix pairing socket under 0700 runtime storage only with the web adapter;
+  check peer UID. General-purpose Unix/D-Bus transport remains outside scope.
+  Offline maintenance cannot open a second writer while the daemon owns the store.
+- Implement the selected one-use 256-bit/5-minute pairing code and in-memory
+  bearer sessions (8-hour absolute, 30-minute idle), one outstanding code and
+  five exchange attempts/minute. Never put credentials in URLs, logs or browser
+  persistent storage. Expiry/logout/revoke closes subscriptions and queues.
+- Implement every v2 endpoint family in the specification, including lookup by
+  original key, forget status and bounded export. Authenticate all personal
+  reads, bootstrap, submission, status, cancellation and streams. Disable or
+  equally protect legacy routes; no memory access through the v1 path.
+- Replace `EventSource` with bounded authenticated fetch-SSE. Handle UTF-8/chunk
+  boundaries, aborted streams, token expiry, lag and instance changes. Preserve
+  atomic snapshot/stream registration and distinguish stream cursors from stable
+  operation IDs. SSE heartbeat traffic must not renew idle expiry by itself.
+- Replace the frontend's instance/nine-minute retry assumptions with durable
+  reconciliation. Preserve opaque pending identity across reload if needed,
+  without persisting a bearer or conversation text. After re-pairing, look up
+  the original operation; never automatically replay it or mint a new key.
+  A committing/indeterminate request is not a definite rejection.
+- Add complete owner UI: memory/evidence/path inspection, preserve/correct,
+  forget preview/progress, profile/disposition editor, inbox actions, component
+  health, export and recovery controls. Keep technical counters in inspection;
+  the conversation shows useful context, truthful saved state and source links.
+- Update Rust schemas, OpenAPI, TypeScript validators, reducers and browser
+  fixtures together. Preserve the current composer/streaming/Markdown behavior.
+
+The browser must feel like the existing working chat with durable context and
+owner controls, not a collection of disconnected demonstration pages.
+
+### F. Publication, forgetting, export and restore across all features
+
+Touch application publication, every personal reader/transport, dependency
+storage, maintenance, backup/restore and owner recovery commands.
+
+- Add authoritative source/claim dependencies for operation outputs, retained
+  receipts, situation, appraisals, notices and exports. The storage baseline's
+  own-exchange suppression is insufficient for text derived in later exchanges.
+- Revalidate selected revisions before model dispatch and publication. Direct
+  facts use their own revisions; derived conclusions also use scope/eligibility
+  epochs, including inserts that invalidate absence-based reasoning. Do not
+  hold a SQL transaction throughout inference.
+- Implement durable forget progress: reviewed selection -> SQL suppression ->
+  journal acknowledgment -> publication barrier -> bounded physical purge.
+  Acknowledge logical forgetting only after the first three execution barriers
+  settle. Invalidate affected prompts/history and conservatively mask derived
+  copies until revalidated. Reject late job fences/results.
+- Cover model deltas, tool replies, queued SSE, snapshots, evidence/search,
+  inbox and export. Tag publications with store/deletion generation and check at
+  the final controlled send boundary; drain/close queues that cannot be revoked.
+  Already delivered bytes and downloaded external copies cannot be retracted.
+- Implement bounded versioned JSONL export, authorized completion/download and
+  generation recheck. Backup retention/expiry failures remain visible; journal
+  retention covers every retained backup. Explicit preservation is not silently
+  evicted to free space.
+- Implement restore activation, not merely candidate creation: quiesce admission,
+  verify manifests/checksums, reconcile newer deletions, validate integrity,
+  rebuild/catch up indexes, revoke sessions/leases, reset working contexts and
+  atomically choose the new store. Hold stable daemon ownership across the switch;
+  use a durable activation marker/pointer and directory fsync, not a fragile
+  in-process handle replacement. Crash recovery determines old/new activation
+  without mixing them. Failed restore preserves the old directory.
+- Preserve migration 1 and migration 2 byte-for-byte. Add ordered migrations for
+  the new records and old-store tests. Never promote a backup that cannot prove
+  deletion-history coverage; retain it quarantined for explicit owner reconciliation.
+
+### G. Qualification, packaging and finished owner walkthrough
+
+Build acceptance around the running product, with separate isolated native and
+scripted failure fixtures. Add reproducible commands/reports for model quality,
+headless/browser journeys and performance. No fabricated benchmark numbers.
+
+| Evidence | Required result |
 | --- | --- |
-| `MemoryMode::Disabled / Required` | Builder-level selection of exactly one mandatory persistence participant. Missing required registration fails build/startup. |
-| `AuthorizedOperation` / `OperationContext` | Host-created owner authority, durable operation ID, client identity, pinned behavior revision and reservations. Private fields; no model deserialization. |
-| `PersistenceParticipant` | Admission, tool intent/result, terminal outcome and status lookup. Disabled implementation preserves current ephemeral behavior. |
-| `EvidenceBundle` / `EvidenceLease` | Owned copied evidence, provenance, selected revisions/scopes/epoch, coverage and finite run budget. No SQL transaction survives into inference. |
-| `InternalInferenceHandle` | Owned bounded structured job requests, execution class, cancellation and measured completion. No product submission, ordinary tools or primary working history. |
-| `PublicationGuard` | Current session/store generation and evidence eligibility for personal output; coordinates correction, forgetting and restore barriers. |
-| `MemoryHealth` | Storage readiness, semantic/extraction coverage, oldest job age, last stable reason codes and component degradation. No private text or paths. |
+| Q1/Q2 platform/storage | Locked Rust 1.88 build, selected features, distributable Linux startup, v1/v2 upgrades and process-kill/atomicity/fence/quota/reservation tests for all new transactions. |
+| Q3 embeddings | Safe shape/index/rank APIs; checksummed artifact/tokenizer parity; matched FP32 cosine >=0.999, normalization, batch isolation and generation-switch/deletion coverage. |
+| Q4 extraction/answers | At least 120 held-out cases plus separate development cases; extraction precision >=95%, recall >=90%, zero critical identity/attribution/correction errors; supported answers >=90% and unknown abstention >=95%. |
+| Retrieval | Direct/paraphrase evidence Recall@10 >=95%; complete-path recall >=90% for three/six/eight-edge cases, with missing/reversed edges, cycles/hubs and current/historical queries. |
+| Q5 resources | Paired cold/warm foreground runs under queued background load; p95/p99, CPU/RSS/VRAM, embedding/prefill time and oldest backlog. Target p95 initial recall <250 ms at 100K records and <10% foreground first-token regression; report supported capacity if a target fails. |
+| Q6 personality | Deterministic edit/reducer/rebuild replay and paired fixed-evidence profiles; factual conclusions/permissions unchanged, tone adherence reviewed, in-flight edits safe. |
+| Q7 initiative | Fake-clock timezone/DST/quiet/dismissal/restart races; >=90% useful reviewed candidates with missed opportunities reported; opt-in local-use week before live promotion. |
+| Q8 security/UI/recovery | Unauthorized/expired/revoked route and stream matrix; injection, lost replies, restart resnapshot, deletion during blocked delivery/export, older-backup restore and atomic activation failures. |
 
-### Durable operation and source model
+Use six held-out groups of at least 20 cases: personal facts/attribution;
+English/Ukrainian paraphrase; corrections/time; chains/missing premises;
+goals/reasons/commitments; unknown/injection/trust boundaries. Review/freeze
+expected evidence and category counts before tuning. The nineteen development
+examples and nine-step narrative are not held-out or executed native results.
+Score extraction, retrieval and answer reading separately, with human-reviewed
+ambiguous cases; a model judge alone is not the authority.
 
-Separate the durable operation ID from runtime chat/run IDs and SSE revisions.
-Retries use the same owner + client namespace + client ID + request ID tuple,
-with a canonical validated-input digest. The transport authenticates the owner;
-request fields never select a principal. Encode the tuple unambiguously rather
-than concatenating unescaped strings into existing opaque-key limits. A fresh
-HTTP session must still resolve an earlier operation owned by the same owner.
+Default tests use temporary stores, scripted engines/embeddings and injected
+time. Dedicated native runs require the declared artifacts and fail if absent.
+Use isolated quality fixtures while retaining production budgets in each case;
+separate load tests prove the real rolling-day/backlog limits. Inventory 10K,
+100K and 1M stores where resource budgets permit; one million 384-float vectors
+already require 1.536 GB before metadata, text, WAL and model residency.
 
-The proposed persisted operation states are `accepted`, `running`, `completed`,
-`cancelled`, `failed` and `interrupted`. `finalizing` is an observable host state
-while terminal persistence settles. A lost response reports `Indeterminate`
-with the original request key; lookup resolves the durable state. A cancelled
-accepted operation retains its input. Restart marks unfinished operations
-interrupted, preserves confirmed tool receipts, and marks unmatched dispatched
-tool intents as outcome unknown. It does not restart generation or replay tools.
+The final walkthrough must execute this story through both the headless core
+and authenticated WebUI:
 
-Admission commits operation, literal user source, eligible search document,
-formation work or deferred-formation marker, change event, replay receipt and
-finalization reservation together. Source records carry operation/ordinal,
-role, attribution, observed time, exact bytes, retention class and extraction
-coverage. Explicit preservation is distinct from ordinary accepted dialogue.
+1. Preserve Lena/sister/veterinarian/Lviv from ordinary dialogue; restart and
+   clear working history. Ask a paraphrased English/Ukrainian question whose
+   answer needs the relationship/occupation chain and show its sources.
+2. Add an explicit goal, reason and blocker. Continue a different session and
+   demonstrate the assistant knows the current unfinished situation.
+3. Correct the city while a job/answer is in flight. Reject obsolete work and
+   answer with the corrected evidence; distinguish historical questions.
+4. Edit personality and an expiring disposition. Keep facts fixed while the
+   next operation adopts the selected voice; replacement preserves memory.
+5. Resolve the goal's blocker and schedule a concrete one-shot commitment.
+   Produce inbox notices, exercise quiet/activity policy and dismiss/snooze;
+   restart without duplicate causes or free quota.
+6. Forget while a stream/export/job is blocked. Confirm the journal/publication
+   barrier, drain purge, restore a pre-forget backup and prove no resurrection.
+7. Lose acceptance/terminal replies and kill the process around a tool effect.
+   Reconcile the same key, preserve known receipts and leave uncertainty honest.
+8. Run memory disabled and web disabled independently; verify regressions and
+   zero idle model inference when no eligible work exists.
 
-Visible assistant output is retained with assistant attribution. It can support
-what the assistant said or promised; it is not independent evidence that a user
-fact is true. Hidden reasoning never enters this store. Tool registration must
-declare capture and effect policy before serialization; ephemeral process data
-keeps minimal invocation/effect state without its raw argument/result text.
-Prompt-injected source text cannot change retention, capabilities or persona.
+Run workspace Rust gates, Rust 1.88 storage/integration tests, relevant binding
+native tests, frontend check/test/build and browser tests. Update architecture,
+LLM/memory/web contracts, model preparation instructions, owner startup/controls,
+recovery examples and the documentation map. Report existing lint debt separately
+from new warnings; do not edit generated bindings or weaken safety gates.
 
-### Admission and finalization ownership
+## Completion and timed validation
 
-Use a short pending reservation in the coordinator while an owned admission
-task awaits storage; serialize product admission without blocking the actor's
-cancel/status/health loop. The actor must account for pending admissions as
-well as the one active run. Publish acceptance only after durable commit.
-If a reply receiver disappears, the owned task still reconciles its result;
-the caller retries or looks up using the same key.
+Implementation completion means every selected capability above exists, is wired
+through the actual application/adapters and has executable acceptance coverage.
+No required path is a stub, an uncalled service, mock-only inference or another
+unimplemented milestone. Deliver the run commands, artifact identities, measured
+reports and known limits with the change.
 
-Acquire bounded critical command capacity and reserve a worst-case receipt /
-finalization envelope before committing admission. Derive bytes from validated
-run/tool/message limits and measured SQLite/WAL overhead. Reservations survive
-crash and release only on persisted terminal settlement. Ordinary commands and
-background work cannot consume them. Emergency suppression has its own bounded
-allowance and remains usable after ordinary admissions stop.
-Dispatch critical commands ahead of queued optional work at writer command
-boundaries; spare capacity in a single FIFO alone does not bound their wait.
-Keep transactions and maintenance batches bounded, and account for queue wait
-separately from the SQL execution deadline.
+Complete v1 release qualification still requires Q1-Q8, including real model
+results and the previously selected opt-in week. Calendar time and human
+usefulness review cannot be replaced by passing code tests. The final task must
+supply the working reviewed-inbox/live delivery paths and their instrumentation;
+live remains disabled until its promotion evidence exists. This is a validation
+boundary, not permission to defer implementing initiative.
 
-At typed tool dispatch, validate authority and arguments, persist intent, then
-invoke the actual handler. Persist the bounded result or unknown outcome before
-publishing `ToolFinished` or feeding that result into the next model turn.
-Middleware cannot bypass these boundaries or rewrite correlation/authority.
-Reserve invocation ordinals under the durable operation, independent of a
-model-generated call ID. Tool-specific idempotency can improve recovery, but
-the host cannot promise exactly-once external effects generally.
+If an empirical gate fails, fix what can be fixed within this same delivery and
+report the exact remaining blocker. Do not declare complete v1 by silently
+lowering thresholds, dropping semantic memory/personality/initiative, or presenting
+another storage-only result. No further architecture-research phase is planned.
 
-Finalization is owned work outside request cancellation/deadline selection and
-optional observers. It covers early runtime-admission failure, lock wait
-cancellation, middleware short circuit, model/tool errors and ordinary completion.
-Commit visible terminal output, captured receipts and outcome before publishing
-durable `Finished`. Streaming text before that point is provisional; restart
-need not recover every partial delta. If persistence cannot settle, stop new
-personal admissions, expose indeterminate status and retain recovery identity.
+## Primary research checked for this revision
 
-### Evidence, correction and publication
+- E5's [configuration](https://huggingface.co/intfloat/multilingual-e5-small/raw/main/config.json)
+  and [model card](https://huggingface.co/intfloat/multilingual-e5-small) establish
+  the mixed architecture/tokenizer and interface contract. Native parity remains
+  unmeasured here; converter risk is an inference from those and the pinned code.
+- [LongMemEval](https://arxiv.org/abs/2410.10813) separates extraction,
+  multi-session/temporal reasoning, updates and abstention. These motivate
+  separate evaluation tracks, not a claim that its benchmark was run here.
+- [Tokio JoinHandle](https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html)
+  documents detached tasks on drop and blocking-task cancellation limits;
+  [Notify](https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html) carries wake
+  signals rather than work data. Owned completion and SQL cursors follow from
+  these contracts.
+- [SQLite isolation](https://sqlite.org/isolation.html) permits old reader
+  snapshots after a writer commits; application publication revalidation is an
+  additional requirement, not a guarantee supplied by WAL.
+- [OWASP session guidance](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+  supports careful credential exchange/lifecycle handling. The selected local
+  pairing/bearer design and exact time limits are project choices.
 
-Initial recall uses current input and bounded recent referents, exact aliases,
-FTS and qualified graph paths; semantic candidates join after qualification.
-No planning-model call is required for ordinary recall. Report missing channels
-explicitly. Offer bounded `search` and `follow` tools when the initial bundle
-does not answer the question, using per-run cumulative budgets and scoped handles.
-Do not expose raw SQL, arbitrary graph code, unrestricted IDs or model-created
-owner capabilities. Owner correction/forget commands require host-issued intent;
-ordinary recalled prose is not authorization for them.
-
-Copy evidence in a short reader snapshot, pack with the actual chat tokenizer,
-then revalidate before dispatch and publication. Keep complete source paths,
-polarity, attribution, time and unresolved corrections together. Revalidation
-uses selected direct revisions and graph scope/eligibility epochs for derived
-claims. A newer minimum commit sequence never means every secondary index has
-caught up: expose separate coverage watermarks.
-
-Known-target correction changes versions synchronously. An active run using
-invalidated evidence is interrupted before further publication. A restart of
-that answer is allowed only when it cannot replay a tool effect. Ambiguous
-natural-language correction is durably pending and prompts target clarification.
-
-For forgetting, implement `suppression committed -> journal acknowledged ->
-publication barrier complete -> purging -> purged` as inspectable progress.
-The final logical-forget receipt requires the first three stages. Register and
-drain/invalidate all personal publishers: model deltas, tool responses,
-snapshot/history, recall, inbox, SSE queues and export. Tag queued responses
-with store/deletion generation and recheck at the final application-controlled
-send boundary. A transport that cannot revoke its old queue must close/drain it
-before acknowledging the barrier. Bytes already handed to the OS/client are
-outside the revocation guarantee.
-
-Clear affected working prompts/history and invalidate derived state, not only
-FTS rows. Rehydrate eligible bounded history after restart; do not load the
-entire archive into the model or replay historical tool calls. The database is
-the authority; display snapshots and working context are replaceable views.
-
-## Ordered implementation changes
-
-Each item is a reviewable change with meaningful failure tests. The sequence
-refines P1-P8 rather than defining an alternative reduced v1.
-
-### 1. Close storage readiness gaps — P1, Q1/Q2
-
-Touch `memory/{types,store}` and storage docs only.
-
-1. Introduce immutable ordered migrations with a version-1 upgrade fixture.
-2. Add explicit critical-command classification, reserved bytes/permits and
-   component storage health. Fix near-quota suppression and bound optional growth.
-3. Add product-operation, tool-invocation and attributed-source records;
-   transactional admission/receipt/finalization/status commands.
-4. Record deferred formation without dropping accepted literals when optional
-   job quota is reached. Add durable event consumer cursors before consumers run.
-5. Make inspection pagination/truncation explicit; keep spent-key/deletion rules
-   applicable to new operation receipts and retained outputs.
-
-Exit: scripted temporary-store tests prove acceptance/replay/restart/unknown tool
-outcomes, quota reservations and deletion across these new record types.
-No model or HTTP dependency is needed. This is the immediate next implementation
-package; do not bundle embeddings or personality into it.
-
-### 2. Integrate the durable headless application — P2, Q2/Q8
-
-Touch `application`, `chat`, `tools`, `runtime/{mod,services}`, daemon assembly
-and a narrow compiled memory plugin/composite factory.
-
-1. Freeze `Disabled/Required`, host authority, required persistence participant
-   and readiness in the builder. Reject duplicate required participants.
-2. Wire asynchronous admission, status reconciliation, typed tool persistence
-   and owned finalization; preserve existing disabled-mode behavior.
-3. Prepare/recover storage before models, activate consumers behind readiness,
-   and add storage/job task supervision to runtime failure propagation.
-4. Order shutdown: close admission and job claiming; stop/cancel generation;
-   settle admitted work and job completions; join native users; close storage.
-   Do not close a shared worker control early if finalization still needs it.
-5. Add owner CLI inspection/remember/status and explicit data-directory/config
-   selection. Headless operation needs no HTTP session. Keep diagnostics using
-   ephemeral `Chat` clearly distinct from authorized product commands.
-
-Exit: a scripted headless conversation survives restart; retrying its accepted
-key returns the same operation; cancel/drop/shutdown do not lose terminal or
-tool state. Required storage failure never falls back to volatile acceptance.
-Personal HTTP access remains unavailable until change 3 passes.
-
-### 3. Authorize adapters and complete the output barrier — P2, Q8
-
-Touch `assistant-web`, daemon pairing entry point, application publication,
-typed frontend contracts and `docs/web-api.yaml`.
-
-1. Implement the specified owner-only Unix pairing socket, one-use code,
-   rate-limited exchange, in-memory bearer sessions and revocation/expiry.
-2. Protect bootstrap, submit, status, snapshot, cancellation, memory and SSE
-   access. A v1 route must be disabled or equally authorized in required mode.
-3. Add v2 stable operation/receipt/status contracts and authenticated fetch SSE.
-   Update Rust, OpenAPI, TypeScript validators and resnapshot behavior together.
-4. Implement generation-aware publication, correction interruption and the
-   logical-forget barrier across headless and web paths; redact durable view
-   records and clear affected working state.
-5. Show literal saved / structuring pending / indexed coverage distinctly;
-   resolve timeouts by original key. A generated “I remember” sentence is not
-   the persistence confirmation. Give owners inspection and forget progress.
-
-Exit: unauthorized requests and old sessions cannot retrieve personal content;
-blocked SSE clients cannot publish stale queued data after the forget barrier;
-reload/reconnect does not duplicate execution. Explicit remember and lexical
-recall work in a real authenticated conversation after restart.
-
-### 4. Isolated internal inference and durable scheduling — P3, Q5
-
-Touch `runtime/jobs`, worker command/preparation contracts and memory job storage.
-
-1. Add structured output mode using the existing template/parser/grammar path;
-   isolate job contexts from the primary chat and disable ordinary tools.
-2. Enforce foreground priority before dispatch, context allocation, prompt
-   rendering and each native prefill/decode boundary. Reserve an interactive
-   context and permit; disable background execution visibly if they cannot fit.
-3. Persist due times, bounded retries, heartbeat, hard lifetime and fence checks.
-   Supervise tasks; wake from durable events/due time with notification as a hint.
-4. Prepare/count the full prompt before reserving its evaluated-input maximum;
-   include schemas, template and retries. Reconcile measured tokens/native time
-   on completion and retain conservative charges after crash.
-   Shrink/split the offered excerpt when its full prompt cannot fit the remaining
-   root allowance; do not silently increase that allowance to accommodate it.
-5. Validate graph read/scope revisions and source/deletion generation atomically
-   with completion. Preserve root cause through downstream jobs.
-
-Exit: fake-clock/scripted jobs prove lease expiry, restart, cancellation,
-reservation exhaustion and idle sleep; paired native trials measure foreground
-first-token latency, resource peaks and backlog under queued background work.
-Do not describe token rotation as preemption of a synchronous native call.
-
-### 5. Form and retrieve source-backed knowledge — P4/P5, Q3/Q4/Q5
-
-Use separate changes for binding maintenance, retrieval and extraction.
-
-1. Audit/fix embedding output length, valid indices, pooling/rank behavior and
-   lifetime in the maintained Rust API/shims. Read `bindings-fork.md` first;
-   leave the pinned upstream submodule unchanged.
-2. Qualify a checksummed multilingual-E5-small artifact against matched FP32
-   reference vectors. Use the selected prefixes, 384 dimensions, mean pooling,
-   normalization and 512-token total input bound. Reject invalid shapes/norms.
-3. Implement aliases with ambiguity, typed inverse navigation, path bundles,
-   source-family deduplication, continuations and tokenizer-aware packing.
-4. Add manifest/versioned vectors, bounded exact search and hybrid ranking;
-   revalidate authoritative source eligibility after candidate selection.
-   Expose building/unavailable/partial coverage and test generation switches.
-5. Add excerpt/cursor extraction with exact absolute source evidence, add/correct
-   proposals, attribution/modality checks and one bounded repair. Partial
-   coverage never advances an unlocated prefix; truncation commits no proposal.
-6. Resolve pronouns/names only from offered bounded evidence. Retain uncertainty
-   for ambiguous identity or unsupported motives; never merge by name alone.
-7. Derive situation records from checked premises and dependency revisions:
-   active goals, explicit reasons/blockers, open questions and commitments.
-
-Exit: source-only, seeded-graph and fully model-produced tests are reported
-separately. English/Ukrainian paraphrase, corrected facts and three-/six-/eight-
-edge paths pass held-out gates with history cleared. Failed model qualification
-keeps literals available and formation explicitly unqualified; it does not
-silently promote invalid model output.
-
-### 6. Stable personality and useful initiative — P6/P7, Q6/Q7
-
-1. Implement revisioned personality, pure behavior compilation and disposition
-   reducer; pin a behavior snapshot at admission. Neutral profile works without
-   a personality plugin. Tone cannot change facts, permissions or retention.
-2. Add deterministic due-commitment/resolved-blocker eligibility, cause identity,
-   evidence subscriptions, persistent inbox and owner seen/dismiss/snooze actions.
-3. Validate timezone ambiguity, quiet hours, expiry, live quota and activity
-   deferral with injected time; no periodic model inference.
-4. Draft only eligible, current candidates through isolated jobs; revalidate
-   before delivery. Deliver typed assistant notices, not fabricated user turns.
-5. Start with reviewed inbox candidates. Promote opt-in live delivery after Q7,
-   including missed opportunities and a local-use week, not just syntax tests.
-
-Exit: restart cannot redeliver a dismissed cause or refill its budget; stale
-evidence/profile drafts are rejected; one remaining blocker prevents a false
-“ready now” suggestion. User-authored persona changes voice while fixed evidence
-continues producing the same factual conclusions.
-
-### 7. Recovery, capacity and complete acceptance — P8, Q1-Q8
-
-Complete owner export, backup retention and restore activation with an
-admission/output barrier, journal reconciliation, new store/session generation
-and durable active-store selection. Keep the old directory on failed restore.
-The current restore candidate is useful preparation, not an atomic live switch.
-If newer deletion history cannot be established, keep the candidate quarantined.
-
-Measure 10K/100K/1M record fixtures where the configured resource budget permits;
-report the supported capacity when it does not. Include vector payload, model
-residency, WAL, pending work and peak allocation, not database size alone. At
-384 FP32 dimensions, one million vectors alone require 1.536 GB before metadata.
-Increasing quota and changing the search index are distinct owner/engineering
-decisions. Do not advertise a million-record capacity under the default 2 GiB
-combined quota without measured evidence.
-
-Exit: complete headless and optional-web journeys, disabled-mode regression,
-all required Q gates and reproducible qualification artifacts. Real model gates
-must fail explicitly if their selected artifact is unavailable; ordinary tests
-remain model-free. Compact protocol Q9 is optional.
-
-## Acceptance and failure matrix
-
-Build these fixtures as each boundary appears, not as a final cleanup phase.
-Use temporary stores, scripted engines/tools, injected clock, controlled writer
-barriers and actual subprocess death where durability is the claim.
-
-| Scenario | Required observation |
-| --- | --- |
-| Same request, lost acceptance reply, restart, retry | One durable operation/source, same receipt; changed content conflicts; no second execution. |
-| Cancel before and after admission | Before commit there is no acknowledged operation; after commit input remains and terminal outcome settles. |
-| Crash before intent / after dispatch / after result commit | No unrecorded permitted dispatch; unmatched intent is unknown; confirmed receipt survives without replay. |
-| Near quota / full queue / physical write failure | New ordinary work is refused; admitted finalization and suppression use reservations; external exhaustion gives no false success. |
-| Storage worker/required consumer dies | Readiness blocks new personal admission; supervised error reaches daemon; no silent ephemeral fallback. |
-| Remember Lena, clear working history, restart | Literal survives; separate qualified run builds person/relationship/occupation/place evidence. |
-| Ask who could help with an animal problem, using different language | Relevant sister/veterinarian chain is found with provenance; no invented medical suitability or availability. |
-| Add another Lena and a quoted/hypothetical claim | No name-only merge or promotion of quotation/hypothesis into a current fact. |
-| Correct Lviv to Kyiv while extraction/answer is running | Old graph/read-set result cannot overwrite or continue publishing stale evidence; correction status is truthful. |
-| Three/six/eight-edge chain, reversed relation, missing edge, cycle/hub | Complete supported path or explicit truncation/abstention; no inverse-direction factual invention or infinite work. |
-| Forget during blocked SSE, recall snapshot, export and late job | Barrier prevents subsequent controlled publication; journal survives restart; late job is rejected. |
-| Restore backup taken before forgetting | Newer tombstones apply before access; sessions/leases invalidate; missing journal history prevents automatic activation. |
-| Expired/revoked token, absent Origin, alternate v1 route, reconnect | Owner authentication remains required independent of browser headers and route version. |
-| Due commitment / resolved blocker / another blocker remains | Eligible inbox item is correct, useful, deduplicated and respects quiet/activity/owner policy. |
-| Personality edit mid-run and dismissed notice after restart | Current operation uses its pinned behavior; edits do not create a fresh notice cause or factual authority. |
-| Headless and web run the same command trace | Same durable semantics and scoped permissions; transport differences do not change evidence eligibility. |
-
-For recall quality, separate extraction accuracy, candidate/path retrieval and
-final answer support. Retain at least 120 held-out cases separate from the
-nineteen authored development examples. Freeze corpus hashes, prompts, native
-pin, model/converter/manifests, settings and category counts before promotion.
-The existing nine-step acceptance narrative is a fixture specification, not a
-passed end-to-end test.
-
-Retain the existing targets: extraction precision >=95% / recall >=90% with zero
-critical identity/attribution/correction violations; direct evidence Recall@10
->=95%; complete-path recall >=90%; supported answers >=90%; appropriate unknown
-abstention >=95%. Measure paired cold/warm p95/p99, query embedding and backlog;
-the original first-device targets are p95 initial recall below 250 ms at 100K
-records and foreground first-token regression under 10%. These are qualification
-targets, not results established by this review.
-
-## Research conclusions and verification
-
-The source review supports continuing the selected architecture, with integration
-correctness as the next priority. The following primary references sharpen the
-implementation details:
-
-- SQLite WAL readers retain their old snapshot while writers commit. Therefore
-  short SQL snapshots alone cannot prevent stale publication; application-level
-  evidence/generation checks are required. This is an integration inference
-  from [SQLite isolation](https://sqlite.org/isolation.html).
-- A queued send is not a commit receipt; Tokio documents cancellation behavior
-  and reservation APIs. Use owned command completion and admission reservations,
-  based on [Tokio Sender](https://docs.rs/tokio/latest/tokio/sync/mpsc/struct.Sender.html).
-- Dropping a task join handle detaches it, and already running blocking tasks
-  cannot be aborted that way. Keep finalization/native users owned and joined;
-  a timeout is not an ownership barrier.
-  [Tokio JoinHandle](https://docs.rs/tokio/latest/tokio/task/struct.JoinHandle.html).
-- Keep the runtime SQLite version guard: the upstream WAL-reset fix is present
-  in 3.51.3 and later, with specific earlier backports. The current selection
-  uses the fixed version. [SQLite WAL notes](https://sqlite.org/wal.html).
-- The selected E5 model card specifies embedding shape, prefixes, pooling and
-  normalization; it does not qualify our GGUF conversion or local native path.
-  [Multilingual E5](https://huggingface.co/intfloat/multilingual-e5-small).
-- Graphiti also reports structured extraction reliability problems with small
-  local models. Schema-constrained syntax still needs separate semantic gates;
-  changing graph storage does not resolve that risk.
-  [Graphiti structured-output guidance](https://github.com/getzep/graphiti#structured-output-and-small-models).
-- LongMemEval separates extraction, multi-session/temporal reasoning, updates
-  and abstention. Use these categories to avoid judging the whole memory system
-  by one successful exact-match retrieval.
-  [LongMemEval paper](https://arxiv.org/abs/2410.10813).
-- OWASP documents token leakage through URLs and server-side session lifecycle
-  controls. The selected loopback bearer/pairing flow is a project decision;
-  its exact lifetimes and transport choices are not an OWASP prescription.
-  [Session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html).
-
-This change adds planning documentation only. It does not requalify Rust code,
-model quality, distribution or scale. Previously recorded storage tests remain
-evidence for that storage milestone, not for these unimplemented integration
-contracts. The first implementation review should contain change 1's commands,
-migrations and failure tests, followed by change 2's headless durable journey.
+This revision inspected source/artifact availability and primary documentation.
+It did not change production code, run a new model benchmark or repeat the
+previous milestone's Rust tests.

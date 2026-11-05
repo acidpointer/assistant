@@ -7,8 +7,8 @@ implemented boundary and compatibility choice.
 The daemon and WebUI do not enable it yet. Automatic extraction, semantic
 embeddings, personality, initiative and product output barriers remain separate
 integration work; this module does not claim complete v1 delivery.
-See the [integration plan](memory-integration-plan.md) for the source-audited
-gaps and ordered next changes, including critical capacity and product durability.
+See the [final integration plan](memory-integration-plan.md) for the complete
+remaining runtime, model, personality, attention and product delivery.
 
 The first integration package now supplies durable **library commands** for
 product admission, tool intent/result and finalization. The application still
