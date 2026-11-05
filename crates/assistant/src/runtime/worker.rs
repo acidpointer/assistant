@@ -542,6 +542,12 @@ fn prepare_input<'m>(
                         _ => llama_cpp::chat::ToolChoice::Auto,
                     })
                     .with_parallel_tool_calls(false);
+            if let Some(schema) = &request.options.json_schema {
+                if schema.len() > 65_536 {
+                    return Err(ChatError::Limit("JSON schema bytes"));
+                }
+                params = params.with_json_schema(schema);
+            }
             if !request.tools.is_empty() {
                 params = params.with_tools(serde_json::to_string(
                     &request

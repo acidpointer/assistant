@@ -70,6 +70,13 @@ int32_t llama_context_set_causal_guarded(struct llama_context * ctx, bool causal
 // Complete pending work with the shared exception/TLS error contract.
 int32_t llama_context_synchronize_guarded(struct llama_context * ctx);
 
+// Tokenizers can throw (e.g. SPM metadata without byte fallback). Status uses
+// shared TLS errors; count keeps llama_tokenize's signed required-size contract.
+// On failure count is zero and callers must not consume the token buffer.
+int32_t llama_tokenize_guarded(const struct llama_vocab * vocab,
+        const char * text, int32_t text_length, llama_token * tokens,
+        int32_t capacity, bool add_special, bool parse_special, int32_t * count);
+
 // Owned scalar snapshots of the pinned C++ model/cache internals. No pointers
 // or C++ containers cross this ABI. kind: 0=no cache, 1=full, 2=SWA, 3=recurrent.
 struct llama_cache_layer_info {

@@ -16,6 +16,8 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { version = "1", features = ["rt", "macros", "signal", "io-util", "io-std"] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+getrandom = { workspace = true }
 
 [features]
 default = ["vulkan"]

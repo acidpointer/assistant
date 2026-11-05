@@ -31,8 +31,8 @@ use llama_cpp_sys::{
     llama_model_n_layer_nextn, llama_model_n_params, llama_model_n_swa,
     llama_model_rope_freq_scale_train, llama_model_rope_type, llama_model_save_to_file,
     llama_model_size, llama_model_target_layer_ids, llama_model_target_layer_ids_n,
-    llama_split_path, llama_split_prefix, llama_token_to_piece, llama_tokenize, llama_vocab,
-    llama_vocab_type, LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
+    llama_split_path, llama_split_prefix, llama_token_to_piece, llama_vocab, llama_vocab_type,
+    LLAMA_VOCAB_TYPE_BPE, LLAMA_VOCAB_TYPE_SPM,
 };
 
 use crate::context::params::LlamaContextParams;
@@ -1105,17 +1105,23 @@ impl LlamaModel {
         }
         let buffer_capacity = c_int::try_from(buffer.capacity())?;
         let text_length = c_int::try_from(str.len())?;
-        let size = unsafe {
-            llama_tokenize(
-                self.get_vocab().vocab.as_ref(),
+        let mut size = 0;
+        // SAFETY: vocabulary and UTF-8 input remain live for this synchronous
+        // call. The vector reserves capacity uninitialized tokens; length stays
+        // zero on any native exception. The shim contains C++ unwinding.
+        crate::shim::check_status(unsafe {
+            llama_cpp_sys::llama_tokenize_guarded(
+                self.get_vocab().vocab.as_ptr(),
                 str.as_ptr().cast(),
                 text_length,
                 buffer.as_mut_ptr().cast(),
                 buffer_capacity,
                 add_bos,
                 parse_special,
+                &mut size,
             )
-        };
+        })
+        .map_err(|_| StringToTokenError::Native)?;
 
         // if we fail the first time we can resize the vector to the correct size and try again. This should never fail.
         // as a result - size is guaranteed to be positive here.
@@ -1125,17 +1131,23 @@ impl LlamaModel {
                 buffer.reserve_exact(required);
             }
             let retry_capacity = c_int::try_from(buffer.capacity())?;
-            unsafe {
-                llama_tokenize(
-                    self.get_vocab().vocab.as_ref(),
+            let mut retried = 0;
+            // SAFETY: the refreshed vector capacity bounds native writes; the
+            // guarded call preserves length zero on failure, as above.
+            crate::shim::check_status(unsafe {
+                llama_cpp_sys::llama_tokenize_guarded(
+                    self.get_vocab().vocab.as_ptr(),
                     str.as_ptr().cast(),
                     text_length,
                     buffer.as_mut_ptr().cast(),
                     retry_capacity,
                     add_bos,
                     parse_special,
+                    &mut retried,
                 )
-            }
+            })
+            .map_err(|_| StringToTokenError::Native)?;
+            retried
         } else {
             size
         };
@@ -1165,17 +1177,22 @@ impl LlamaModel {
         if let Some(position) = str.as_bytes().iter().position(|byte| *byte == 0) {
             return Err(StringToTokenError::InteriorNul(position));
         }
-        let size = unsafe {
-            llama_tokenize(
-                self.get_vocab().vocab.as_ref(),
+        let mut size = 0;
+        // SAFETY: null output with zero capacity requests size only. Native
+        // exceptions are contained and no token buffer is read on failure.
+        crate::shim::check_status(unsafe {
+            llama_cpp_sys::llama_tokenize_guarded(
+                self.get_vocab().vocab.as_ptr(),
                 str.as_ptr().cast(),
                 c_int::try_from(str.len())?,
                 std::ptr::null_mut(),
                 0,
                 add_bos,
                 true,
+                &mut size,
             )
-        };
+        })
+        .map_err(|_| StringToTokenError::Native)?;
         Ok(usize::try_from(i64::from(size).unsigned_abs())?)
     }
 

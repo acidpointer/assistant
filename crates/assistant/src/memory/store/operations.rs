@@ -162,7 +162,15 @@ fn operation(
     if redacted {
         return Err(MemoryError::Gone);
     }
+    let details: Option<String> = connection
+        .query_row(
+            "SELECT details FROM product_outcomes WHERE principal=?1 AND operation_id=?2",
+            params![principal, id.to_string()],
+            |r| r.get(0),
+        )
+        .optional()?;
     Ok(OperationRecord {
+        details: details.as_deref().map(decode).transpose()?,
         id,
         revision: revision(version)?,
         state: read_tag(&state)?,
@@ -502,10 +510,28 @@ impl Database {
         id: MemoryId,
         input: &OperationFinalization,
     ) -> MemoryResult<MemoryReceipt<OperationRecord>> {
+        self.finalize_operation_details(key, id, input, None)
+    }
+    fn finalize_operation_details(
+        &mut self,
+        key: &OperationKey,
+        id: MemoryId,
+        input: &OperationFinalization,
+        details: Option<crate::memory::OperationDetails>,
+    ) -> MemoryResult<MemoryReceipt<OperationRecord>> {
         let principal = self.owner.principal().to_string();
         let input = input.clone();
         let limit = self.pending_job_limit;
-        let digest_input = (id, input.clone());
+        let kind = if details.is_some() {
+            "operation_finalize_v2"
+        } else {
+            "operation_finalize"
+        };
+        let digest_input = if let Some(details) = &details {
+            serde_json::to_value((id, &input, details))?
+        } else {
+            serde_json::to_value((id, &input))?
+        };
         let apply = move |tx: &Transaction<'_>, command: MemoryId, _: crate::memory::Revision| {
             active(tx, &principal, id)?;
             let limits = limits(tx, &principal, id)?;
@@ -541,15 +567,15 @@ impl Database {
             tx.execute("UPDATE product_operations SET
              state=?1,revision=revision+1,reserved_bytes=0,assistant_source=?2,unknown_tool_outcome=?3
              WHERE principal=?4 AND id=?5",params![state,source,unknown,principal,id.to_string()])?;
+            if let Some(details) = details {
+                tx.execute(
+                    "INSERT INTO product_outcomes(principal,operation_id,details) VALUES(?1,?2,?3)",
+                    params![principal, id.to_string(), json(&details)?],
+                )?;
+            }
             operation(tx, &principal, id)
         };
-        self.mutate_budget(
-            key,
-            &digest_input,
-            "operation_finalize",
-            WriteBudget::Reserved(id),
-            apply,
-        )
+        self.mutate_budget(key, &digest_input, kind, WriteBudget::Reserved(id), apply)
     }
 
     pub(super) fn recover_operations(&mut self) -> MemoryResult<()> {
@@ -758,6 +784,40 @@ impl MemoryHandle {
             .settle(move |db| db.finalize_operation(&key, id, &input))
             .await
     }
+    /// Commit the exact host terminal boundary atomically with visible output.
+    /// # Errors
+    /// Rejects inconsistent outcome/detail pairs, stale operations and storage failure.
+    pub async fn finalize_operation_detailed(
+        &self,
+        owner: &OwnerCapability,
+        key: OperationKey,
+        id: MemoryId,
+        input: OperationFinalization,
+        details: crate::memory::OperationDetails,
+    ) -> MemoryResult<MemoryReceipt<OperationRecord>> {
+        self.authorize(owner)?;
+        use crate::memory::{CompletionKind, TerminalOutcome};
+        let compatible = matches!(
+            (input.outcome, details.kind),
+            (
+                TerminalOutcome::Completed,
+                CompletionKind::Completed | CompletionKind::Truncated
+            ) | (TerminalOutcome::Cancelled, CompletionKind::Cancelled)
+                | (
+                    TerminalOutcome::Failed,
+                    CompletionKind::Failed | CompletionKind::Deadline
+                )
+                | (TerminalOutcome::Interrupted, CompletionKind::Interrupted)
+        );
+        if !compatible {
+            return Err(MemoryError::InvalidInput("terminal details"));
+        }
+        self.0
+            .writer
+            .settle(move |db| db.finalize_operation_details(&key, id, &input, Some(details)))
+            .await
+    }
+
     /// Read literal evidence together with host attribution and formation state.
     /// # Errors
     /// Rejects unknown/suppressed sources, foreign authority or storage failure.

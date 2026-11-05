@@ -463,3 +463,26 @@ Context records include shared model weights, so their byte counts must not be
 summed across contexts. The runtime unions PCI identities rather than allocation
 bytes. This proves placement, not driver residency or actual operator execution.
 The pinned submodule and existing memory-breakdown ABI are unchanged.
+
+## Checked embedding and tokenizer access
+
+Embedding slices use `n_embd_out` (or `n_cls_out` for rank pooling), a checked
+allocation length and last-successful output eligibility. Failed evaluation clears
+eligibility. Token rows require explicit nonnegative selected batch indices;
+pooled sequences require valid nonnegative sequence IDs. `EmbeddingsError` is
+non-exhaustive and reports invalid indices/shapes/native synchronization errors.
+`get_embeddings` returns the first selected token row, not a guessed matrix.
+
+The additive `llama_tokenize_guarded` shim contains C++ vocabulary exceptions
+before returning to Rust. It preserves signed size-query/retry counts and keeps
+Rust vector length zero on failure. Both tokenization and counting use it;
+`StringToTokenError::Native` carries no input text. This was required by the
+owner-supplied E5 vocabulary's missing byte-fallback rows, which caused a real
+foreign-unwind abort during background indexing. No upstream submodule edit or
+pin change is involved.
+
+`LlamaModelParams::append_kv_override` now returns `Result<(), KvOverrideError>`.
+It supports multiple distinct keys and rejects invalid keys/values and excessive
+lists before mutation. Call sites must handle the result. See the
+[memory native integration record](memory-native-integration.md) for the selected
+artifact's two explicit overrides and qualification limits.

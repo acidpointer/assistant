@@ -136,6 +136,10 @@ pub enum OperationState {
 /// Inspectable operation projection without copying input/output prose.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationRecord {
+    /// Exact terminal status and counters when recorded by the product runtime.
+    /// Legacy records/recovered interrupted execution retain explicit absence.
+    #[serde(default)]
+    pub details: Option<OperationDetails>,
     /// Stable operation identity.
     pub id: MemoryId,
     /// Revision of persisted execution state.
@@ -148,6 +152,49 @@ pub struct OperationRecord {
     pub assistant: Option<SourceRef>,
     /// At least one invocation lacks a confirmed outcome.
     pub unknown_tool_outcome: bool,
+}
+
+/// Exact host-observed terminal boundary, distinct from coarse storage state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CompletionKind {
+    /// A full answer completed normally.
+    Completed,
+    /// A known output/context/run bound stopped generation.
+    Truncated,
+    /// Cooperative cancellation completed.
+    Cancelled,
+    /// The operation deadline expired.
+    Deadline,
+    /// A confirmed execution failure.
+    Failed,
+    /// Execution or a tool effect has an uncertain terminal boundary.
+    Interrupted,
+}
+/// Known generation bound, without arbitrary model-produced diagnostic text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionLimit {
+    /// Per-turn sampled output allowance.
+    OutputTokens,
+    /// Native context capacity.
+    ContextCapacity,
+    /// Whole-run sampled allowance.
+    RunTokens,
+}
+/// Bounded host measurements. Missing values remain missing after restart;
+/// hidden reasoning and raw native output cannot enter this structure.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationDetails {
+    /// Exact observed terminal status.
+    pub kind: CompletionKind,
+    /// The bound that caused truncation, if available.
+    pub limit: Option<CompletionLimit>,
+    /// Evaluated input tokens, absent when unrecoverable.
+    pub input_tokens: Option<u64>,
+    /// Sampled tokens including protocol/reasoning, absent when unrecoverable.
+    pub generated_tokens: Option<u64>,
 }
 
 /// Host-selected terminal state; an active state cannot be supplied here.

@@ -19,7 +19,17 @@ pub(crate) struct Args {
     /// Local model weights.
     #[arg(long)]
     pub(crate) model: PathBuf,
-    /// Diagnostic/testing one-shot interaction; requires --no-web.
+    /// Explicit JSON configuration for required durable memory. Paths are local;
+    /// the embedding artifact is checksum-verified and never downloaded.
+    #[arg(long, conflicts_with = "raw")]
+    pub(crate) memory_config: Option<PathBuf>,
+    /// Stable caller identity for durable headless requests.
+    #[arg(long, default_value = "local-cli")]
+    pub(crate) client_id: String,
+    /// Caller key for one-shot retry/reconciliation with --memory-config.
+    #[arg(long,requires_all=["memory_config","prompt"])]
+    pub(crate) request_id: Option<String>,
+    /// Diagnostic/testing one-shot, or durable interaction with --memory-config; requires --no-web.
     #[arg(short, long, requires = "no_web", conflicts_with_all = ["interactive", "daemon"])]
     pub(crate) prompt: Option<String>,
     /// Compatibility alias for the default resident mode.

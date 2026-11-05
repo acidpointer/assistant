@@ -251,6 +251,13 @@ pub struct ProcessDetailsOutput {
 #[derive(Debug)]
 pub struct ProcessTop;
 impl Tool for ProcessTop {
+    #[cfg(target_os = "linux")]
+    fn memory_policy(&self) -> (crate::memory::ToolEffect, crate::tools::ToolRetention) {
+        (
+            crate::memory::ToolEffect::ReadOnly,
+            crate::tools::ToolRetention::Ephemeral,
+        )
+    }
     const NAME: &'static str = "process_top";
     type Args = ProcessTopArgs;
     type Output = ProcessTopOutput;
@@ -280,6 +287,13 @@ impl Tool for ProcessTop {
 #[derive(Debug)]
 pub struct ProcessDetails;
 impl Tool for ProcessDetails {
+    #[cfg(target_os = "linux")]
+    fn memory_policy(&self) -> (crate::memory::ToolEffect, crate::tools::ToolRetention) {
+        (
+            crate::memory::ToolEffect::ReadOnly,
+            crate::tools::ToolRetention::Ephemeral,
+        )
+    }
     const NAME: &'static str = "process_details";
     type Args = ProcessDetailsArgs;
     type Output = ProcessDetailsOutput;

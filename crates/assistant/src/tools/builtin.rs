@@ -18,6 +18,13 @@ pub struct TimeArgs {}
 #[derive(Debug)]
 pub struct CurrentTime;
 impl Tool for CurrentTime {
+    #[cfg(target_os = "linux")]
+    fn memory_policy(&self) -> (crate::memory::ToolEffect, super::ToolRetention) {
+        (
+            crate::memory::ToolEffect::ReadOnly,
+            super::ToolRetention::Retained,
+        )
+    }
     const NAME: &'static str = "current_time";
     type Args = TimeArgs;
     type Output = Value;
@@ -68,6 +75,13 @@ pub struct CalculateArgs {
 #[derive(Debug)]
 pub struct Calculator;
 impl Tool for Calculator {
+    #[cfg(target_os = "linux")]
+    fn memory_policy(&self) -> (crate::memory::ToolEffect, super::ToolRetention) {
+        (
+            crate::memory::ToolEffect::ReadOnly,
+            super::ToolRetention::Retained,
+        )
+    }
     const NAME: &'static str = "calculate";
     type Args = CalculateArgs;
     type Output = Value;

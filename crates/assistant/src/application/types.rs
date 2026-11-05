@@ -10,6 +10,12 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ApplicationError {
+    /// Required memory could not confirm admission; reconcile the same key.
+    #[error("required memory is unavailable; reconcile the original key")]
+    StorageUnavailable,
+    /// A forgotten client key cannot be executed again.
+    #[error("operation was forgotten")]
+    Gone,
     /// Input or identifiers failed validation.
     #[error("invalid input")]
     InvalidInput,
@@ -89,6 +95,10 @@ pub struct DisplayMessage {
 /// Retained interaction metadata; it never retains complete raw model responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunView {
+    /// Whether the terminal usage counters are known, including after restart.
+    pub usage_available: bool,
+    /// Whether full/truncated/deadline status is recorded beyond coarse state.
+    pub outcome_details_available: bool,
     /// Per-model-turn counters/timings and observed process resource windows.
     pub performance: Vec<PerformanceView>,
     /// Whole-interaction observed resources, including tool and scheduler time.

@@ -11,6 +11,10 @@ pub type ChatResult<T> = Result<T, ChatError>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ChatError {
+    /// Required durable memory could not complete its contract.
+    #[cfg(target_os = "linux")]
+    #[error(transparent)]
+    Memory(#[from] crate::memory::MemoryError),
     /// Invalid registration or configuration.
     #[error("configuration: {0}")]
     Configuration(String),
@@ -214,6 +218,8 @@ impl Message {
 /// Per-request overrides. Context is supporting data, never system policy.
 #[derive(Debug, Clone, Default)]
 pub struct RequestOptions {
+    /// Optional host-selected JSON Schema, enforced by native grammar.
+    pub json_schema: Option<String>,
     /// Text chat by default; raw completion is an explicit diagnostic mode.
     pub mode: InputMode,
     /// Automatic calls, no calls, or a required call on the first turn only.

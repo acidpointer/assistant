@@ -9,7 +9,9 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 const INITIAL: &str = include_str!("schema.sql");
 const OPERATIONS: &str = include_str!("migrations/0002-operations.sql");
-const MIGRATIONS: &[&str] = &[INITIAL, OPERATIONS];
+const EMBEDDINGS: &str = include_str!("migrations/0003-embeddings.sql");
+const OUTCOMES: &str = include_str!("migrations/0004-product-outcomes.sql");
+const MIGRATIONS: &[&str] = &[INITIAL, OPERATIONS, EMBEDDINGS, OUTCOMES];
 
 pub(super) fn migrate(connection: &mut Connection) -> MemoryResult<()> {
     let existing: bool = connection.query_row(

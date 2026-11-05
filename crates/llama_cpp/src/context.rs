@@ -106,6 +106,8 @@ pub struct LlamaContext<'a> {
     pub model: &'a LlamaModel,
     initialized_logits: Vec<i32>,
     embeddings_enabled: bool,
+    /// Cleared before every native evaluation, including one that subsequently fails.
+    embeddings_valid: bool,
     context_type: LlamaContextType,
     tensor_transactions: Option<Pin<Box<TensorTransactions>>>,
     /// Identity of this context, unique for the life of the process. See
@@ -168,6 +170,7 @@ impl<'model> LlamaContext<'model> {
             model: llama_model,
             initialized_logits: Vec::new(),
             embeddings_enabled,
+            embeddings_valid: false,
             context_type,
             tensor_transactions,
             id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
@@ -214,6 +217,8 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn decode(&mut self, batch: &mut LlamaBatch) -> Result<(), DecodeError> {
+        self.embeddings_valid = false;
+        self.initialized_logits.clear();
         let result =
             unsafe { llama_cpp_sys::llama_decode(self.context.as_ptr(), batch.llama_batch) };
         if let Some(failure) = self
@@ -227,6 +232,7 @@ impl<'model> LlamaContext<'model> {
 
         match NonZeroI32::new(result) {
             None => {
+                self.embeddings_valid = true;
                 self.initialized_logits
                     .clone_from(&batch.initialized_logits);
                 Ok(())
@@ -271,6 +277,8 @@ impl<'model> LlamaContext<'model> {
         batch: &mut LlamaBatchExt,
         kind: LlamaProcessType,
     ) -> Result<(), ProcessError> {
+        self.embeddings_valid = false;
+        self.initialized_logits.clear();
         if batch.ctx_id != self.id {
             return Err(ProcessError::ContextMismatch);
         }
@@ -287,6 +295,7 @@ impl<'model> LlamaContext<'model> {
 
         match NonZeroI32::new(result) {
             None => {
+                self.embeddings_valid = true;
                 self.initialized_logits
                     .clone_from(&batch.initialized_logits);
                 Ok(())
@@ -373,11 +382,14 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - the returned [`std::ffi::c_int`] from llama-cpp does not fit into a i32 (this should never happen on most systems)
     pub fn encode(&mut self, batch: &mut LlamaBatch) -> Result<(), EncodeError> {
+        self.embeddings_valid = false;
+        self.initialized_logits.clear();
         let result =
             unsafe { llama_cpp_sys::llama_encode(self.context.as_ptr(), batch.llama_batch) };
 
         match NonZeroI32::new(result) {
             None => {
+                self.embeddings_valid = true;
                 self.initialized_logits
                     .clone_from(&batch.initialized_logits);
                 Ok(())
@@ -394,75 +406,93 @@ impl<'model> LlamaContext<'model> {
         LlamaPoolingType::from(pooling_type)
     }
 
-    /// Get the embeddings for the `i`th sequence in the current context.
+    /// Borrow a pooled sequence from the last successful evaluation.
     ///
-    /// # Returns
-    ///
-    /// A slice containing the embeddings for the last decoded batch.
-    /// The size corresponds to the `n_embd` parameter of the context's model.
-    ///
+    /// Mean/CLS/last pooling returns `n_embd_out` floats; rank pooling returns
+    /// `n_cls_out` scores. The borrow prevents further evaluation while it lives.
     /// # Errors
-    ///
-    /// - When the current context was constructed without enabling embeddings.
-    /// - If the current model had a pooling type of [`llama_cpp_sys::LLAMA_POOLING_TYPE_NONE`]
-    /// - If the given sequence index exceeds the max sequence id.
-    ///
-    /// # Panics
-    ///
-    /// * `n_embd` does not fit into a usize
+    /// Rejects disabled embeddings, absent/negative sequences, NONE pooling,
+    /// invalid dimensions or native synchronization failure.
     pub fn embeddings_seq_ith(&self, i: i32) -> Result<&[f32], EmbeddingsError> {
         if !self.embeddings_enabled {
             return Err(EmbeddingsError::NotEnabled);
         }
-
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys::llama_get_embeddings_seq(self.context.as_ptr(), i);
-
-            // Technically also possible whenever `i >= max(batch.n_seq)`, but can't check that here.
-            if embedding.is_null() {
-                Err(EmbeddingsError::NonePoolType)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
+        if !self.embeddings_valid || i < 0 {
+            return Err(EmbeddingsError::InvalidIndex);
         }
+        let count = match self.pooling_type() {
+            LlamaPoolingType::None | LlamaPoolingType::Unspecified => {
+                return Err(EmbeddingsError::NonePoolType)
+            }
+            LlamaPoolingType::Rank => usize::try_from(self.model.n_cls_out()),
+            _ => usize::try_from(self.model.n_embd_out()),
+        }
+        .map_err(|_| EmbeddingsError::InvalidShape)?;
+        Self::check_embedding_shape(count)?;
+        self.synchronize_embeddings()?;
+        // SAFETY: this thread-confined context owns the pooled row until the next
+        // exclusive evaluation. The pinned native pooling branches allocate the
+        // exact output/classifier dimensions selected above, never n_embd_inp.
+        let pointer = unsafe { llama_cpp_sys::llama_get_embeddings_seq(self.context.as_ptr(), i) };
+        if pointer.is_null() {
+            return Err(EmbeddingsError::InvalidIndex);
+        }
+        // SAFETY: the native row has `count` initialized floats; this borrow keeps
+        // the context/model alive and prevents evaluation or embedding-mode edits.
+        Ok(unsafe { slice::from_raw_parts(pointer, count) })
     }
 
-    /// Get the embeddings for the `i`th token in the current context.
+    /// Borrow an explicitly selected token embedding from the last successful batch.
     ///
-    /// # Returns
-    ///
-    /// A slice containing the embeddings for the last decoded batch of the given token.
-    /// The size corresponds to the `n_embd` parameter of the context's model.
-    ///
+    /// Indices are nonnegative original batch positions, with output enabled.
+    /// Pooled contexts expose sequence rows through [`Self::embeddings_seq_ith`].
     /// # Errors
-    ///
-    /// - When the current context was constructed without enabling embeddings.
-    /// - When the given token didn't have logits enabled when it was passed.
-    /// - If the given token index exceeds the max token id.
-    ///
-    /// # Panics
-    ///
-    /// * `n_embd` does not fit into a usize
+    /// Rejects disabled embeddings, pooling, absent/negative/unselected indices,
+    /// invalid dimensions and native synchronization failure. Invalid indices are
+    /// rejected before the pinned debug getter, which otherwise aborts the process.
     pub fn embeddings_ith(&self, i: i32) -> Result<&[f32], EmbeddingsError> {
         if !self.embeddings_enabled {
             return Err(EmbeddingsError::NotEnabled);
         }
-
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys::llama_get_embeddings_ith(self.context.as_ptr(), i);
-            // Technically also possible whenever `i >= batch.n_tokens`, but no good way of checking `n_tokens` here.
-            if embedding.is_null() {
-                Err(EmbeddingsError::LogitsNotEnabled)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
+        if self.pooling_type() != LlamaPoolingType::None {
+            return Err(EmbeddingsError::NonePoolType);
         }
+        if !self.embeddings_valid || i < 0 || !self.initialized_logits.contains(&i) {
+            return Err(EmbeddingsError::InvalidIndex);
+        }
+        let count =
+            usize::try_from(self.model.n_embd_out()).map_err(|_| EmbeddingsError::InvalidShape)?;
+        Self::check_embedding_shape(count)?;
+        self.synchronize_embeddings()?;
+        // SAFETY: successful batch metadata proves i names an initialized output;
+        // failed evaluations clear that metadata before native state can change.
+        let pointer = unsafe { llama_cpp_sys::llama_get_embeddings_ith(self.context.as_ptr(), i) };
+        if pointer.is_null() {
+            return Err(EmbeddingsError::LogitsNotEnabled);
+        }
+        // SAFETY: native token rows have n_embd_out initialized floats and remain
+        // owned by the immutably borrowed thread-confined context.
+        Ok(unsafe { slice::from_raw_parts(pointer, count) })
+    }
+
+    fn check_embedding_shape(count: usize) -> Result<(), EmbeddingsError> {
+        if count == 0
+            || count
+                .checked_mul(size_of::<f32>())
+                .is_none_or(|bytes| bytes > isize::MAX as usize)
+        {
+            return Err(EmbeddingsError::InvalidShape);
+        }
+        Ok(())
+    }
+
+    fn synchronize_embeddings(&self) -> Result<(), EmbeddingsError> {
+        // SAFETY: the context remains alive and confined to its owner thread.
+        // No evaluation can run while borrowed; the shim contains C++ exceptions.
+        crate::shim::check_status(unsafe {
+            llama_cpp_sys::llama_context_synchronize_guarded(self.context.as_ptr())
+        })
+        .map_err(|error| EmbeddingsError::Native(error.to_string()))
     }
 
     /// Get the logits for the last token in the context.
@@ -627,6 +657,8 @@ impl<'model> LlamaContext<'model> {
     /// context creation time).
     pub fn set_embeddings(&mut self, embeddings: bool) {
         self.embeddings_enabled = embeddings;
+        self.embeddings_valid = false;
+        self.initialized_logits.clear();
         unsafe {
             llama_cpp_sys::llama_set_embeddings(self.context.as_ptr(), embeddings);
         }
@@ -660,35 +692,20 @@ impl<'model> LlamaContext<'model> {
         })
     }
 
-    /// Get all embeddings for the current context.
+    /// Borrow the first explicitly selected token embedding.
     ///
-    /// Returns a slice of all embeddings from the last decoded batch.
-    /// For pooled embeddings use [`embeddings_seq_ith`](Self::embeddings_seq_ith) instead.
-    ///
+    /// This compatibility accessor returns one row, not the entire output matrix.
+    /// Use [`Self::embeddings_ith`] for another batch position and
+    /// [`Self::embeddings_seq_ith`] for pooled output.
     /// # Errors
-    ///
-    /// - When the current context was constructed without enabling embeddings.
-    /// - If the embeddings pointer is null.
-    ///
-    /// # Panics
-    ///
-    /// * `n_embd` does not fit into a usize
+    /// Returns the same errors as [`Self::embeddings_ith`].
     pub fn get_embeddings(&self) -> Result<&[f32], EmbeddingsError> {
-        if !self.embeddings_enabled {
-            return Err(EmbeddingsError::NotEnabled);
-        }
-
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
-        unsafe {
-            let embedding = llama_cpp_sys::llama_get_embeddings(self.context.as_ptr());
-            if embedding.is_null() {
-                Err(EmbeddingsError::NonePoolType)
-            } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
-            }
-        }
+        let index = self
+            .initialized_logits
+            .first()
+            .copied()
+            .ok_or(EmbeddingsError::InvalidIndex)?;
+        self.embeddings_ith(index)
     }
 
     /// Toggle extraction of next-n embeddings (Rust name: pre-norm) — hidden

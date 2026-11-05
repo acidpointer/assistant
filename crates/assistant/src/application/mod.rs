@@ -64,10 +64,20 @@ enum Command {
 /// authority. Handles surviving shutdown return [`ApplicationError::Closed`].
 #[derive(Debug, Clone)]
 pub struct AssistantHandle {
+    #[cfg(target_os = "linux")]
+    memory: Option<crate::memory::service::MemoryAccess>,
     commands: mpsc::Sender<Command>,
     closed: Arc<AtomicBool>,
 }
 impl AssistantHandle {
+    /// Host-issued owner access, present only when durable memory is required.
+    /// Transport adapters must authenticate before exposing this handle.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn memory(&self) -> Option<crate::memory::service::MemoryAccess> {
+        self.memory.clone()
+    }
+
     async fn call<T>(&self, make: impl FnOnce(Reply<T>) -> Command) -> Result<T, ApplicationError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(ApplicationError::Closed);
@@ -148,7 +158,28 @@ pub(crate) struct Application {
     finished: watch::Receiver<bool>,
 }
 impl Application {
+    #[cfg(any(test, not(target_os = "linux")))]
     pub(crate) fn start(chat: Chat, options: RequestOptions) -> ChatResult<Self> {
+        Self::start_inner(
+            chat,
+            options,
+            #[cfg(target_os = "linux")]
+            None,
+        )
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn start_with_memory(
+        chat: Chat,
+        options: RequestOptions,
+        memory: Option<crate::memory::service::MemoryAccess>,
+    ) -> ChatResult<Self> {
+        Self::start_inner(chat, options, memory)
+    }
+    fn start_inner(
+        chat: Chat,
+        options: RequestOptions,
+        #[cfg(target_os = "linux")] memory: Option<crate::memory::service::MemoryAccess>,
+    ) -> ChatResult<Self> {
         let mut random = [0_u8; 16];
         getrandom::fill(&mut random)
             .map_err(|_| ChatError::Configuration("instance identity unavailable".into()))?;
@@ -165,11 +196,17 @@ impl Application {
         let (commands, incoming) = mpsc::channel(32);
         let closed = Arc::new(AtomicBool::new(false));
         let handle = AssistantHandle {
+            #[cfg(target_os = "linux")]
+            memory: memory.clone(),
             commands,
             closed: closed.clone(),
         };
         let stop = Cancellation::default();
-        let actor = Coordinator::new(chat, options, instance, closed, stop.clone());
+        let mut actor = Coordinator::new(chat, options, instance, closed, stop.clone());
+        #[cfg(target_os = "linux")]
+        {
+            actor.memory = memory;
+        }
         let (completion, finished) = watch::channel(false);
         let task = tokio::spawn(async move {
             let result = actor.run(incoming).await;
@@ -234,6 +271,10 @@ struct QueuedProgress {
 
 #[derive(Debug)]
 struct Coordinator {
+    #[cfg(target_os = "linux")]
+    memory: Option<crate::memory::service::MemoryAccess>,
+    #[cfg(target_os = "linux")]
+    active_operation: Option<Arc<crate::memory::session::MemoryOperation>>,
     resource_sample: Option<crate::telemetry::ResourceSample>,
     inference: InferenceTotals,
     chat: Chat,
@@ -265,6 +306,10 @@ impl Coordinator {
     ) -> Self {
         let (outgoing, _) = broadcast::channel(EVENT_CAPACITY);
         Self {
+            #[cfg(target_os = "linux")]
+            memory: None,
+            #[cfg(target_os = "linux")]
+            active_operation: None,
             resource_sample: None,
             inference: InferenceTotals::default(),
             chat,
@@ -357,7 +402,7 @@ impl Coordinator {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
     }
-    fn admit(
+    async fn admit(
         &mut self,
         scope: String,
         input: Submission,
@@ -397,19 +442,94 @@ impl Coordinator {
             };
         }
         if self.active.is_some() {
+            #[cfg(target_os = "linux")]
+            if let Some(memory) = &self.memory {
+                let key = crate::memory::ClientRequestKey::new(
+                    &scope,
+                    &input.client_id,
+                    &input.request_id,
+                )
+                .map_err(memory_application_error)?;
+                match memory.store.operation_by_key(&memory.owner, key).await {
+                    Ok(record) => {
+                        let source = memory
+                            .store
+                            .source(&memory.owner, record.input.id)
+                            .await
+                            .map_err(memory_application_error)?;
+                        if source.text.as_str() != input.text {
+                            return Err(ApplicationError::Conflict);
+                        }
+                        return Ok((restored_run(&record, &input, &self.chat_id), false));
+                    }
+                    Err(crate::memory::MemoryError::NotFound) => {}
+                    Err(error) => return Err(memory_application_error(error)),
+                }
+            }
             return Err(ApplicationError::Busy);
         }
         if self.records.len() >= REQUEST_LIMIT {
             return Err(ApplicationError::Capacity);
         }
         self.run_sequence += 1;
-        let id = format!("{}-r{}", self.instance, self.run_sequence);
+        let mut id = format!("{}-r{}", self.instance, self.run_sequence);
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = &self.memory {
+            let (record, fresh) = memory
+                .admit_product(&scope, &input.client_id, &input.request_id, &input.text)
+                .await
+                .map_err(memory_application_error)?;
+            id = record.id.to_string();
+            if !fresh {
+                let view = restored_run(&record, &input, &self.chat_id);
+                let memory = memory.clone();
+                let assistant = match record.assistant {
+                    Some(source) => Some(
+                        memory
+                            .store
+                            .source(&memory.owner, source.id)
+                            .await
+                            .map_err(memory_application_error)?,
+                    ),
+                    None => None,
+                };
+                self.add_message(DisplayMessage {
+                    id: format!("{id}-user"),
+                    run_id: id.clone(),
+                    role: "user",
+                    text: input.text.clone(),
+                    status: view.status,
+                });
+                if let Some(source) = assistant {
+                    self.add_message(DisplayMessage {
+                        id: format!("{id}-assistant-0"),
+                        run_id: id.clone(),
+                        role: "assistant",
+                        text: source.text.as_str().to_owned(),
+                        status: view.status,
+                    });
+                }
+                self.records.push_back(Record {
+                    scope,
+                    input,
+                    view: view.clone(),
+                    created: Instant::now(),
+                });
+                return Ok((view, false));
+            }
+            self.active_operation = Some(crate::memory::session::MemoryOperation::new(
+                record,
+                memory.clone(),
+            ));
+        }
         let mut resources = crate::telemetry::ResourceWindow::default();
         if let Some(sample) = &self.resource_sample {
             resources.observe(sample);
         }
         resources.started = Some(crate::telemetry::boundary());
         let view = RunView {
+            usage_available: false,
+            outcome_details_available: false,
             performance: Vec::new(),
             resources,
             limit_reason: None,
@@ -693,6 +813,8 @@ impl Coordinator {
                 &mut self.inference,
                 self.resource_sample.as_ref(),
             );
+            record.view.usage_available = true;
+            record.view.outcome_details_available = true;
             record.view.limit_reason = response.limit_reason;
             record.view.status = status;
             record.view.error = error;
@@ -711,6 +833,10 @@ impl Coordinator {
             self.publish(Update::Run { run: Box::new(run) });
         }
         self.active = None;
+        #[cfg(target_os = "linux")]
+        {
+            self.active_operation = None;
+        }
         if let Some(sample) = self.resource_sample.clone() {
             self.publish(Update::Telemetry {
                 sample,
@@ -731,45 +857,43 @@ impl Coordinator {
         options.cancellation = cancellation;
 
         let bytes = Arc::new(Semaphore::new(256 * 1024));
-        self.chat
-            .request(text)
-            .options(options)
-            .on_event(move |event| {
-                let progress = match event {
-                    RunEvent::ModelProgress {
-                        turn,
-                        usage,
-                        metrics,
-                        ..
-                    } => Progress::Metrics(*turn, usage.generated_tokens, metrics.clone()),
-                    RunEvent::Started { .. } => Progress::Started,
-                    RunEvent::ModelTurnStarted { .. } => {
-                        Progress::Turn(crate::telemetry::boundary())
-                    }
-                    RunEvent::ModelTurnFinished { turn, .. } => {
-                        Progress::TurnFinished(*turn, crate::telemetry::boundary())
-                    }
-                    RunEvent::TextDelta { text, .. } => Progress::Text(text.clone()),
-                    RunEvent::ToolStarted { .. } => Progress::Activity("Using a tool"),
-                    RunEvent::ToolFinished { .. } => Progress::Activity("Thinking"),
-                    _ => return Ok(()),
-                };
-                let cost = match &progress {
-                    Progress::Text(text) => text.len().max(1),
-                    _ => 1,
-                };
-                let cost =
-                    u32::try_from(cost).map_err(|_| ChatError::Limit("application event bytes"))?;
-                let permit = bytes
-                    .clone()
-                    .try_acquire_many_owned(cost)
-                    .map_err(|_| ChatError::Limit("application event bytes"))?;
-                tx.try_send(QueuedProgress {
-                    progress,
-                    _bytes: permit,
-                })
-                .map_err(|_| ChatError::Limit("application event queue"))
+        let request = self.chat.request(text);
+        #[cfg(target_os = "linux")]
+        let request = request.memory_operation(self.active_operation.clone());
+        request.options(options).on_event(move |event| {
+            let progress = match event {
+                RunEvent::ModelProgress {
+                    turn,
+                    usage,
+                    metrics,
+                    ..
+                } => Progress::Metrics(*turn, usage.generated_tokens, metrics.clone()),
+                RunEvent::Started { .. } => Progress::Started,
+                RunEvent::ModelTurnStarted { .. } => Progress::Turn(crate::telemetry::boundary()),
+                RunEvent::ModelTurnFinished { turn, .. } => {
+                    Progress::TurnFinished(*turn, crate::telemetry::boundary())
+                }
+                RunEvent::TextDelta { text, .. } => Progress::Text(text.clone()),
+                RunEvent::ToolStarted { .. } => Progress::Activity("Using a tool"),
+                RunEvent::ToolFinished { .. } => Progress::Activity("Thinking"),
+                _ => return Ok(()),
+            };
+            let cost = match &progress {
+                Progress::Text(text) => text.len().max(1),
+                _ => 1,
+            };
+            let cost =
+                u32::try_from(cost).map_err(|_| ChatError::Limit("application event bytes"))?;
+            let permit = bytes
+                .clone()
+                .try_acquire_many_owned(cost)
+                .map_err(|_| ChatError::Limit("application event bytes"))?;
+            tx.try_send(QueuedProgress {
+                progress,
+                _bytes: permit,
             })
+            .map_err(|_| ChatError::Limit("application event queue"))
+        })
     }
     fn observe(&mut self, sample: crate::telemetry::ResourceSample) {
         self.resource_sample = Some(sample.clone());
@@ -832,7 +956,7 @@ impl Coordinator {
                         Command::Cancel(id, reply) => { let result = self.cancel(&id); let _ = reply.send(result); }
                         Command::Submit(scope, input, reply) => {
                             let text = input.text.clone();
-                            let admitted = self.admit(scope, input);
+                            let admitted = self.admit(scope, input).await;
                             if let Ok((_, true)) = &admitted
                                 && let Some((_, cancellation)) = &self.active {
                                     let request = self.request(text, cancellation.clone(), progress_tx.clone());
@@ -917,3 +1041,83 @@ fn complete_measurements(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(target_os = "linux")]
+fn memory_application_error(error: crate::memory::MemoryError) -> ApplicationError {
+    use crate::memory::MemoryError;
+    match error {
+        MemoryError::Conflict => ApplicationError::Conflict,
+        MemoryError::Busy => ApplicationError::Busy,
+        MemoryError::Capacity | MemoryError::StorageFull => ApplicationError::Capacity,
+        MemoryError::NotFound => ApplicationError::NotFound,
+        MemoryError::Gone => ApplicationError::Gone,
+        _ => ApplicationError::StorageUnavailable,
+    }
+}
+#[cfg(target_os = "linux")]
+fn restored_run(
+    record: &crate::memory::OperationRecord,
+    input: &Submission,
+    chat: &str,
+) -> RunView {
+    use crate::memory::OperationState;
+    let status = if let Some(details) = &record.details {
+        match details.kind {
+            crate::memory::CompletionKind::Completed => Status::Completed,
+            crate::memory::CompletionKind::Truncated => Status::Truncated,
+            crate::memory::CompletionKind::Cancelled => Status::Cancelled,
+            crate::memory::CompletionKind::Deadline => Status::Deadline,
+            crate::memory::CompletionKind::Failed | crate::memory::CompletionKind::Interrupted => {
+                Status::Failed
+            }
+        }
+    } else {
+        match record.state {
+            OperationState::Accepted => Status::Accepted,
+            OperationState::Running => Status::Running,
+            OperationState::Completed => Status::Completed,
+            OperationState::Cancelled => Status::Cancelled,
+            OperationState::Failed | OperationState::Interrupted => Status::Failed,
+        }
+    };
+    let input_tokens = record
+        .details
+        .as_ref()
+        .and_then(|details| details.input_tokens)
+        .and_then(|v| usize::try_from(v).ok());
+    let generated_tokens = record
+        .details
+        .as_ref()
+        .and_then(|details| details.generated_tokens)
+        .and_then(|v| usize::try_from(v).ok());
+    let limit_reason = record
+        .details
+        .as_ref()
+        .and_then(|details| details.limit)
+        .map(|limit| match limit {
+            crate::memory::CompletionLimit::OutputTokens => "output_tokens",
+            crate::memory::CompletionLimit::ContextCapacity => "context_capacity",
+            crate::memory::CompletionLimit::RunTokens => "run_tokens",
+        });
+    RunView {
+        usage_available: input_tokens.is_some() && generated_tokens.is_some(),
+        outcome_details_available: record.details.is_some(),
+        performance: Vec::new(),
+        resources: crate::telemetry::ResourceWindow::default(),
+        limit_reason,
+        id: record.id.to_string(),
+        chat_id: chat.into(),
+        client_id: input.client_id.clone(),
+        client_request_id: input.request_id.clone(),
+        status,
+        error: if record.state == OperationState::Interrupted {
+            Some("interrupted")
+        } else {
+            None
+        },
+        input_tokens: input_tokens.unwrap_or(0),
+        generated_tokens: generated_tokens.unwrap_or(0),
+        warning_count: 1,
+        unknown_tool_outcome: record.unknown_tool_outcome,
+    }
+}

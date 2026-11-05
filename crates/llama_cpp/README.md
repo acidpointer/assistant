@@ -95,3 +95,10 @@ exercises the codec without a model or GPU.
 The [measured PQ3 candidate](../../docs/pq3-inference-evaluation.md) remains
 opt-in: it fails the fixed retrieval/KL gates and repeats a near-full 4K
 throughput regression versus Q4. AMD/Intel are unvalidated; QJL is deferred.
+
+Embedding access checks last-successful output rows, pooling and output dimensions;
+negative/unselected indices return errors. `get_embeddings` returns the first
+selected token row; use `embeddings_seq_ith` for pooled output. Native tokenizer
+exceptions return `StringToTokenError::Native` for tokenization/counting rather
+than crossing FFI. `LlamaModelParams::append_kv_override` is now fallible and
+supports multiple checked keys; callers must handle its `Result`.

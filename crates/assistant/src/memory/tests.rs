@@ -979,3 +979,127 @@ async fn dropped_reply_does_not_cancel_an_already_queued_memory_write() {
     assert!(replay.replayed);
     store.shutdown().await.expect("shutdown");
 }
+
+#[tokio::test]
+async fn exact_vectors_follow_source_revision_suppression_and_purge() {
+    use super::embedding::Embedding;
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let handle = store.handle();
+    let owner = store.owner();
+    let first = handle
+        .remember(
+            &owner,
+            key("vector-a"),
+            text("My sister Lena is a veterinarian."),
+        )
+        .await
+        .expect("source")
+        .value;
+    let second = handle
+        .remember(
+            &owner,
+            key("vector-b"),
+            text("The database stores transactions."),
+        )
+        .await
+        .expect("source")
+        .value;
+    let vector = |index| {
+        let mut values = vec![0.0; 384];
+        values[index] = 1.0;
+        Embedding::from_values(values).expect("unit vector")
+    };
+    for (index, source) in [&first, &second].into_iter().enumerate() {
+        let task = handle
+            .next_embedding(&owner)
+            .await
+            .expect("task")
+            .expect("pending");
+        assert_eq!(task.source.id, source.id);
+        let end = u32::try_from(source.text.as_str().len()).expect("length");
+        handle
+            .put_embedding(
+                &owner,
+                SourceRef {
+                    id: source.id,
+                    revision: source.revision,
+                },
+                0,
+                0,
+                end,
+                vector(index),
+            )
+            .await
+            .expect("index");
+        assert!(
+            matches!(
+                handle
+                    .put_embedding(
+                        &owner,
+                        SourceRef {
+                            id: source.id,
+                            revision: source.revision
+                        },
+                        0,
+                        0,
+                        end,
+                        vector(index)
+                    )
+                    .await,
+                Err(MemoryError::Conflict)
+            ),
+            "stale cursor cannot publish"
+        );
+    }
+    assert!(
+        handle
+            .next_embedding(&owner)
+            .await
+            .expect("coverage")
+            .is_none()
+    );
+    let hits = handle
+        .semantic_search(&owner, vector(0), 2)
+        .await
+        .expect("exact search");
+    assert_eq!(hits[0].source.id, first.id);
+    assert_eq!(hits[0].score, 1.0);
+    handle
+        .suppress_source(&owner, key("vector-forget"), first.id, first.revision)
+        .await
+        .expect("journal suppression");
+    let hits = handle
+        .semantic_search(&owner, vector(0), 2)
+        .await
+        .expect("eligible search");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].source.id, second.id);
+    while !handle
+        .purge_source_batch(&owner, first.id)
+        .await
+        .expect("bounded purge")
+    {}
+    store.shutdown().await.expect("shutdown");
+    let connection = rusqlite::Connection::open(dir.0.join("memory.sqlite3")).expect("inspect");
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM embedding_chunks WHERE source_id=?1",
+                [first.id.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("vector purge"),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT count(*) FROM embedding_coverage WHERE source_id=?1",
+                [first.id.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .expect("coverage purge"),
+        0
+    );
+}

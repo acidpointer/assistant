@@ -53,6 +53,10 @@ impl From<ApplicationError> for Problem {
             ApplicationError::Capacity => (StatusCode::TOO_MANY_REQUESTS, "capacity_exceeded"),
             ApplicationError::NotFound => (StatusCode::NOT_FOUND, "not_found"),
             ApplicationError::Closed => (StatusCode::SERVICE_UNAVAILABLE, "closed"),
+            ApplicationError::StorageUnavailable => {
+                (StatusCode::SERVICE_UNAVAILABLE, "memory_unavailable")
+            }
+            ApplicationError::Gone => (StatusCode::GONE, "forgotten"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error"),
         };
         Self::new(status, code)

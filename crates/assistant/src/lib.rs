@@ -2,7 +2,8 @@
 //!
 //! Native contexts stay on their owning worker. Public runtime handles exchange
 //! owned messages; they never expose FFI pointers. Durable memory and transports
-//! integrate through plugins rather than becoming dependencies of generation.
+//! have explicit ownership; required memory participates in product admission
+//! and settlement outside optional middleware.
 
 pub mod application;
 pub mod chat;

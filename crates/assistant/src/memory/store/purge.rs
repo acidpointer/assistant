@@ -24,6 +24,31 @@ struct Budget {
     records: u64,
     bytes: u64,
 }
+
+fn purge_embeddings(
+    connection: &Connection,
+    principal: &str,
+    source: &str,
+    budget: &mut Budget,
+) -> MemoryResult<bool> {
+    let mut statement = connection.prepare("SELECT rowid,length(vector) FROM embedding_chunks WHERE principal=?1 AND source_id=?2 LIMIT 128")?;
+    let rows = statement
+        .query_map(params![principal, source], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (row, bytes) in rows {
+        if !budget.take(1, payload_bytes(bytes)?) {
+            break;
+        }
+        connection.execute("DELETE FROM embedding_chunks WHERE rowid=?1", [row])?;
+    }
+    Ok(connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM embedding_chunks WHERE principal=?1 AND source_id=?2)",
+        params![principal, source],
+        |r| r.get(0),
+    )?)
+}
 impl Budget {
     fn take(&mut self, records: u64, bytes: u64) -> bool {
         if records > self.records || bytes > self.bytes {
@@ -174,6 +199,7 @@ fn cleanup(
              command_id FROM sources WHERE principal=?1 AND id=?2)",
         params![principal, source],
     )?;
+    connection.execute("DELETE FROM product_outcomes WHERE principal=?1 AND operation_id IN(SELECT operation_id FROM source_metadata WHERE principal=?1 AND source_id=?2)",params![principal,source])?;
     connection.execute(
         "DELETE FROM sources WHERE principal=?1 AND id=?2",
         params![principal, source],
@@ -208,10 +234,14 @@ impl Database {
             bytes: 1024 * 1024,
         };
         let arguments = purge_arguments(&tx, &principal, &id, &mut budget)?;
+        let embeddings = purge_embeddings(&tx, &principal, &id, &mut budget)?;
         let claims = purge_claims(&tx, &principal, &id, &mut budget)?;
         let receipts = purge_receipts(&tx, &principal, &id, &mut budget)?;
-        let complete =
-            !arguments && !claims && !receipts && cleanup(&tx, &principal, &id, &mut budget)?;
+        let complete = !arguments
+            && !embeddings
+            && !claims
+            && !receipts
+            && cleanup(&tx, &principal, &id, &mut budget)?;
         tx.commit()?;
         Ok(complete)
     }

@@ -109,6 +109,24 @@ pub enum LlamaLazyMode {
     On = llama_cpp_sys::LLAMA_LAZY_MODE_ON as _,
 }
 
+/// Rejected metadata override; keys/values are omitted to avoid leaking config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum KvOverrideError {
+    /// Key is empty, oversized or non-ASCII.
+    #[error("invalid model metadata key")]
+    InvalidKey,
+    /// A key already occurs in this list.
+    #[error("duplicate model metadata key")]
+    DuplicateKey,
+    /// A value cannot be safely represented by the native ABI.
+    #[error("invalid model metadata value")]
+    InvalidValue,
+    /// The list exceeded its bounded allowance.
+    #[error("too many model metadata overrides")]
+    Capacity,
+}
+
 /// A safe wrapper around `llama_model_params`.
 #[allow(clippy::module_name_repetitions)]
 pub struct LlamaModelParams {
@@ -147,52 +165,55 @@ impl LlamaModelParams {
         KvOverrides::new(self)
     }
 
-    /// Appends a key-value override to the model parameters. It must be pinned as this creates a self-referential struct.
+    /// Append a validated metadata override. Multiple distinct keys are supported.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use std::ffi::{CStr, CString};
-    /// use std::pin::pin;
-    /// # use llama_cpp::model::params::LlamaModelParams;
-    /// # use llama_cpp::model::params::kv_overrides::ParamOverrideValue;
-    /// let mut params = pin!(LlamaModelParams::default());
-    /// let key = CString::new("key").expect("CString::new failed");
-    /// params.as_mut().append_kv_override(&key, ParamOverrideValue::Int(50));
-    ///
-    /// let kv_overrides = params.kv_overrides().into_iter().collect::<Vec<_>>();
-    /// assert_eq!(kv_overrides.len(), 1);
-    ///
-    /// let (k, v) = &kv_overrides[0];
-    /// assert_eq!(v, &ParamOverrideValue::Int(50));
-    ///
-    /// assert_eq!(k.to_bytes(), b"key", "expected key to be 'key', was {:?}", k);
-    /// ```
-    #[allow(clippy::missing_panics_doc)] // panics are just to enforce internal invariants, not user errors
+    /// The list is terminated by an empty key for the native loader. Pinning keeps
+    /// the existing API's ownership contract; the backing allocation is refreshed
+    /// after growth. No native pointer escapes the borrowed parameters.
+    /// # Errors
+    /// Rejects empty/non-ASCII/oversized or duplicate keys, non-terminated string
+    /// values, non-finite floats, and more than 128 overrides. Rejection leaves
+    /// the existing list unchanged.
     pub fn append_kv_override(
         mut self: Pin<&mut Self>,
         key: &CStr,
         value: kv_overrides::ParamOverrideValue,
-    ) {
-        let kv_override = self
-            .kv_overrides
-            .get_mut(0)
-            .expect("kv_overrides did not have a next allocated");
-
-        assert_eq!(kv_override.key[0], 0, "last kv_override was not empty");
-
-        // There should be some way to do this without iterating over everything.
-        for (i, &c) in key.to_bytes_with_nul().iter().enumerate() {
-            kv_override.key[i] = c_char::try_from(c).expect("invalid character in key");
+    ) -> Result<(), KvOverrideError> {
+        let bytes = key.to_bytes();
+        if bytes.is_empty() || bytes.len() >= 128 || !bytes.is_ascii() {
+            return Err(KvOverrideError::InvalidKey);
         }
-
-        kv_override.tag = value.tag();
-        kv_override.__bindgen_anon_1 = value.value();
-
-        // set to null pointer for panic safety (as push may move the vector, invalidating the pointer)
+        if self.kv_overrides.len() > 128 {
+            return Err(KvOverrideError::Capacity);
+        }
+        let mut encoded = [0; 128];
+        for (destination, byte) in encoded.iter_mut().zip(bytes) {
+            // ASCII has the same positive representation on signed/unsigned char.
+            *destination = *byte as c_char;
+        }
+        if self.kv_overrides.iter().any(|entry| entry.key == encoded) {
+            return Err(KvOverrideError::DuplicateKey);
+        }
+        match value {
+            kv_overrides::ParamOverrideValue::Str(bytes) if !bytes.contains(&0) => {
+                return Err(KvOverrideError::InvalidValue);
+            }
+            kv_overrides::ParamOverrideValue::Float(value) if !value.is_finite() => {
+                return Err(KvOverrideError::InvalidValue);
+            }
+            _ => {}
+        }
+        let entry = llama_cpp_sys::llama_model_kv_override {
+            key: encoded,
+            tag: value.tag(),
+            __bindgen_anon_1: value.value(),
+        };
+        let last = self
+            .kv_overrides
+            .last_mut()
+            .ok_or(KvOverrideError::InvalidValue)?;
+        *last = entry;
         self.params.kv_overrides = null();
-
-        // push the next one to ensure we maintain the iterator invariant of ending with a 0
         self.kv_overrides
             .push(llama_cpp_sys::llama_model_kv_override {
                 key: [0; 128],
@@ -201,11 +222,8 @@ impl LlamaModelParams {
                     val_i64: 0,
                 },
             });
-
-        // set the pointer to the (potentially) new vector
         self.params.kv_overrides = self.kv_overrides.as_ptr();
-
-        eprintln!("saved ptr: {:?}", self.params.kv_overrides);
+        Ok(())
     }
 }
 

@@ -1,9 +1,14 @@
 # Memory system: final implementation delivery
 
-Status: final remaining implementation plan, 2026-11-05.
+Status: implementation in progress, 2026-11-05.
 Audited baseline: `0205229` (`feat: initial comprehensive memory system`).
-This change is research/documentation; application and binding changes below
-have not been implemented.
+The selected owner-supplied E5 Q8 artifact now has native CPU indexing/recall and
+an opt-in durable headless application path. **This final delivery is not complete.**
+See [executable progress and failed qualification](memory-native-integration.md).
+Automatic graph formation is not activated: the current LFM3 extraction preflight
+fails semantic checks. Authentication/UI, personality/attention, proof paths,
+correction/publication/recovery integration and full qualification remain open.
+The complete scope below is unchanged; these are not new completion milestones.
 
 The next implementation task delivers the complete remaining memory experience
 in one integrated delivery. The order below is an internal build/test sequence,
@@ -78,12 +83,17 @@ through acceptance rather than treating the storage baseline as the product.
 
 ### Qualify the actual model path first
 
-The workspace inventory contains the local LFM3-1.7B Q6 derivative and no E5 GGUF
-or memory embedding manifest. The recorded chat artifact SHA-256 is
-`077f001fa1ba64e49190e4b2a83035e886e3c22f74d0a331843925b1d7fa3a2f`;
-recheck it at implementation time. The existing
-[tokenizer artifact](benchmarks/compact-protocol-tokens-2026-11-05.json) explicitly
-contains no generation or extraction-quality measurement.
+The owner selected and supplied `multilingual-e5-small-q8_0.gguf` from
+[cstr/multilingual-e5-small-GGUF](https://huggingface.co/cstr/multilingual-e5-small-GGUF).
+Startup pins its bytes by SHA-256
+`0a34067a40f25d3149b36885faa62bee0e5284d0f9edc102acfc00e115d953e8`.
+It already declares SentencePiece, so no conversion tooling or additional model
+is needed. It omits token-type count and noncausal metadata; scoped load overrides
+supply those. Native tokenizer exceptions are now contained. The local chat
+artifact SHA-256 is
+`077f001fa1ba64e49190e4b2a83035e886e3c22f74d0a331843925b1d7fa3a2f`.
+Earlier converter findings below are historical preparation risks, not an
+instruction to install conversion tools for the selected artifact.
 
 E5-small's published configuration names `BertModel` and
 `XLMRobertaTokenizer`. The pinned converter's
@@ -103,11 +113,11 @@ problem. The selected E5 contract remains mean pooling, L2 normalization,
 384 dimensions, query/passage prefixes and at most 512 total input tokens.
 [E5 model card](https://huggingface.co/intfloat/multilingual-e5-small).
 
-The Rust embedding accessors in
-[`context.rs`](../crates/llama_cpp/src/context.rs) still construct slices from
-`n_embd`; native output dimensions/rank counts and invalid-index behavior require
-an audit before inference. Existing model APIs already expose `n_embd_out` and
-`n_cls_out`; reuse them and add a checked shim only where native guards require it.
+The Rust embedding accessors now check output dimensions, pooling, successful
+evaluation eligibility and indices; guarded tokenization contains native
+exceptions. Real E5 smoke/batch-isolation tests pass. Reference token-ID/vector
+parity and held-out retrieval gates remain open; Q8 smoke success does not prove
+the matched-FP32 reference gate.
 
 ### Close product contracts before connecting callbacks
 

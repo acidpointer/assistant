@@ -290,6 +290,7 @@ pub enum ProcessError {
 
 /// When embedding related functions fail
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum EmbeddingsError {
     /// Embeddings weren't enabled in the context options
     #[error("Embeddings weren't enabled in the context options")]
@@ -300,6 +301,15 @@ pub enum EmbeddingsError {
     /// The given sequence index exceeds the max sequence id
     #[error("Can't use sequence embeddings with a model supporting only LLAMA_POOLING_TYPE_NONE")]
     NonePoolType,
+    /// No successful batch owns an embedding at this index.
+    #[error("embedding index is absent from the last successful batch")]
+    InvalidIndex,
+    /// Native output dimensions cannot describe a valid Rust slice.
+    #[error("invalid embedding output dimensions")]
+    InvalidShape,
+    /// Native synchronization failed inside the guarded boundary.
+    #[error("embedding synchronization failed: {0}")]
+    Native(String),
 }
 
 /// Decode a error from llama.cpp into a [`DecodeError`].
@@ -475,6 +485,9 @@ pub enum TokenToStringError {
 /// Failed to convert a string to a token sequence.
 #[derive(Debug, thiserror::Error)]
 pub enum StringToTokenError {
+    /// Native vocabulary/tokenizer rejected this input; no output is initialized.
+    #[error("native tokenization failed")]
+    Native,
     /// the string contained a null byte and thus could not be converted to a c string.
     #[error("{0}")]
     NulError(#[from] NulError),

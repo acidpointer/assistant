@@ -32,6 +32,14 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
             duration: std::time::Duration::from_secs(args.timeout_seconds),
             ..RunLimits::default()
         });
+    #[cfg(target_os = "linux")]
+    if let Some(path) = &args.memory_config {
+        builder = builder.memory(read_memory_config(path)?);
+    }
+    #[cfg(not(target_os = "linux"))]
+    if args.memory_config.is_some() {
+        anyhow::bail!("durable memory requires Linux");
+    }
     if !args.no_tools && !args.raw {
         builder = builder.tool(Calculator).tool(CurrentTime);
         #[cfg(target_os = "linux")]
@@ -52,6 +60,33 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
             tokio::select! {
                 result = signal.cancelled() => { let () = result; }
                 result = runtime.wait_for_failure() => { result?; }
+            }
+        } else if args.memory_config.is_some() {
+            if let Some(prompt) = &args.prompt {
+                durable_request(
+                    runtime.assistant()?,
+                    &args,
+                    prompt.clone(),
+                    args.request_id.clone(),
+                    &signal,
+                )
+                .await?;
+            } else {
+                eprintln!(
+                    "Enter messages; EOF ends the runtime. Inputs are saved before acceptance."
+                );
+                let mut lines = BufReader::new(tokio::io::stdin()).lines();
+                loop {
+                    let line =
+                        tokio::select! {()=signal.cancelled()=>break,line=lines.next_line()=>line?};
+                    let Some(line) = line else {
+                        break;
+                    };
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    durable_request(runtime.assistant()?, &args, line, None, &signal).await?;
+                }
             }
         } else if let Some(prompt) = &args.prompt {
             let response = tokio::select! {
@@ -175,4 +210,155 @@ fn request(chat: &assistant::Chat, args: &Args, input: String) -> assistant::cha
         }
         Ok(())
     })
+}
+
+#[cfg(target_os = "linux")]
+fn read_memory_config(
+    path: &std::path::Path,
+) -> anyhow::Result<assistant::memory::service::MemoryRuntimeConfig> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Config {
+        data_directory: std::path::PathBuf,
+        embedding_model: std::path::PathBuf,
+    }
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, 4097), &mut bytes)?;
+    anyhow::ensure!(
+        bytes.len() <= 4096,
+        "memory configuration exceeds 4096 bytes"
+    );
+    let config: Config = serde_json::from_slice(&bytes)?;
+    let base = path.parent().unwrap_or(std::path::Path::new("."));
+    let resolve = |value: std::path::PathBuf| {
+        if value.is_absolute() {
+            value
+        } else {
+            base.join(value)
+        }
+    };
+    Ok(assistant::memory::service::MemoryRuntimeConfig {
+        storage: assistant::memory::MemoryConfig::new(resolve(config.data_directory)),
+        embedding: assistant::memory::embedding::EmbeddingConfig::e5_q8(resolve(
+            config.embedding_model,
+        )),
+    })
+}
+
+async fn durable_request(
+    assistant: assistant::application::AssistantHandle,
+    args: &Args,
+    text: String,
+    key: Option<String>,
+    signal: &Cancellation,
+) -> anyhow::Result<()> {
+    use assistant::application::{Submission, Update};
+    let key = match key {
+        Some(key) => key,
+        None => {
+            let mut bytes = [0; 16];
+            getrandom::fill(&mut bytes)
+                .map_err(|_| anyhow::anyhow!("request identity unavailable"))?;
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        }
+    };
+    eprintln!("Request key: {key}");
+    let mut subscription = assistant.subscribe().await?;
+    let accepted = assistant
+        .submit(
+            "cli",
+            Submission {
+                client_id: args.client_id.clone(),
+                request_id: key,
+                text,
+            },
+        )
+        .await?;
+    if accepted.status.is_terminal() {
+        for message in assistant.snapshot().await?.messages {
+            if message.run_id == accepted.id && message.role == "assistant" {
+                println!("{}", message.text);
+            }
+        }
+        eprintln!("Durable operation {}: {:?}", accepted.id, accepted.status);
+        return Ok(());
+    }
+    let mut printed = std::collections::BTreeMap::<String, String>::new();
+    let mut cancelling = false;
+    loop {
+        let event = tokio::select! {
+            ()=signal.cancelled(), if !cancelling=>{assistant.cancel(&accepted.id).await?;cancelling=true;continue;},
+            event=subscription.events.recv()=>event,
+        };
+        let event = match event {
+            Ok(event) => event,
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                subscription = assistant.subscribe().await?;
+                for message in &subscription.snapshot.messages {
+                    if message.run_id == accepted.id && message.role == "assistant" {
+                        print_durable_message(&mut printed, &message.id, &message.text)?;
+                    }
+                }
+                if let Some(run) = subscription
+                    .snapshot
+                    .recent_runs
+                    .iter()
+                    .find(|run| run.id == accepted.id)
+                    && run.status.is_terminal()
+                {
+                    println!();
+                    return Ok(());
+                }
+                continue;
+            }
+            Err(_) => anyhow::bail!("assistant closed; reconcile the original request key"),
+        };
+        match &event.update {
+            Update::Delta { message_id, text } if message_id.starts_with(&accepted.id) => {
+                print!("{text}");
+                io::stdout().flush()?;
+                printed
+                    .entry(message_id.clone())
+                    .or_default()
+                    .push_str(text);
+            }
+            Update::Message { message }
+                if message.run_id == accepted.id && message.role == "assistant" =>
+            {
+                print_durable_message(&mut printed, &message.id, &message.text)?;
+            }
+            Update::Run { run } if run.id == accepted.id && run.status.is_terminal() => {
+                println!();
+                eprintln!(
+                    "Durable operation {}: {:?}; generated {} tokens",
+                    run.id, run.status, run.generated_tokens
+                );
+                if run.error.is_some() {
+                    anyhow::bail!("interaction failed: {}", run.error.unwrap_or("unknown"));
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+}
+fn print_durable_message(
+    printed: &mut std::collections::BTreeMap<String, String>,
+    id: &str,
+    text: &str,
+) -> anyhow::Result<()> {
+    let previous = printed.entry(id.into()).or_default();
+    if let Some(suffix) = text.strip_prefix(previous.as_str()) {
+        print!("{suffix}");
+        io::stdout().flush()?;
+    } else {
+        println!("\n{text}");
+    }
+    previous.clear();
+    previous.push_str(text);
+    Ok(())
 }

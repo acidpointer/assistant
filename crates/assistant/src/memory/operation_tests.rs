@@ -141,7 +141,7 @@ async fn migration_preserves_legacy_data_and_rejects_tampered_history() {
             .query_row("SELECT count(*) FROM migration_history", [], |r| r
                 .get::<_, i64>(0))
             .expect("history"),
-        2
+        4
     );
     connection
         .execute(

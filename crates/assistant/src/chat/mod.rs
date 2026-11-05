@@ -126,6 +126,18 @@ impl Drop for ChatInner {
 #[derive(Debug, Clone)]
 pub struct Chat(Arc<ChatInner>);
 impl Chat {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn isolated(&self, system: String) -> Self {
+        Self::new(
+            self.0.control.next_id(),
+            system,
+            self.0.backend.clone(),
+            self.0.pipeline.clone(),
+            self.0.limits.clone(),
+            self.0.control.clone(),
+        )
+    }
+
     pub(crate) fn model_gpu_scope(&self) -> crate::telemetry::ModelGpuScope {
         self.0.backend.model_gpu_scope()
     }
@@ -160,6 +172,8 @@ impl Chat {
     #[must_use]
     pub fn request(&self, input: impl Into<String>) -> Request {
         Request {
+            #[cfg(target_os = "linux")]
+            memory: None,
             chat: self.clone(),
             input: input.into(),
             options: RequestOptions::default(),
@@ -197,12 +211,22 @@ impl Chat {
 /// Fluent per-operation configuration, sharing the same path as [`Chat::generate`].
 #[derive(Debug)]
 pub struct Request {
+    #[cfg(target_os = "linux")]
+    memory: Option<Arc<crate::memory::session::MemoryOperation>>,
     chat: Chat,
     input: String,
     options: RequestOptions,
     events: EventSink,
 }
 impl Request {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn memory_operation(
+        mut self,
+        operation: Option<Arc<crate::memory::session::MemoryOperation>>,
+    ) -> Self {
+        self.memory = operation;
+        self
+    }
     /// Select raw diagnostic completion or structured chat.
     #[must_use]
     pub fn mode(mut self, mode: InputMode) -> Self {
@@ -276,7 +300,28 @@ impl Request {
             source: ChatError::Configuration("generation requires a Tokio runtime".into()),
             partial: Box::new(empty_response(run_id)),
         })?;
-        let result = handle.spawn(self.execute(run_id)).await;
+        #[cfg(target_os = "linux")]
+        let memory = self.memory.clone();
+        let result = handle
+            .spawn(async move {
+                let result = self.execute(run_id).await;
+                #[cfg(target_os = "linux")]
+                if let Some(memory) = memory
+                    && let Err(error) = memory.settle(&result).await
+                {
+                    let mut partial = match result {
+                        Ok(response) => response,
+                        Err(failure) => *failure.partial,
+                    };
+                    partial.status = RunStatus::Failed;
+                    return Err(RunFailure {
+                        source: ChatError::Memory(error),
+                        partial: Box::new(partial),
+                    });
+                }
+                result
+            })
+            .await;
         waiting.completed = true;
         match result {
             Ok(result) => result,
@@ -286,7 +331,7 @@ impl Request {
             }),
         }
     }
-    async fn execute(self, run_id: u64) -> Result<ChatResponse, RunFailure> {
+    async fn execute(mut self, run_id: u64) -> Result<ChatResponse, RunFailure> {
         let started = Instant::now();
         let inner = &self.chat.0;
         let maximum_deadline = started
@@ -313,6 +358,19 @@ impl Request {
             () = tokio::time::sleep_until(deadline.into()) => return early_failure(guard, ChatError::Deadline, empty()),
             state = inner.state.lock() => state,
         };
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = &self.memory {
+            let recalled = tokio::select! {
+                () = inner.control.shutdown.cancelled() => Err(ChatError::Closed),
+                () = cancellation.cancelled() => Err(ChatError::Cancelled),
+                () = tokio::time::sleep_until(deadline.into()) => Err(ChatError::Deadline),
+                result = memory.prepare(&self.input) => result,
+            };
+            match recalled {
+                Ok(context) => self.options.context.push(context),
+                Err(error) => return early_failure(guard, error, empty()),
+            }
+        }
         let mut working = state.messages.clone();
         runner::trim_history(
             &mut working,
@@ -336,6 +394,10 @@ impl Request {
             started,
             deadline,
         );
+        #[cfg(target_os = "linux")]
+        {
+            context.memory = self.memory;
+        }
         let operation = async {
             context.validate_input()?;
             context.emit(RunEvent::Started { run_id }).await?;

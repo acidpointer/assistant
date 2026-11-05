@@ -416,8 +416,8 @@ async fn shutdown_finalizes_an_active_run_and_instances_are_distinct() {
     other.shutdown().await.expect("shutdown");
 }
 
-#[test]
-fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
+#[tokio::test]
+async fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
     let chat = Chat::new(
         1,
         String::new(),
@@ -433,7 +433,10 @@ fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
         Arc::new(AtomicBool::new(false)),
         Cancellation::default(),
     );
-    let (old, _) = actor.admit("test".into(), input("old")).expect("admit old");
+    let (old, _) = actor
+        .admit("test".into(), input("old"))
+        .await
+        .expect("admit old");
     actor.active = None;
     let record = actor.records.front_mut().expect("retained record");
     record.view.status = Status::Completed;
@@ -442,6 +445,7 @@ fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
         .expect("test process clock supports retention interval");
     actor
         .admit("test".into(), input("second"))
+        .await
         .expect("admit new");
     assert!(
         actor.record(&old.id).is_ok(),
@@ -451,6 +455,7 @@ fn visible_exchange_keeps_its_measurements_after_minimum_retention() {
     actor.messages.retain(|message| message.run_id != old.id);
     actor
         .admit("test".into(), input("third"))
+        .await
         .expect("admit after eviction");
     assert!(matches!(
         actor.record(&old.id),
@@ -505,4 +510,235 @@ async fn failure_before_visible_text_has_a_terminal_display_entry_without_fabric
     );
     assert_eq!(answer.status, Status::Failed);
     app.shutdown().await.expect("shutdown");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn required_memory_acceptance_terminal_commit_and_restart_retry_are_durable() {
+    use crate::memory::{
+        ClientRequestKey, MemoryConfig, MemoryId, MemoryStore, OperationState,
+        service::MemoryAccess,
+    };
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = std::env::temp_dir().join(format!(
+        "assistant-product-test-{}",
+        MemoryId::new().expect("identity")
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .expect("private directory");
+    let config = MemoryConfig::new(&directory);
+    let store = MemoryStore::open(config.clone()).await.expect("store");
+    let memory = MemoryAccess::for_test(&store);
+    let backend = Controlled::new(1);
+    let chat = Chat::new(
+        1,
+        String::new(),
+        backend.clone(),
+        Arc::new(PluginRegistrar::default().build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut app =
+        Application::start_with_memory(chat, RequestOptions::default(), Some(memory.clone()))
+            .expect("app");
+    let accepted = app
+        .handle
+        .submit("test", input("durable"))
+        .await
+        .expect("accepted after commit");
+    let key = ClientRequestKey::new("test", "client", "durable").expect("key");
+    let record = memory
+        .store
+        .operation_by_key(&memory.owner, key.clone())
+        .await
+        .expect("durable before acceptance");
+    assert_eq!(accepted.id, record.id.to_string());
+    let terminal = finished(&app.handle, &accepted.id).await;
+    assert_eq!(terminal.status, Status::Completed);
+    let record = memory
+        .store
+        .operation_by_key(&memory.owner, key.clone())
+        .await
+        .expect("committed before terminal event");
+    assert_eq!(record.state, OperationState::Completed);
+    let assistant = memory
+        .source(record.assistant.expect("visible assistant source").id)
+        .await
+        .expect("assistant evidence");
+    assert_eq!(assistant.source.text.as_str(), "Hello");
+    app.shutdown().await.expect("join app");
+    store.shutdown().await.expect("join store");
+    let store = MemoryStore::open(config).await.expect("restart");
+    let memory = MemoryAccess::for_test(&store);
+    let chat = Chat::new(
+        2,
+        String::new(),
+        backend.clone(),
+        Arc::new(PluginRegistrar::default().build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut app = Application::start_with_memory(chat, RequestOptions::default(), Some(memory))
+        .expect("restart app");
+    let replay = app
+        .handle
+        .submit("test", input("durable"))
+        .await
+        .expect("retry across restart");
+    assert_eq!(replay.id, accepted.id);
+    assert_eq!(replay.status, Status::Completed);
+    assert_eq!(
+        backend.calls.load(Ordering::Relaxed),
+        1,
+        "a retry never generates again"
+    );
+    assert!(
+        app.handle
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .messages
+            .iter()
+            .any(|message| message.text == "Hello")
+    );
+    app.shutdown().await.expect("join app");
+    store.shutdown().await.expect("join store");
+    std::fs::remove_dir_all(directory).expect("cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct UncertainTool {
+    started: Arc<Semaphore>,
+    effects: Arc<AtomicUsize>,
+}
+#[cfg(target_os = "linux")]
+impl crate::tools::Tool for UncertainTool {
+    const NAME: &'static str = "uncertain_effect";
+    type Args = serde_json::Value;
+    type Output = serde_json::Value;
+    type Error = std::io::Error;
+    fn description(&self) -> &str {
+        "Effect test"
+    }
+    async fn call(
+        &self,
+        _: crate::tools::ToolContext,
+        _: Self::Args,
+    ) -> std::io::Result<Self::Output> {
+        self.effects.fetch_add(1, Ordering::Relaxed);
+        self.started.add_permits(1);
+        std::future::pending().await
+    }
+}
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn dropped_tool_waiter_settles_unknown_before_terminal_commit() {
+    use crate::memory::{
+        MemoryConfig, MemoryId, MemoryStore, OperationState, ToolOutcome, service::MemoryAccess,
+        session::MemoryOperation,
+    };
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = std::env::temp_dir().join(format!(
+        "assistant-tool-settlement-{}",
+        MemoryId::new().expect("identity")
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .expect("private directory");
+    let store = MemoryStore::open(MemoryConfig::new(&directory))
+        .await
+        .expect("store");
+    let memory = MemoryAccess::for_test(&store);
+    let (record, _) = memory
+        .admit_product(
+            "test",
+            "client",
+            "tool",
+            "Perform the authorized test effect.",
+        )
+        .await
+        .expect("admit");
+    let operation = MemoryOperation::new(record, memory.clone());
+    operation
+        .prepare("Perform the authorized test effect.")
+        .await
+        .expect("begin");
+    let started = Arc::new(Semaphore::new(0));
+    let effects = Arc::new(AtomicUsize::new(0));
+    let mut tools = crate::tools::ToolRegistry::new();
+    tools
+        .register(UncertainTool {
+            started: started.clone(),
+            effects: effects.clone(),
+        })
+        .expect("register");
+    let cancellation = Cancellation::default();
+    let tool_cancellation = cancellation.clone();
+    let task_operation = operation.clone();
+    let waiter = tokio::spawn(async move {
+        task_operation
+            .execute_tool(
+                tools,
+                crate::chat::ToolCall {
+                    id: "call1".into(),
+                    name: "uncertain_effect".into(),
+                    arguments: serde_json::json!({}),
+                },
+                vec!["uncertain_effect".into()],
+                crate::tools::ToolContext {
+                    invocation_id: "call1".into(),
+                    cancellation: tool_cancellation,
+                },
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started.acquire())
+        .await
+        .expect("intent committed and handler started")
+        .expect("gate")
+        .forget();
+    waiter.abort();
+    cancellation.cancel();
+    let response = ChatResponse {
+        performance: vec![],
+        limit_reason: None,
+        run_id: 1,
+        message: AssistantMessage::default(),
+        tools: vec![],
+        usage: Usage::default(),
+        finish_reason: None,
+        status: RunStatus::Cancelled,
+        elapsed: Duration::ZERO,
+        warnings: vec![],
+        messages: vec![],
+    };
+    tokio::time::timeout(Duration::from_secs(2), operation.settle(&Ok(response)))
+        .await
+        .expect("settlement drains")
+        .expect("terminal commit");
+    let durable = memory
+        .store
+        .operation(&memory.owner, operation.record.id)
+        .await
+        .expect("operation");
+    assert_eq!(durable.state, OperationState::Interrupted);
+    assert!(durable.unknown_tool_outcome);
+    let invocation = memory
+        .store
+        .tool_invocation(&memory.owner, operation.record.id, 1)
+        .await
+        .expect("receipt");
+    assert_eq!(invocation.outcome, Some(ToolOutcome::Unknown));
+    assert!(
+        invocation.result.is_none(),
+        "ephemeral raw results were never persisted"
+    );
+    assert_eq!(effects.load(Ordering::Relaxed), 1, "never replay effects");
+    store.shutdown().await.expect("join store");
+    std::fs::remove_dir_all(directory).expect("cleanup");
 }

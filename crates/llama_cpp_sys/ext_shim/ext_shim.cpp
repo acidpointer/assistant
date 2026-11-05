@@ -166,6 +166,21 @@ int32_t llama_context_synchronize_guarded(llama_context * ctx) {
     });
 }
 
+int32_t llama_tokenize_guarded(const llama_vocab * vocab, const char * text,
+        int32_t text_length, llama_token * tokens, int32_t capacity,
+        bool add_special, bool parse_special, int32_t * count) {
+    if (count) *count = 0;
+    return llama_shim::guard([&]() -> int32_t {
+        if (!vocab || !text || !count || text_length < 0 || capacity < 0 ||
+                (!tokens && capacity)) return LLAMA_SHIM_INVALID_ARG;
+        const int32_t result = llama_tokenize(vocab, text, text_length, tokens,
+                capacity, add_special, parse_special);
+        if (result > capacity) throw std::runtime_error("invalid tokenizer output count");
+        *count = result;
+        return LLAMA_SHIM_OK;
+    });
+}
+
 int32_t llama_gpu_allocations_collect_v1(const llama_model * model,
         const llama_context * ctx, llama_gpu_allocation_v1 * out,
         size_t capacity, size_t * required) {

@@ -238,3 +238,14 @@ qualify this library milestone, not the unimplemented runtime/WebUI integration.
 The research schema/examples remain design material. Their validator checks
 structure and the SQL sketch; it does not exercise this Rust implementation's
 semantic extraction or qualify a model.
+
+## Native/application integration progress
+
+Migrations 3/4 add source-bound E5 vectors/byte coverage and bounded product
+terminal metadata. Source suppression excludes vector reads immediately; bounded
+purge accounts for derived vectors before FK source cleanup. The opt-in Linux
+runtime now owns E5/indexing and durable headless admission/tool settlement/recall.
+This is not the complete final memory system; automatic graph formation,
+authenticated web/owner controls and other planned contracts remain open. See
+[the executable integration record](memory-native-integration.md) for artifact
+selection, usage, failed semantic qualification and exact limitations.

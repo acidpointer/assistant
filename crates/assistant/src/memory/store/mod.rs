@@ -4,7 +4,9 @@
 
 mod backup;
 mod database;
+mod embeddings;
 mod events;
+pub use embeddings::{EmbeddingTask, SemanticHit};
 mod graph;
 mod jobs;
 mod migrations;

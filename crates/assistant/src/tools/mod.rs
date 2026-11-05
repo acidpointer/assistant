@@ -35,12 +35,31 @@ pub trait Tool: Debug + Send + Sync + 'static {
     type Error: Error + Send + Sync + 'static;
     /// Explain when the model should use this capability.
     fn description(&self) -> &str;
+    /// Host-declared effect and durable capture. Conservative defaults retain no
+    /// arguments/results and assume interruption may leave an external effect.
+    #[cfg(target_os = "linux")]
+    fn memory_policy(&self) -> (crate::memory::ToolEffect, ToolRetention) {
+        (
+            crate::memory::ToolEffect::External,
+            ToolRetention::Ephemeral,
+        )
+    }
+
     /// Execute validated Rust arguments. Never interpret model text as code.
     fn call(
         &self,
         context: ToolContext,
         args: Self::Args,
     ) -> impl Future<Output = Result<Self::Output, Self::Error>> + Send;
+}
+/// Durable capture policy selected by the trusted registered handler.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+pub enum ToolRetention {
+    /// Keep execution identity/outcome only.
+    Ephemeral,
+    /// Keep bounded arguments/results as attributed evidence.
+    Retained,
 }
 /// Serializable schema exposed to the chat template.
 #[derive(Debug, Clone)]
@@ -58,11 +77,18 @@ impl ToolSpec {
     }
 }
 trait ErasedTool: Debug + Send + Sync {
+    fn validate(&self, args: &Value) -> ChatResult<()>;
     fn execute(&self, context: ToolContext, args: Value) -> BoxFuture<'_, Value>;
 }
 #[derive(Debug)]
 struct Adapter<T>(T);
 impl<T: Tool> ErasedTool for Adapter<T> {
+    fn validate(&self, args: &Value) -> ChatResult<()> {
+        serde_json::from_value::<T::Args>(args.clone())
+            .map(|_| ())
+            .map_err(|_| ChatError::Protocol("invalid tool arguments".into()))
+    }
+
     fn execute(&self, context: ToolContext, args: Value) -> BoxFuture<'_, Value> {
         Box::pin(async move {
             let args = match serde_json::from_value::<T::Args>(args) {
@@ -90,6 +116,8 @@ pub struct ToolRegistry {
 }
 #[derive(Debug, Clone)]
 struct Registered {
+    #[cfg(target_os = "linux")]
+    policy: (crate::memory::ToolEffect, ToolRetention),
     spec: ToolSpec,
     handler: Arc<dyn ErasedTool>,
 }
@@ -131,6 +159,8 @@ impl ToolRegistry {
             name.into(),
             Registered {
                 spec,
+                #[cfg(target_os = "linux")]
+                policy: adapter.0.memory_policy(),
                 handler: Arc::new(adapter),
             },
         );
@@ -163,6 +193,22 @@ impl ToolRegistry {
                     })
             })
             .collect()
+    }
+    #[cfg(target_os = "linux")]
+    pub(crate) fn durable_dispatch(
+        &self,
+        call: &ToolCall,
+        allowed: &[String],
+    ) -> ChatResult<(crate::memory::ToolEffect, ToolRetention)> {
+        if !allowed.contains(&call.name) {
+            return Err(ChatError::Protocol("tool is not selected".into()));
+        }
+        let tool = self
+            .tools
+            .get(&call.name)
+            .ok_or_else(|| ChatError::Protocol("unknown tool".into()))?;
+        tool.handler.validate(&call.arguments)?;
+        Ok(tool.policy)
     }
     pub(crate) async fn execute(
         &self,

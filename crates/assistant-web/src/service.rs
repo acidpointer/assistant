@@ -59,6 +59,10 @@ impl PreparedService for BoundWeb {
         context: RuntimeContext,
     ) -> BoxFuture<'static, ChatResult<Box<dyn RunningService>>> {
         Box::pin(async move {
+            #[cfg(target_os = "linux")]
+            if context.assistant.memory().is_some() {
+                return Err(ChatError::Configuration("memory requires an authenticated owner adapter; the v1 web adapter cannot expose personal state".into()));
+            }
             let address = self
                 .listener
                 .local_addr()

@@ -173,6 +173,8 @@ impl Drop for RunGuard {
 /// `build`; service/native initialization happens only when `start` is awaited.
 #[derive(Debug)]
 pub struct RuntimeBuilder {
+    #[cfg(target_os = "linux")]
+    memory: Option<crate::memory::service::MemoryRuntimeConfig>,
     engine: &'static ModelEngine,
     models: Vec<(String, LLMConfig)>,
     registrar: PluginRegistrar,
@@ -185,6 +187,16 @@ pub struct RuntimeBuilder {
     shutdown_grace: Duration,
 }
 impl RuntimeBuilder {
+    /// Require durable owner memory and the selected local E5 embedding model.
+    /// Startup fails closed if either resource is unavailable. HTTP adapters must
+    /// authenticate before exposing personal state.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn memory(mut self, config: crate::memory::service::MemoryRuntimeConfig) -> Self {
+        self.memory = Some(config);
+        self
+    }
+
     /// Register resident weights. The first model is the primary chat model.
     #[must_use]
     pub fn model(mut self, name: impl Into<String>, config: LLMConfig) -> Self {
@@ -313,6 +325,8 @@ impl RuntimeBuilder {
         let runtime_services = std::mem::take(&mut self.registrar.runtime_services);
         let lifecycle = std::mem::take(&mut self.registrar.lifecycle);
         Ok(AssistantRuntime {
+            #[cfg(target_os = "linux")]
+            memory: self.memory,
             runtime_services,
             lifecycle,
             engine: self.engine,
@@ -332,6 +346,8 @@ impl RuntimeBuilder {
 /// Validated, unstarted runtime. Dropping it has no worker/native side effects.
 #[derive(Debug)]
 pub struct AssistantRuntime {
+    #[cfg(target_os = "linux")]
+    memory: Option<crate::memory::service::MemoryRuntimeConfig>,
     runtime_services: Vec<Arc<dyn services::RuntimeServiceFactory>>,
     lifecycle: Vec<Arc<dyn Service>>,
     engine: &'static ModelEngine,
@@ -350,6 +366,8 @@ impl AssistantRuntime {
     #[must_use]
     pub fn builder(engine: &'static ModelEngine) -> RuntimeBuilder {
         RuntimeBuilder {
+            #[cfg(target_os = "linux")]
+            memory: None,
             engine,
             models: Vec::new(),
             registrar: PluginRegistrar::default(),
@@ -398,6 +416,23 @@ impl AssistantRuntime {
                 });
             }
         };
+        #[cfg(target_os = "linux")]
+        let mut memory = match self.memory {
+            Some(config) => {
+                match crate::memory::service::MemoryRuntime::start(self.engine, config).await {
+                    Ok(memory) => Some(memory),
+                    Err(error) => {
+                        let cleanup =
+                            stop_services(&self.lifecycle, started, self.shutdown_grace).await;
+                        return Err(ChatError::Startup {
+                            source: Box::new(ChatError::Memory(error)),
+                            cleanup,
+                        });
+                    }
+                }
+            }
+            None => None,
+        };
         let mut workers = BTreeMap::new();
         let mut threads = Vec::new();
         for (name, config) in self.models {
@@ -422,6 +457,12 @@ impl AssistantRuntime {
                         worker.stop();
                     }
                     let mut cleanup = join_workers(&mut threads).await;
+                    #[cfg(target_os = "linux")]
+                    if let Some(memory) = memory.take()
+                        && let Err(error) = memory.shutdown().await
+                    {
+                        cleanup.push(error.to_string());
+                    }
                     cleanup
                         .extend(stop_services(&self.lifecycle, started, self.shutdown_grace).await);
                     return Err(ChatError::Startup {
@@ -444,6 +485,8 @@ impl AssistantRuntime {
             control.clone(),
         );
         let mut running = RunningAssistant {
+            #[cfg(target_os = "linux")]
+            memory,
             workers,
             threads,
             chat,
@@ -476,6 +519,8 @@ impl AssistantRuntime {
 /// Explicit [`Self::shutdown`] is required to await service flushing and joins.
 #[derive(Debug)]
 pub struct RunningAssistant {
+    #[cfg(target_os = "linux")]
+    memory: Option<crate::memory::service::MemoryRuntime>,
     application: Option<Application>,
     lifecycle: Vec<Arc<dyn Service>>,
     runtime_services: Vec<Box<dyn services::RunningService>>,
@@ -494,6 +539,15 @@ impl RunningAssistant {
         &mut self,
         prepared: Vec<Box<dyn services::PreparedService>>,
     ) -> ChatResult<()> {
+        #[cfg(target_os = "linux")]
+        let application = Application::start_with_memory(
+            self.chat.clone(),
+            RequestOptions::default(),
+            self.memory
+                .as_ref()
+                .map(crate::memory::service::MemoryRuntime::owner_access),
+        )?;
+        #[cfg(not(target_os = "linux"))]
         let application = Application::start(self.chat.clone(), RequestOptions::default())?;
         let context = services::RuntimeContext {
             assistant: application.handle.clone(),
@@ -555,6 +609,10 @@ impl RunningAssistant {
     /// Clone the primary conversation handle. All clones share working state.
     #[must_use]
     pub fn chat(&self) -> Chat {
+        #[cfg(target_os = "linux")]
+        if self.memory.is_some() {
+            return self.chat.isolated(self.system.clone());
+        }
         self.chat.clone()
     }
     /// Create independent bounded working state on a resident model.
@@ -617,6 +675,12 @@ impl RunningAssistant {
             worker.stop();
         }
         failures.extend(join_workers(&mut self.threads).await);
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = self.memory.take()
+            && let Err(error) = memory.shutdown().await
+        {
+            failures.push(error.to_string());
+        }
         failures.extend(
             stop_services(&self.lifecycle, self.lifecycle.len(), self.shutdown_grace).await,
         );

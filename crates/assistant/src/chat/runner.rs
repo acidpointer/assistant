@@ -17,6 +17,8 @@ use std::{collections::BTreeSet, sync::Arc, time::Instant};
 /// handles are private so modifying a draft cannot bypass the core boundaries.
 #[derive(Debug)]
 pub struct RunContext {
+    #[cfg(target_os = "linux")]
+    pub(crate) memory: Option<Arc<crate::memory::session::MemoryOperation>>,
     /// Runtime-local interaction ID.
     pub(crate) run_id: u64,
     /// Trusted host instructions for this run.
@@ -82,6 +84,8 @@ impl RunContext {
             })
         };
         Self {
+            #[cfg(target_os = "linux")]
+            memory: None,
             run_id,
             chat_id,
             lease,
@@ -342,6 +346,12 @@ impl RunContext {
             cancellation: self.cancellation.clone(),
         };
         let tools = self.pipeline.tools.clone();
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = &self.memory {
+            return memory
+                .execute_tool(tools, call, allowed.to_vec(), context, self.deadline)
+                .await;
+        }
         let result = tokio::select! {
             () = self.cancellation.cancelled() => ToolReceipt { call: call.clone(), result: failure("interrupted", "no confirmed result; external effects may have occurred") },
             () = tokio::time::sleep_until(self.deadline.into()) => ToolReceipt { call: call.clone(), result: failure("deadline", "no confirmed result; external effects may have occurred") },
