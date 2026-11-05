@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "date": "2026-11-05",
+  "scope": "Development smoke only; final memory delivery unqualified",
+  "artifacts": {
+    "embedding": {
+      "file": "multilingual-e5-small-q8_0.gguf",
+      "source": "https://huggingface.co/cstr/multilingual-e5-small-GGUF",
+      "bytes": 131624960,
+      "sha256": "0a34067a40f25d3149b36885faa62bee0e5284d0f9edc102acfc00e115d953e8",
+      "architecture": "bert",
+      "precision": "Q8_0",
+      "dimensions": 384,
+      "total_token_limit": 512,
+      "pooling": "mean",
+      "host_normalization": "L2",
+      "input_copy_normalization": "collapse Unicode whitespace",
+      "prefixes": {
+        "query": "query: ",
+        "passage": "passage: "
+      },
+      "metadata_overrides": {
+        "tokenizer.ggml.token_type_count": 2,
+        "bert.attention.causal": false
+      }
+    },
+    "chat": {
+      "file": "LFM3-1.7B-Heretic-Abliterated-Q6_K.gguf",
+      "sha256": "077f001fa1ba64e49190e4b2a83035e886e3c22f74d0a331843925b1d7fa3a2f"
+    }
+  },
+  "binding_smoke": {
+    "english_relevant_cosine": 0.7943884,
+    "english_unrelated_cosine": 0.75818217,
+    "ukrainian_relevant_cosine": 0.79244363,
+    "batch_isolation_cosine_threshold": 0.9999,
+    "invalid_index_failed_batch_and_tokenizer_exception_checks": "passed",
+    "token_id_reference_parity": "unmeasured",
+    "reference_vector_parity": "unmeasured",
+    "held_out_recall": "unmeasured"
+  },
+  "service_smoke": {
+    "native_e5_index_close_reopen_without_chat_history": "passed",
+    "unicode_query": "Ukrainian",
+    "source_with_newline": "passed"
+  },
+  "headless_smoke": {
+    "execution": "CPU with two E5 threads and four chat threads",
+    "first_process_source": "Remember this fact: my bicycle is blue. Reply briefly.",
+    "first_process_answer": "My bicycle is blue.",
+    "fresh_process_question": "What color is my bicycle? Answer using your memory.",
+    "fresh_process_answer_contains": "Blue.",
+    "shutdown_after_tokenizer_guard_exit_code": 0,
+    "prior_native_abort": "SPM missing-byte-fallback out_of_range crossed llama_tokenize C ABI; contained by repository-owned shim"
+  },
+  "extraction_development": {
+    "status": "failed semantic qualification; not activated",
+    "schema": "memory-extraction.schema.json",
+    "syntax_repair": false,
+    "expected": [
+      "user sibling_of Lena (reference)",
+      "Lena has_occupation veterinarian (reference)"
+    ],
+    "attempts": [
+      {
+        "prompt": "initial minimal policy",
+        "sampled_tokens": 296,
+        "failures": [
+          "invented correction c0",
+          "occupation assigned to user",
+          "hypothetical modality instead of asserted",
+          "source handle used as validity timestamps"
+        ]
+      },
+      {
+        "prompt": "explicit policy plus literal preference example",
+        "sampled_tokens": 262,
+        "failures": [
+          "family object encoded as text instead of reference",
+          "occupation claim omitted"
+        ]
+      }
+    ],
+    "held_out_cases_evaluated": 0
+  },
+  "workspace_regression": {
+    "passed": 649,
+    "failed": 0,
+    "ignored": 16,
+    "excluded": "Explicit failing semantic qualification preflight is ignored by the portable default suite"
+  },
+  "release_gates": {
+    "final_delivery": "open",
+    "automatic_graph_formation": "not activated",
+    "authenticated_memory_web": "not implemented; v1 activation rejected",
+    "personality_and_attention": "not implemented",
+    "publication_forgetting_restore_integration": "not complete",
+    "load_foreground_interference_and_browser_qualification": "unmeasured"
+  }
+}

@@ -4,6 +4,64 @@ Status: implemented opt-in E5 indexing/recall and durable headless request path;
 **the final memory-system delivery is incomplete and unqualified**, 2026-11-05.
 The complete contract remains [the final integration plan](memory-integration-plan.md).
 This document records executable progress and failures, not a replacement scope.
+Artifact identities and measured observations are recorded in the
+[preflight manifest](benchmarks/memory-preflight-2026-11-05.json).
+
+## Stop checkpoint — 2026-11-05
+
+**Paused at the owner's request. Do not resume implementation until requested.**
+Current committed implementation anchor: `0dae27c` (`wip: semantic graph memory`).
+The working tree also contains the documentation/manifest updates and two small
+source edits described below. Nothing was committed as part of this checkpoint.
+
+| State | What exists at this stop |
+| --- | --- |
+| Done | Selected E5 Q8 artifact verification and scoped metadata overrides; safe embedding access; exception-contained tokenization; resident CPU embedding worker; source-bound vector chunks/coverage, exact semantic search and bounded vector purge. |
+| Done | Opt-in durable runtime/headless path: committed admission, stable operation IDs/retries, evidence recall, private operation authority, owned tool settlement before finalization, terminal details/usage availability and diagnostic-history isolation. |
+| Verified | Real E5 multilingual retrieval, batch isolation, newline handling and close/reopen recall; deterministic durable admission/retry/cancellation tests; real daemon save followed by recall in a fresh process. The tokenizer abort was diagnosed and fixed; the corrected daemon exited with status 0. |
+| Failed qualification | The current local chat model's named-JSON extraction passes syntax but fails semantic checks in two development attempts. The explicit semantic preflight remains failing and ignored by the default suite. |
+| Not implemented | Automatic graph-formation orchestration and full proposal validation/qualification; graph proof-path/inverse/alias integration, chunked/fenced correction/read sets and situation state. Existing storage primitives are not a running memory-formation loop. |
+| Not implemented | Personality/disposition, attention and durable inbox/initiative; owner pairing/authenticated v2 web/frontend and complete owner command surfaces; complete publication, forgetting and active-restore barriers. |
+| Not qualified | Reference tokenizer/vector parity, held-out extraction/recall/path quality, supported large-store latency/foreground interference, browser/recovery races and live-use gates. |
+
+**Work in progress when interrupted:** recording the evidence manifest and final
+verification notes, plus these uncommitted source changes:
+
+- `crates/assistant/src/memory/service.rs`: trim surrounding whitespace before
+  selecting the bounded recall-query prefix, so leading whitespace cannot hide
+  the actual query. This last edit has not been retested.
+- `crates/assistant-daemon/src/cli.rs`: reject `--require-tool` together with
+  `--memory-config` rather than silently ignore a flag not propagated into the
+  durable application defaults. This last edit has not been retested.
+- `docs/benchmarks/memory-preflight-2026-11-05.json`: newly written, untracked
+  evidence manifest; retain it with the documentation changes when reviewed.
+
+**Last completed checks:** `cargo check --workspace --offline` passed;
+`cargo test --workspace --offline` recorded **649 passed, 0 failed, 16 ignored**.
+The explicit native E5 service test passed separately. Clippy completed with
+warnings; it was not a warning-free gate. These checks preceded the two final
+source edits above. The last `cargo fmt --all --check` failed on the newly added
+unformatted trim line; formatting and verification remain pending. The semantic
+extraction preflight is a separate known failure, not part of the green default
+suite or proof of production quality.
+
+**Temporary shutdown:** the test/build/debugger sessions used for this work have
+exited. Both smoke daemon processes are stopped, and their native model workers
+are no longer resident. Diagnostic logs and the synthetic smoke store/config
+remain under `/tmp` (notably `/tmp/assistant-memory-e5-smoke/`); they were retained
+as evidence rather than deleted. Local GGUF files were preserved. No new service
+was installed or left running by this work.
+
+**Resume order:** first review the two pending source edits, format and rerun
+their checks. Then continue the unchanged A–G delivery contract in
+[the final plan](memory-integration-plan.md): resolve extraction semantics and
+build the frozen quality harness; finish durable identity/options/lookup and
+foreground/internal-work contracts; implement the graph/job/read-set path;
+personality/attention; authenticated adapters/owner controls; publication,
+forgetting and restore; then full native/headless/browser/load qualification.
+Do not weaken semantic assertions, activate automatic graph writes on the
+current evidence, infer authorization for another model download, or describe
+the current partial integration as the completed brain-map feature.
 
 ## Selected model and native contract
 
@@ -26,7 +84,9 @@ citation offsets are unchanged. More than 512 tokens is rejected, never silently
 truncated. The indexer splits sources into overlapping UTF-8 spans and advances
 coverage atomically with each vector.
 
-A real daemon run exposed an additional failure: missing byte-fallback vocabulary
+Two real daemon processes saved and recalled a blue-bicycle fact with fresh
+working history. After the guard below, the recall process exited cleanly (0).
+An earlier real daemon run exposed an additional failure: missing byte-fallback vocabulary
 entries could make `llama_tokenize` throw through the C ABI, aborting Rust.
 The new repository-owned tokenizer shim catches native exceptions and returns
 a typed failure for both tokenization and counting. An unsupported input stays
@@ -105,9 +165,8 @@ Run a fresh process with a different request key and ask about the bicycle. A
 retry must reuse the original key **and exact input**; it reconciles the original
 operation without generating or executing tools again. `--interactive` uses the
 same durable path. `--raw` conflicts with required memory. The memory configuration
-is bounded to 4096 bytes and rejects unknown fields. Explicit `--require-tool`
-is not yet propagated to durable application defaults and should not be used
-with this experimental path.
+is bounded to 4096 bytes and rejects unknown fields. Explicit `--require-tool` conflicts with `--memory-config` until durable
+client-option identity is integrated; automatic registered tools remain available.
 
 The existing unauthenticated v1 web adapter **rejects memory-enabled activation**.
 It continues working with memory disabled. Pairing, authenticated v2 adapters,

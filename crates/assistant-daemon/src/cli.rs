@@ -89,7 +89,7 @@ pub(crate) struct Args {
     pub(crate) thinking: bool,
     #[arg(long)]
     pub(crate) no_tools: bool,
-    #[arg(long, conflicts_with = "no_tools", requires = "no_web")]
+    #[arg(long, conflicts_with_all = ["no_tools","memory_config"], requires = "no_web")]
     pub(crate) require_tool: bool,
     /// Wall-clock allowance per interaction, excluding model startup.
     #[arg(long, default_value_t = 600)]

@@ -1,6 +1,8 @@
 # Memory system: final implementation delivery
 
-Status: implementation in progress, 2026-11-05.
+Status: paused at the owner's request, 2026-11-05.
+The [stop/resume checkpoint](memory-native-integration.md#stop-checkpoint--2026-11-05)
+records completed work, remaining scope, interrupted edits and temporary shutdown.
 Audited baseline: `0205229` (`feat: initial comprehensive memory system`).
 The selected owner-supplied E5 Q8 artifact now has native CPU indexing/recall and
 an opt-in durable headless application path. **This final delivery is not complete.**

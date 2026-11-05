@@ -86,6 +86,7 @@ impl MemoryAccess {
         self.changed.notify_one();
     }
     pub(crate) async fn recall_context(&self, text: &str) -> ChatResult<String> {
+        let text=text.trim();
         // Query only a bounded prefix; the complete literal question is still
         // supplied as the user input. The model never selects authority or SQL.
         let mut end = text.len().min(384);
