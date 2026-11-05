@@ -81,8 +81,9 @@ runtime only requests stop.
 
 ## Context and resource invariants
 
-- Before native mutation, rendered input plus the reserved output must fit the
-  actual single-sequence capacity. An oversized current interaction fails.
+- Before native mutation, rendered input plus the effective output allowance must
+  fit the actual single-sequence capacity. After old exchanges are removed, the
+  worker may reduce that allowance; input leaving no output space fails.
 - Recent history is bounded by messages and payload bytes. Old complete user
   exchanges are removed first; native rendering additionally removes old complete
   exchanges until the token budget fits. System instructions, supporting context,

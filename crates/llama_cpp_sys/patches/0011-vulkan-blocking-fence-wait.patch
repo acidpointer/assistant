@@ -1,0 +1,55 @@
+Subject: Block on final Vulkan fences instead of polling on the host
+Base: llama.cpp a34de8618b25dfc32ee43749db47d767a9f0a25d (b12015)
+
+Why: upstream PR #12630 introduced hybrid sleeping/polling to reduce fence
+wake-up latency (up to 5% higher throughput on NVIDIA/Windows):
+https://github.com/ggml-org/llama.cpp/pull/12630
+
+A resident assistant favors lower CPU consumption. The final polling loop
+accounted for 16.96% of sampled process CPU time in a user-supplied Vulkan
+profile. Wait on the same final fence using Vulkan's blocking API. Keep the
+intermediate fence lifecycle, final reset ordering, and VK_CHECK device-loss
+reporting/error propagation. No submission, ABI, or public API changes.
+
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -345,36 +345,8 @@
+         ctx->almost_ready_fence_pending = false;
+     }
+ 
+-    // Spin (w/pause) waiting for the graph to finish executing.
+-    vk::Result result;
+-    for (;;) {
+-        try {
+-            result = ctx->device->device.getFenceStatus(ctx->fence);
+-        } catch (vk::DeviceLostError &) {
+-            ggml_vk_print_device_lost_info(ctx->device);
+-            GGML_LOG_ERROR("ggml_vulkan: getFenceStatus at %s:%d\n", __FILE__, __LINE__);
+-            throw;
+-        }
+-        if (result == vk::Result::eSuccess) {
+-            break;
+-        }
+-        if (result != vk::Result::eNotReady) {
+-            GGML_LOG_ERROR("ggml_vulkan: error %s at %s:%d\n", to_string(result).c_str(), __FILE__, __LINE__);
+-            throw vk::SystemError(vk::make_error_code(result), "ggml_vulkan: getFenceStatus");
+-        }
+-        for (uint32_t i = 0; i < 100; ++i) {
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-            YIELD();
+-        }
+-    }
++    // A resident daemon favors low host CPU use over the spin loop's lower wake-up latency.
++    VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "final fence waitForFences", ctx->device);
+     ctx->device->device.resetFences({ ctx->fence });
+ }
+ 

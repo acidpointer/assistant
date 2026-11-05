@@ -78,8 +78,9 @@ exists and which upstream API or behavior forced it.
 
 | `0009-pq3-kv-graph-state.patch` | Signed-Hadamard graph identity, restricted CPU cache inference, early state/shift rejection, graph ABI, indexed-write and attention tests. |
 | `0010-pq3-vulkan-cache-attention.patch` | Packed Vulkan writes/copies and scalar/coopmat1/coopmat2 attention, actual-device preflight, completed-operation observation ABI and GPU tests. |
+| `0011-vulkan-blocking-fence-wait.patch` | Uses a blocking final-fence wait for resident inference instead of host polling, preserving submission/reset order and device-loss reporting. |
 
-Patches 0003–0007 are mandatory. `patch_staging.rs` adds 0008–0010 only for the
+Patches 0003–0007 and 0011 are mandatory. `patch_staging.rs` adds 0008–0010 only for the
 `turboquant` feature; feature selection and patch contents change source-copy
 identity. Generated FFI and shim defines follow that same selection. Native
 `tests/` sources are packaged so the experimental test/CMake patch applies to
@@ -181,6 +182,29 @@ module. Bridging records into `tracing` belongs to the application.
 Coverage is deliberately narrow: this callback covers llama/ggml core logs. The
 `common/` logger (`runtime::log`) and the clip/mtmd logger (`mtmd_log_set`) are
 separate native sinks and are not captured by `set_log_callback`.
+
+### Vulkan fence waiting
+
+Patch 0011 makes the normal Vulkan synchronization path block on its final
+completion fence instead of repeatedly querying it with CPU pause instructions.
+It retains the optional almost-ready fence's wait/reset, the final fence reset
+after successful completion, and `VK_CHECK` error/device-loss diagnostics.
+Submission batching, GPU work, and resource lifetimes are unchanged. There is no
+new configuration or public ABI; the patch is active with or without the
+experimental codec feature and leaves the upstream pin intact.
+
+This trades potential CPU wake-up latency for lower host CPU consumption in a
+resident daemon. Upstream's hybrid policy was introduced by
+[PR #12630](https://github.com/ggml-org/llama.cpp/pull/12630), which reported up to
+5% higher throughput on NVIDIA/Windows. The local CPU/throughput impact still
+requires real-GPU before/after measurement; the user profile establishes the
+polling cost, not the replacement's performance. See the
+[optimization plan](vulkan-cpu-optimization-plan.md) for evidence and validation.
+
+The isolated `test_vulkan_lifecycle` child executes small and longer graphs,
+changes their inputs, and repeats asynchronous submission, synchronization, and
+readback before exit. The longer graph also crosses the intermediate-fence
+threshold. These tests require a usable Vulkan device to establish GPU coverage.
 
 ### Vulkan resource lifetime
 

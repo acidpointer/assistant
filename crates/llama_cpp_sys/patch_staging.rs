@@ -6,7 +6,7 @@ use std::{fs, path::Path};
 /// Experimental native source selection, independent of backend selection.
 #[derive(Debug, Clone, Copy)]
 pub enum CodecPatches {
-    /// Existing mandatory safety patches only.
+    /// Mandatory safety and resident-inference patches only.
     Disabled,
     /// Add PQ3 row and CPU graph support; GPU selection remains unsupported.
     #[cfg(test)]
@@ -21,6 +21,7 @@ const REQUIRED: &[&str] = &[
     "0005-fail-closed-eagle3-process.patch",
     "0006-runtime-state-safety.patch",
     "0007-vulkan-resource-lifecycle.patch",
+    "0011-vulkan-blocking-fence-wait.patch",
 ];
 
 /// Stage exactly the selected patches; no unlisted patch can become active.

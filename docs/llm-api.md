@@ -149,9 +149,13 @@ exchanges to meet message/payload bounds. Before decoding, the native worker ren
 and tokenizes, reserves the requested output and drops oldest complete exchanges
 until it fits. The newest user input and all its tool continuations are retained.
 System instructions and request supporting context are not silently shortened.
-If that minimum prompt cannot fit, the operation returns `EngineError::Budget`
+When no old exchange can be removed, the worker reduces the output allowance to
+the remaining capacity and reports `limit_reason = "context_capacity"`. If the
+retained input leaves no output space, the operation returns `EngineError::Budget`
 without overflowing the native context. The recent transcript may contain more
-messages than a particular native prompt. No running summary is produced.
+messages than a particular native prompt. No running summary is produced. See
+the [LFM3 limits reference](lfm3-limits.md) for model capacity, current defaults
+and the distinction between accepted input and reliable model behavior.
 
 KV reuse requires a verified evaluated-token prefix and usable final logits.
 Any rewrite/divergence uses a full rebuild. This conservative policy works without

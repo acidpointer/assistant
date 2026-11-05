@@ -1,8 +1,9 @@
-//! Verify Vulkan cache cleanup in an isolated process, without model weights.
+//! Verify Vulkan synchronization and cache cleanup without model weights.
 //!
 //! Each native test process owns its backend epoch. Buffer-type descriptors
 //! must survive cache cleanup; live backends, buffers, events and pinned memory
-//! must prevent it. Set `LLAMA_TEST_REQUIRE_VULKAN=1` to require GPU coverage.
+//! must prevent it. Child graphs verify fence reuse before process shutdown.
+//! Set `LLAMA_TEST_REQUIRE_VULKAN=1` to require GPU coverage.
 #![cfg(all(feature = "vulkan", not(target_vendor = "apple")))]
 
 use llama_cpp::llama_backend::LlamaBackend;
@@ -57,35 +58,61 @@ fn exit_after_gpu_graph() {
         }
         let backend = sys::ggml_backend_vk_init(0);
         assert!(!backend.is_null(), "child Vulkan backend");
-        let context = sys::ggml_init(sys::ggml_init_params {
-            mem_size: 65_536,
-            mem_buffer: std::ptr::null_mut(),
-            no_alloc: true,
-        });
-        assert!(!context.is_null(), "child graph metadata");
-        let a = sys::ggml_new_tensor_1d(context, sys::GGML_TYPE_F32, 32);
-        let b = sys::ggml_new_tensor_1d(context, sys::GGML_TYPE_F32, 32);
-        assert!(!a.is_null() && !b.is_null(), "child input tensors");
-        let sum = sys::ggml_add(context, a, b);
-        let graph = sys::ggml_new_graph_custom(context, 32, false);
-        assert!(!sum.is_null() && !graph.is_null(), "child compute graph");
-        sys::ggml_build_forward_expand(graph, sum);
-        let buffer = sys::ggml_backend_alloc_ctx_tensors(context, backend);
-        assert!(!buffer.is_null(), "child graph storage");
-        let input = [1.0_f32; 32];
-        sys::ggml_backend_tensor_set(a, input.as_ptr().cast(), 0, size_of_val(&input));
-        sys::ggml_backend_tensor_set(b, input.as_ptr().cast(), 0, size_of_val(&input));
-        assert_eq!(
-            sys::ggml_backend_graph_compute(backend, graph),
-            sys::GGML_STATUS_SUCCESS,
-            "child Vulkan graph executes"
-        );
-        let mut output = [0.0_f32; 32];
-        sys::ggml_backend_tensor_get(sum, output.as_mut_ptr().cast(), 0, size_of_val(&output));
-        assert_eq!(output, [2.0; 32], "child graph result");
-        sys::ggml_backend_buffer_free(buffer);
+        // One add has no almost-ready fence; sixteen dependent squares also
+        // exercise its submission/reset path. Squares do not fuse in this pin,
+        // so the long graph crosses the backend's remaining-node threshold.
+        for squares in [0, 16] {
+            let context = sys::ggml_init(sys::ggml_init_params {
+                mem_size: 65_536,
+                mem_buffer: std::ptr::null_mut(),
+                no_alloc: true,
+            });
+            assert!(!context.is_null(), "child graph metadata");
+            let a = sys::ggml_new_tensor_1d(context, sys::GGML_TYPE_F32, 32);
+            let b = sys::ggml_new_tensor_1d(context, sys::GGML_TYPE_F32, 32);
+            assert!(!a.is_null() && !b.is_null(), "child input tensors");
+            let mut result = sys::ggml_add(context, a, b);
+            assert!(!result.is_null(), "child add tensor");
+            for _ in 0..squares {
+                result = sys::ggml_sqr(context, result);
+                assert!(!result.is_null(), "child square tensor");
+            }
+            let graph = sys::ggml_new_graph_custom(context, 32, false);
+            assert!(!graph.is_null(), "child compute graph");
+            sys::ggml_build_forward_expand(graph, result);
+            let buffer = sys::ggml_backend_alloc_ctx_tensors(context, backend);
+            assert!(!buffer.is_null(), "child graph storage");
+            // Alternating exact outputs expose stale readback and missed fence
+            // resets while reusing the same graph, tensors and backend.
+            for value in [0.5_f32, 0.0, -0.5, 0.5] {
+                let input = [value; 32];
+                sys::ggml_backend_tensor_set(a, input.as_ptr().cast(), 0, size_of_val(&input));
+                sys::ggml_backend_tensor_set(b, input.as_ptr().cast(), 0, size_of_val(&input));
+                assert_eq!(
+                    sys::ggml_backend_graph_compute_async(backend, graph),
+                    sys::GGML_STATUS_SUCCESS,
+                    "child Vulkan graph submits"
+                );
+                sys::ggml_backend_synchronize(backend);
+                sys::ggml_backend_synchronize(backend);
+                let mut output = [0.0_f32; 32];
+                sys::ggml_backend_tensor_get(
+                    result,
+                    output.as_mut_ptr().cast(),
+                    0,
+                    size_of_val(&output),
+                );
+                let sum = 2.0 * value;
+                let expected = if squares == 0 { sum } else { sum.abs() };
+                assert_eq!(
+                    output, [expected; 32],
+                    "child graph result after {squares} squares"
+                );
+            }
+            sys::ggml_backend_buffer_free(buffer);
+            sys::ggml_free(context);
+        }
         sys::ggml_backend_free(backend);
-        sys::ggml_free(context);
         // Do not call explicit Vulkan cleanup: the normal owner-release path
         // and exit hook must retire device/compiler resources on their own.
     }

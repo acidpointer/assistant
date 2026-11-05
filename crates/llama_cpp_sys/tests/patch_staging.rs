@@ -34,6 +34,9 @@ fn feature_selection_invalidates_cache_and_removes_stale_codec_sources() {
     let staged = temp.0.join("active");
     stage(&source, &staged, CodecPatches::Disabled).expect("base patches");
     let baseline = fingerprint(&staged).expect("base fingerprint");
+    assert!(staged
+        .join("0011-vulkan-blocking-fence-wait.patch")
+        .is_file());
     assert!(!staged.join("0008-pq3-cpu-format.patch").exists());
     assert!(!staged.join("0009-pq3-kv-graph-state.patch").exists());
     stage(&source, &staged, CodecPatches::Pq3Cpu).expect("codec patches");
@@ -44,6 +47,9 @@ fn feature_selection_invalidates_cache_and_removes_stale_codec_sources() {
     assert_ne!(baseline, fingerprint(&staged).expect("codec fingerprint"));
     let cpu = fingerprint(&staged).expect("CPU fingerprint");
     stage(&source, &staged, CodecPatches::Pq3Graph).expect("full codec sources");
+    assert!(staged
+        .join("0011-vulkan-blocking-fence-wait.patch")
+        .is_file());
     assert!(staged
         .join("0010-pq3-vulkan-cache-attention.patch")
         .is_file());

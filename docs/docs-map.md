@@ -7,12 +7,14 @@ Each row points at a real file and says what it is for.
 | --- | --- | --- |
 | [`../AGENTS.md`](../AGENTS.md) | Operating manual for coding agents: ownership model, task modes, Rust standards, review protocol, binding-fork rules, quality gates. | Current |
 | [`../README.md`](../README.md) | Project overview, feature highlights, prebuilt quickstart/distribution, native dependencies, source builds, development checks, and upstream pin. | Current |
-| [`architecture.md`](architecture.md) | Current system architecture, crate boundaries, ownership split, resident workers, bounded working context, extension boundaries, and deliberate limits. | Current |
+| [`architecture.md`](architecture.md) | Current system architecture, crate boundaries, ownership split, resident workers, bounded working context, adaptive output allowance, extension boundaries, and deliberate limits. | Current |
 | [`builtin-tools.md`](builtin-tools.md) | Built-in calculator/time and Linux process listing/lookup tools: arguments, live measurement semantics, visibility, resource bounds and cancellation. | Implemented |
-| [`llm-api.md`](llm-api.md) | High-level chat/runtime API, typed tools, plugins/hooks/middleware, context-window policy, cancellation, failure and lifecycle contracts. | Current |
+| [`llm-api.md`](llm-api.md) | High-level chat/runtime API, typed tools, plugins/hooks/middleware, context-window policy and adaptive output allowance, cancellation, failure and lifecycle contracts. | Current |
+| [`lfm3-limits.md`](lfm3-limits.md) | LFM3-1.7B published context limits, runtime defaults, memory costs, quality evidence, unverified companion behavior and proposed operating-range evaluation. | Research reference, 2026-11-05 |
 | [`decisions/0001-persistent-runtime.md`](decisions/0001-persistent-runtime.md) | Accepted decision: singleton backend, thread-confined workers, bounded interaction pipeline and separate future permanent memory. | Accepted |
 | [`decisions/0002-pq3-graph-transform.md`](decisions/0002-pq3-graph-transform.md) | Experimental signed-Hadamard graph convention, row/graph ABI separation and state/shift/support restrictions. | Accepted prototype contract; CPU/NVIDIA verified |
 | [`bindings-fork.md`](bindings-fork.md) | Binding fork maintenance: ordered patches, guarded shims, Vulkan/logging ownership, fallible APIs, cache/device inspection ABI, and upstream update procedure. | Current |
+| [`vulkan-cpu-optimization-plan.md`](vulkan-cpu-optimization-plan.md) | Source evidence, implementation and validation plan for default blocking Vulkan fence waits, synchronization/error contracts, and CPU/throughput tradeoffs in normal builds. | Implemented; GPU acceptance open, 2026-11-05 |
 | [`turboquant-research.md`](turboquant-research.md) | Preserved TurboQuant/Vulkan research baseline: donor forks, source evidence, model memory calculations, proposed native patch strategy, risks and adoption criteria; links to the implemented preparation baseline. | Historical research / codec proposal, 2026-11-04 |
 | [`turboquant-implementation-plan.md`](turboquant-implementation-plan.md) | CPU-first PQ3/TBQ3 delivery plan and concrete next-stage design: signed-transform composition, patches 0009/0010, state/shift restrictions, strict Vulkan placement, runtime wiring and validation gates. | Experimental CPU/Vulkan/runtime measured; no promotion, 2026-11-04 |
 | [`pq3-inference-evaluation.md`](pq3-inference-evaluation.md) | Implemented native/runtime PQ3, complete quality rejection, paired release memory/speed, reverse-order confirmation, placement evidence and remaining limits. | Measured experimental rejection; no promotion, 2026-11-04 |
@@ -32,6 +34,7 @@ Each row points at a real file and says what it is for.
 | [`decisions/0004-typed-frontend-and-measurements.md`](decisions/0004-typed-frontend-and-measurements.md) | Oxc/React/FSD build boundary, safe worker Markdown, honest native/process metrics and generation budgets. | Accepted and implemented |
 | [`decisions/0005-model-scoped-vram.md`](decisions/0005-model-scoped-vram.md) | Allocation-backed primary-model GPU scope, PCI-matched residency counters and complete-coverage totals. | Accepted and implemented |
 | [`../scripts/check-web.sh`](../scripts/check-web.sh) | Frontend checks/build followed by workspace Rust quality gates; suitable for local or CI use after npm ci. | Implemented |
+| [`../scripts/profile-assistant.sh`](../scripts/profile-assistant.sh) | Read-only Linux CPU diagnostic: automatic daemon discovery/activity trigger, per-thread `/proc` CPU/scheduling counters, memory/I/O/pressure, optional perf stacks and NVIDIA device samples; prints a pasteable report. | Implemented |
 | [`../packaging/systemd/assistant.service`](../packaging/systemd/assistant.service) | Example foreground user service; replace executable/model paths before installation. | Example |
 
 ## Planned documents
