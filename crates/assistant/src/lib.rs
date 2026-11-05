@@ -7,6 +7,8 @@
 pub mod application;
 pub mod chat;
 pub mod engine;
+#[cfg(target_os = "linux")]
+pub mod memory;
 pub mod pipeline;
 pub mod runtime;
 pub mod telemetry;

@@ -13,7 +13,8 @@ channels; no inference or periodic model polling runs while idle.
 
 One primary `Chat` represents the user's ongoing conversation. Additional chats
 are optional independent working states. Permanent memory will be a separate
-service, with retrieval and knowledge extraction integrated through hooks. Recent
+service. Retrieval/knowledge formation integration remains planned; required
+durability will participate outside optional hooks. Recent
 messages and native KV state are disposable working memory; neither is a durable
 archive. Summarization is not required for continued operation.
 
@@ -27,6 +28,7 @@ archive. Summarization is not required for continued operation.
 | `crates/assistant/src/tools/` | Typed schemas, argument deserialization and registered Rust dispatch; opt-in CLI tools |
 | `crates/assistant/src/pipeline/` | Plugin configuration, typed services, ordered hooks and one-shot middleware continuations |
 | `crates/assistant/src/application/` | Bounded product admission, run ownership, display snapshots and subscriptions |
+| `crates/assistant/src/memory/` | Linux durable storage, attributed sources, graph, operation/tool commands, reservations and recovery; application wiring pending |
 | `crates/assistant-web/` | Runtime-ready HTTP/WebUI plugin; verified embedded React/TypeScript assets |
 | `crates/assistant-daemon/` | Single `assistant` executable, CLI modes, signals and supervision |
 | `crates/llama_cpp/` | Maintained safe binding fork |
@@ -133,8 +135,11 @@ never infer native tokens or daemon CPU/memory from display text. See
 
 ## Deliberate limits
 
-Inference currently uses greedy sampling. There is no memory database, restart
-recovery, voice pipeline, additional transport implementations, scheduler for autonomous background
+Inference currently uses greedy sampling. The Linux library now contains a
+[durable memory store](memory-storage.md) with product-operation commands and
+storage recovery, but the daemon does not enable it or integrate capture/recall
+with chat. Product traffic remains volatile. There is no voice pipeline,
+additional transport implementations, scheduler for autonomous background
 model work, process sandbox for tools or GPU model unloading policy. Resident
 weights and allocated KV caches consume memory while idle. Native load/decode
 cannot be forcibly cancelled; shutdown waits for native owners before freeing

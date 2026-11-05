@@ -1,7 +1,9 @@
 # Assistant API foundation
 
 Status: implemented, 2026-11-03. The simple API and its extension points share
-one execution path. There is no permanent memory implementation yet.
+one execution path. A separate Linux [memory storage API](memory-storage.md)
+provides durable operation/tool commands; this chat/runtime path does not enable
+automatic durable capture or recall yet.
 
 ## Basic use
 
