@@ -27,8 +27,8 @@ process inspection. Ask which processes use the most RAM, or “tell me about th
 htop process.”
 
 > **Early development.** Today: one ongoing chat, local inference, and tools.
-> Conversation history is in memory and resets on restart. Durable history and
-> additional transports are future work.
+> Chat is temporary by default. Linux supports opt-in durable semantic memory,
+> personality and initiative; additional transports remain future work.
 
 ## Quickstart
 
@@ -74,6 +74,20 @@ a Vulkan-linked binary still needs its loader.
 # Headless resident service.
 ./assistant --model /absolute/path/to/model.gguf --no-web
 ```
+
+### Enable memory and WebUI
+
+Pass both memory paths directly; no configuration file is needed:
+
+```sh
+./assistant --model /absolute/path/to/model.gguf \
+  --memory-dir "$HOME/.local/share/assistant/memory" \
+  --embedding-model /absolute/path/to/multilingual-e5-small-q8_0.gguf \
+  --port 3333
+```
+
+Open **http://127.0.0.1:3333** to use the assistant directly. The private memory
+directory is created automatically. See [using memory](docs/assistant-memory.md).
 
 ### One-shot and terminal diagnostics
 

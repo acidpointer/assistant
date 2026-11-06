@@ -15,6 +15,12 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 
 pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
     let config = model_config(&args)?;
+    #[cfg(target_os = "linux")]
+    let memory = memory_options(&args)?;
+    #[cfg(not(target_os = "linux"))]
+    if args.memory_dir.is_some() {
+        anyhow::bail!("durable memory requires Linux");
+    }
     if args.raw && args.prompt.is_none() && !args.interactive {
         anyhow::bail!("--raw requires --prompt or --interactive (and --no-web)");
     }
@@ -23,7 +29,11 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
     let signal = shutdown_signal()?;
     ModelEngine::init()?;
     let engine = ModelEngine::get_instance()?;
-    let system = "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly. For running-process questions, use process_top for rankings and process_details for a process name or PID when those tools are available. Never invent live process data.";
+    let system = if args.no_tools || args.raw {
+        "You are a personal assistant."
+    } else {
+        "You are a concise, helpful assistant. Always use calculate for arithmetic and current_time for current time or date. Use actual tool results. When asked for a date command's output, quote its complete local_time value exactly. For running-process questions, use process_top for rankings and process_details for a process name or PID when those tools are available. Never invent live process data."
+    };
     let mut builder = AssistantRuntime::builder(engine)
         .model("main", config)
         .system(system)
@@ -33,12 +43,8 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
             ..RunLimits::default()
         });
     #[cfg(target_os = "linux")]
-    if let Some(path) = &args.memory_config {
-        builder = builder.memory(read_memory_config(path)?);
-    }
-    #[cfg(not(target_os = "linux"))]
-    if args.memory_config.is_some() {
-        anyhow::bail!("durable memory requires Linux");
+    if let Some(memory) = memory {
+        builder = builder.memory(memory);
     }
     if !args.no_tools && !args.raw {
         builder = builder.tool(Calculator).tool(CurrentTime);
@@ -61,7 +67,7 @@ pub(crate) async fn run(args: Args) -> anyhow::Result<()> {
                 result = signal.cancelled() => { let () = result; }
                 result = runtime.wait_for_failure() => { result?; }
             }
-        } else if args.memory_config.is_some() {
+        } else if args.memory_dir.is_some() {
             if let Some(prompt) = &args.prompt {
                 durable_request(
                     runtime.assistant()?,
@@ -213,37 +219,20 @@ fn request(chat: &assistant::Chat, args: &Args, input: String) -> assistant::cha
 }
 
 #[cfg(target_os = "linux")]
-fn read_memory_config(
-    path: &std::path::Path,
-) -> anyhow::Result<assistant::memory::service::MemoryRuntimeConfig> {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Config {
-        data_directory: std::path::PathBuf,
-        embedding_model: std::path::PathBuf,
-    }
-    let mut file = std::fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    std::io::Read::read_to_end(&mut std::io::Read::take(&mut file, 4097), &mut bytes)?;
-    anyhow::ensure!(
-        bytes.len() <= 4096,
-        "memory configuration exceeds 4096 bytes"
-    );
-    let config: Config = serde_json::from_slice(&bytes)?;
-    let base = path.parent().unwrap_or(std::path::Path::new("."));
-    let resolve = |value: std::path::PathBuf| {
-        if value.is_absolute() {
-            value
-        } else {
-            base.join(value)
-        }
+fn memory_options(
+    args: &Args,
+) -> anyhow::Result<Option<assistant::memory::service::MemoryRuntimeConfig>> {
+    use assistant::memory::{
+        MemoryConfig, embedding::EmbeddingConfig, service::MemoryRuntimeConfig,
     };
-    Ok(assistant::memory::service::MemoryRuntimeConfig {
-        storage: assistant::memory::MemoryConfig::new(resolve(config.data_directory)),
-        embedding: assistant::memory::embedding::EmbeddingConfig::e5_q8(resolve(
-            config.embedding_model,
-        )),
-    })
+    match (&args.memory_dir, &args.embedding_model) {
+        (None, None) => Ok(None),
+        (Some(directory), Some(model)) => Ok(Some(MemoryRuntimeConfig {
+            storage: MemoryConfig::new(directory.clone()),
+            embedding: EmbeddingConfig::e5_q8(model.clone()),
+        })),
+        _ => anyhow::bail!("--memory-dir and --embedding-model must be supplied together"),
+    }
 }
 
 async fn durable_request(

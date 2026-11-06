@@ -17,7 +17,7 @@ export function Composer() {
     history.current.accept(text);
     setDraft((current) => (current === text ? '' : current));
   }, []);
-  const { send, busy, error } = useSubmission(accepted);
+  const { send, busy, error, canDiscard, discardPending } = useSubmission(accepted);
   const previousInstance = useRef(chat.instanceId);
   useEffect(() => {
     if (previousInstance.current !== chat.instanceId) {
@@ -107,6 +107,7 @@ export function Composer() {
           {bytes > 16384 ? 'Input exceeds 16 KiB.' : error}
         </p>
       )}
+      {canDiscard && <Button onClick={discardPending}>Discard pending key</Button>}
     </form>
   );
 }

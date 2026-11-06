@@ -1,6 +1,7 @@
 # Architecture
 
-Status: resident runtime and default web plugin, 2026-11-04. Application behavior is human-owned;
+Status: resident runtime/default web plugin plus opt-in durable core/WebUI memory,
+2026-11-06. Application behavior is human-owned;
 this foundation was explicitly requested. See [the API contract](llm-api.md)
 and [the runtime decision](decisions/0001-persistent-runtime.md).
 
@@ -12,9 +13,11 @@ response while the runtime stays online. Idle inference workers block on bounded
 channels; no inference or periodic model polling runs while idle.
 
 One primary `Chat` represents the user's ongoing conversation. Additional chats
-are optional independent working states. Permanent memory will be a separate
-service. Retrieval/knowledge formation integration remains planned; required
-durability will participate outside optional hooks. Recent
+are optional independent working states. Permanent memory is a separate opt-in
+Linux service with durable product capture and E5 source recall. Required
+durability participates outside optional hooks. Authenticated WebUI access uses
+the core's revocable owner facade; automatic graph formation remains inactive.
+Recent
 messages and native KV state are disposable working memory; neither is a durable
 archive. Summarization is not required for continued operation.
 
@@ -28,7 +31,7 @@ archive. Summarization is not required for continued operation.
 | `crates/assistant/src/tools/` | Typed schemas, argument deserialization and registered Rust dispatch; opt-in CLI tools |
 | `crates/assistant/src/pipeline/` | Plugin configuration, typed services, ordered hooks and one-shot middleware continuations |
 | `crates/assistant/src/application/` | Bounded product admission, run ownership, display snapshots and subscriptions |
-| `crates/assistant/src/memory/` | Linux durable storage, attributed sources, graph, operation/tool commands, reservations and recovery; application wiring pending |
+| `crates/assistant/src/memory/` | Linux durable storage, graph/operation commands, recovery and opt-in resident E5 indexing/recall; automatic formation unimplemented |
 | `crates/assistant-web/` | Runtime-ready HTTP/WebUI plugin; verified embedded React/TypeScript assets |
 | `crates/assistant-daemon/` | Single `assistant` executable, CLI modes, signals and supervision |
 | `crates/llama_cpp/` | Maintained safe binding fork |
@@ -70,7 +73,13 @@ one prefill batch or one sampled token. Active chats on a worker rotate between
 steps. Native calls themselves cannot be preempted.
 
 The default product is a foreground daemon with WebUI. `--no-web` skips the web
-plugin entirely; explicit diagnostic `--prompt` and `--interactive` require it.
+plugin entirely; explicit `--prompt` and `--interactive` require `--no-web`.
+With `--memory-dir` and `--embedding-model` they use the durable product path; otherwise they are
+ephemeral diagnostics. Memory-enabled web startup uses local v2 HTTP/fetch SSE with direct browser
+access; no pairing, tokens or browser session expiry are involved. Memory-disabled startup retains v1. Durable
+history/lookup and owner commands live in the application core; adapter framing
+and credentials remain in `assistant-web`. Further delivery is described in the
+[delivery refinement](memory-integration-plan.md#core-boundary-and-webui-delivery-refinement--2026-11-06).
 See [the web contract](web-ui.md) and [runtime-service decision](decisions/0003-runtime-services-and-web.md).
 
 Async plugin services and tools run on Tokio. Registration does no I/O. Startup
@@ -80,6 +89,13 @@ back successfully started resources and retains rollback diagnostics. Shutdown
 closes admission, quiesces runtime services, finalizes runs, closes/joins runtime
 services, joins native workers, then stops dependency services in reverse order. Explicit shutdown is required to await flushing; dropping the
 runtime only requests stop.
+Required memory starts storage/E5/indexing before application activation and
+shuts them down after application/native chat work. Its own shutdown joins the
+indexer, E5 worker and storage in that order. The optional initiative loop starts
+after application readiness and joins before native/storage shutdown. Freeform
+personality is read from durable settings on each product run. Conversation and
+note graphs, memory tools and initiative share core owner APIs; see
+[using memory](assistant-memory.md) and [ADR 0007](decisions/0007-universal-assistant-memory.md).
 
 ## Context and resource invariants
 
@@ -136,11 +152,16 @@ never infer native tokens or daemon CPU/memory from display text. See
 ## Deliberate limits
 
 Inference currently uses greedy sampling. The Linux library now contains a
-[durable memory store](memory-storage.md) with product-operation commands and
-storage recovery, but the daemon does not enable it or integrate capture/recall
-with chat. Product traffic remains volatile. There is no voice pipeline,
-additional transport implementations, scheduler for autonomous background
-model work, process sandbox for tools or GPU model unloading policy. Resident
+[durable memory store](memory-storage.md) with product-operation commands,
+storage recovery and opt-in durable headless capture/recall. Memory is disabled
+by default; v1 remains volatile and required-memory v2 is durable. Universal
+source links and assistant notes are active through the typed tool loop.
+Specialized family/job extraction remains experimental and is disabled in the
+composite runtime; old claims are retained. Freeform personality and optional
+initiative with a durable mailbox are implemented. Whole-memory restore and
+end-to-end forgetting/publication controls are not exposed in WebUI. There is
+no voice pipeline, additional transport implementation, process sandbox for
+tools or GPU model unloading policy. Resident
 weights and allocated KV caches consume memory while idle. Native load/decode
 cannot be forcibly cancelled; shutdown waits for native owners before freeing
 resources. See [binding maintenance](bindings-fork.md) for native safety contracts.

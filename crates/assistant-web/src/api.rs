@@ -11,6 +11,24 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+/// Reject malformed owner commands using the same sanitized problem contract.
+#[cfg(target_os = "linux")]
+pub(crate) struct OwnerJson<T>(pub(crate) T);
+#[cfg(target_os = "linux")]
+impl<S, T> axum::extract::FromRequest<S> for OwnerJson<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = Problem;
+    async fn from_request(request: axum::extract::Request, state: &S) -> Result<Self, Problem> {
+        let Json(value) = Json::<T>::from_request(request, state)
+            .await
+            .map_err(|error| Problem::new(error.status(), "invalid_input"))?;
+        Ok(Self(value))
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SubmitRequest {
@@ -47,6 +65,7 @@ impl Problem {
 impl From<ApplicationError> for Problem {
     fn from(error: ApplicationError) -> Self {
         let (status, code) = match error {
+            ApplicationError::Unauthorized => (StatusCode::UNAUTHORIZED, "owner_session_required"),
             ApplicationError::InvalidInput => (StatusCode::UNPROCESSABLE_ENTITY, "invalid_input"),
             ApplicationError::Busy => (StatusCode::CONFLICT, "chat_busy"),
             ApplicationError::Conflict => (StatusCode::CONFLICT, "request_conflict"),

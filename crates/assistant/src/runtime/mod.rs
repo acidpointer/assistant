@@ -5,6 +5,10 @@
 //! Shutdown quiesces ingress, finalizes runs, joins transports and native workers,
 //! then stops dependencies. Handles exchange bounded owned data across tasks.
 //! Dropping a running runtime requests cancellation but cannot await service flush.
+#[cfg(target_os = "linux")]
+mod initiative;
+#[cfg(target_os = "linux")]
+mod internal;
 pub mod services;
 mod worker;
 use crate::{
@@ -14,11 +18,15 @@ use crate::{
     pipeline::{ModelLayer, Pipeline, Plugin, PluginRegistrar, RunLayer, Service, ToolLayer},
     tools::Tool,
 };
+#[cfg(target_os = "linux")]
+pub use internal::{
+    InternalFailure, InternalInference, InternalLimits, InternalOutput, InternalTask,
+};
 use std::{
     collections::BTreeMap,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -55,6 +63,8 @@ pub(crate) struct RuntimeControl {
     admission: Arc<Semaphore>,
     active: Mutex<Vec<Arc<Registration>>>,
     idle: Notify,
+    foreground_count: AtomicUsize,
+    foreground: tokio::sync::watch::Sender<bool>,
 }
 impl RuntimeControl {
     pub(crate) fn new(capacity: usize) -> Arc<Self> {
@@ -65,6 +75,8 @@ impl RuntimeControl {
             admission: Arc::new(Semaphore::new(capacity)),
             active: Mutex::new(Vec::new()),
             idle: Notify::new(),
+            foreground_count: AtomicUsize::new(0),
+            foreground: tokio::sync::watch::channel(false).0,
         })
     }
     pub(crate) fn next_id(&self) -> u64 {
@@ -103,6 +115,8 @@ impl RuntimeControl {
             done: AtomicBool::new(false),
         });
         active.push(entry.clone());
+        self.foreground_count.fetch_add(1, Ordering::AcqRel);
+        self.foreground.send_replace(true);
         Ok(RunGuard {
             entry,
             control: self.clone(),
@@ -165,6 +179,9 @@ impl Drop for RunGuard {
             self.entry.cancellation.cancel();
         }
         self.entry.done.store(true, Ordering::Release);
+        if self.control.foreground_count.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.control.foreground.send_replace(false);
+        }
         self.control.idle.notify_one();
     }
 }
@@ -321,6 +338,10 @@ impl RuntimeBuilder {
             }
             config.validate()?;
             models.insert(name, config);
+        }
+        #[cfg(target_os = "linux")]
+        if self.memory.is_some() {
+            crate::memory::tools::register(&mut self.registrar)?;
         }
         let runtime_services = std::mem::take(&mut self.registrar.runtime_services);
         let lifecycle = std::mem::take(&mut self.registrar.lifecycle);
@@ -486,6 +507,21 @@ impl AssistantRuntime {
         );
         let mut running = RunningAssistant {
             #[cfg(target_os = "linux")]
+            initiative: None,
+            #[cfg(target_os = "linux")]
+            primary_model: self.primary,
+            #[cfg(target_os = "linux")]
+            internal: workers
+                .iter()
+                .map(|(name, worker)| {
+                    let backend: Arc<dyn ModelBackend> = worker.clone();
+                    (
+                        name.clone(),
+                        InternalInference::new(backend, control.clone()),
+                    )
+                })
+                .collect(),
+            #[cfg(target_os = "linux")]
             memory,
             workers,
             threads,
@@ -520,6 +556,12 @@ impl AssistantRuntime {
 #[derive(Debug)]
 pub struct RunningAssistant {
     #[cfg(target_os = "linux")]
+    initiative: Option<initiative::Initiative>,
+    #[cfg(target_os = "linux")]
+    primary_model: String,
+    #[cfg(target_os = "linux")]
+    internal: BTreeMap<String, InternalInference>,
+    #[cfg(target_os = "linux")]
     memory: Option<crate::memory::service::MemoryRuntime>,
     application: Option<Application>,
     lifecycle: Vec<Arc<dyn Service>>,
@@ -534,6 +576,15 @@ pub struct RunningAssistant {
     shutdown_grace: Duration,
 }
 impl RunningAssistant {
+    /// Issue a restricted host capability for structured background inference.
+    /// This handle cannot submit product turns, access history or execute tools.
+    /// # Errors
+    /// Rejects unknown model names and closed runtimes.
+    #[cfg(target_os = "linux")]
+    pub fn internal_inference(&self, model: &str) -> ChatResult<InternalInference> {
+        self.control.check_open()?;
+        self.internal.get(model).cloned().ok_or(ChatError::Closed)
+    }
     /// Activate owned ready services only after the application API exists.
     async fn activate_services(
         &mut self,
@@ -555,6 +606,24 @@ impl RunningAssistant {
             shutdown: services::ShutdownSignal(self.control.shutdown.clone()),
         };
         self.application = Some(application);
+        self.application
+            .as_mut()
+            .ok_or(ChatError::Closed)?
+            .ready()
+            .await?;
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = &self.memory {
+            let inference = self
+                .internal
+                .get(&self.primary_model)
+                .cloned()
+                .ok_or(ChatError::Closed)?;
+            self.initiative = Some(initiative::Initiative::start(
+                memory.owner_access(),
+                inference,
+                self.control.clone(),
+            ));
+        }
         for service in prepared {
             // Activation owns partial-start cleanup; its future is never abandoned.
             self.runtime_services
@@ -582,6 +651,10 @@ impl RunningAssistant {
             .collect::<Vec<_>>();
         if let Some(application) = &self.application {
             waits.push(Box::pin(application.terminated()));
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(initiative) = &self.initiative {
+            waits.push(Box::pin(initiative.terminated()));
         }
         if waits.is_empty() {
             return std::future::pending().await;
@@ -654,6 +727,12 @@ impl RunningAssistant {
                 Ok(Err(error)) => failures.push(error.to_string()),
                 Err(_) => failures.push("runtime service quiesce deadline exceeded".into()),
             }
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(initiative) = self.initiative.take()
+            && let Err(error) = initiative.shutdown().await
+        {
+            failures.push(error.to_string());
         }
         if let Some(application) = &mut self.application
             && let Err(error) = application.shutdown().await

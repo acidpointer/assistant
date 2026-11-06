@@ -1,0 +1,78 @@
+Subject: Preserve unchanged shader outputs and bound nested compiler jobs
+Base: llama.cpp a34de8618b25dfc32ee43749db47d767a9f0a25d (b12015)
+
+Why: each shader rule can otherwise start sixteen glslc jobs while Ninja runs
+many rules concurrently. Bound the per-rule jobs and concurrent rules, preserve
+identical generated C++ timestamps, and pass compiler launchers to the independent
+host-generator sub-build. Shader variants and numerical compilation flags stay
+unchanged. All changes apply only to the build-directory copy.
+
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/vulkan-shaders-gen.cpp
+@@ -340,7 +340,7 @@
+ compile_count_guard acquire_compile_slot() {
+     // wait until fewer than N compiles are in progress.
+     // 16 is an arbitrary limit, the goal is to avoid "failed to create pipe" errors.
+-    uint32_t N = std::max(1u, std::min(16u, std::thread::hardware_concurrency()));
++    uint32_t N = std::max(1u, std::min(uint32_t(GGML_VULKAN_SHADER_JOBS), std::thread::hardware_concurrency()));
+     std::unique_lock<std::mutex> guard(compile_count_mutex);
+     compile_count_cond.wait(guard, [N] { return compile_count < N; });
+     compile_count++;
+@@ -1390,7 +1390,7 @@
+         write_file_if_changed(target_hpp, hdr.str());
+     }
+     if (target_cpp != "") {
+-        write_binary_file(target_cpp, src.str());
++        write_file_if_changed(target_cpp, src.str());
+     }
+ }
+ 
+diff --git a/ggml/src/ggml-vulkan/vulkan-shaders/CMakeLists.txt b/ggml/src/ggml-vulkan/vulkan-shaders/CMakeLists.txt
+--- a/ggml/src/ggml-vulkan/vulkan-shaders/CMakeLists.txt
++++ b/ggml/src/ggml-vulkan/vulkan-shaders/CMakeLists.txt
+@@ -40,4 +40,8 @@
+ add_executable(${TARGET} vulkan-shaders-gen.cpp)
+ install(TARGETS ${TARGET} RUNTIME)
+ target_compile_features(${TARGET} PRIVATE cxx_std_17)
++if (NOT DEFINED GGML_VULKAN_SHADER_JOBS)
++    set(GGML_VULKAN_SHADER_JOBS 4)
++endif()
++target_compile_definitions(${TARGET} PRIVATE GGML_VULKAN_SHADER_JOBS=${GGML_VULKAN_SHADER_JOBS})
+ target_link_libraries(vulkan-shaders-gen PUBLIC Threads::Threads)
+diff --git a/ggml/src/ggml-vulkan/CMakeLists.txt b/ggml/src/ggml-vulkan/CMakeLists.txt
+--- a/ggml/src/ggml-vulkan/CMakeLists.txt
++++ b/ggml/src/ggml-vulkan/CMakeLists.txt
+@@ -179,6 +179,24 @@
+ 
+     include(ExternalProject)
+ 
++    # Bound nested glslc fan-out independently of Ninja's C++ jobs.
++    if (NOT DEFINED GGML_VULKAN_SHADER_JOBS)
++        set(GGML_VULKAN_SHADER_JOBS 4)
++    endif()
++    if (NOT DEFINED GGML_VULKAN_SHADER_RULES)
++        set(GGML_VULKAN_SHADER_RULES 1)
++    endif()
++    list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_SHADER_JOBS=${GGML_VULKAN_SHADER_JOBS})
++    foreach (launcher CMAKE_C_COMPILER_LAUNCHER CMAKE_CXX_COMPILER_LAUNCHER)
++        if (DEFINED ${launcher})
++            list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -D${launcher}=${${launcher}})
++        endif()
++    endforeach()
++    if (CMAKE_GENERATOR MATCHES "Ninja")
++        set_property(GLOBAL APPEND PROPERTY JOB_POOLS ggml_vk_shaders=${GGML_VULKAN_SHADER_RULES})
++        set(_ggml_vk_job_pool JOB_POOL ggml_vk_shaders)
++    endif()
++
+     if (CMAKE_CROSSCOMPILING)
+         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
+         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+@@ -242,6 +260,7 @@
+         add_custom_command(
+             OUTPUT  ${_ggml_vk_target_cpp}
+             DEPFILE ${_ggml_vk_target_cpp}.d
++            ${_ggml_vk_job_pool}
+             COMMAND ${_ggml_vk_genshaders_cmd}
+                 --glslc      ${Vulkan_GLSLC_EXECUTABLE}
+                 --source     ${file_full}

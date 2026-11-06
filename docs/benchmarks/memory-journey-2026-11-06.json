@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "verified_at_utc": "2026-11-06T19:47:26.827977+00:00",
+  "track": "development end-to-end; not exhaustive model-quality qualification",
+  "artifacts": {
+    "LFM3-1.7B-Heretic-Abliterated-Q6_K.gguf": {
+      "sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+      "bytes": 1427637536
+    },
+    "multilingual-e5-small-q8_0.gguf": {
+      "sha256": "0a34067a40f25d3149b36885faa62bee0e5284d0f9edc102acfc00e115d953e8",
+      "bytes": 131624960
+    },
+    "target/debug/assistant": {
+      "sha256": "ba9182621bca39fdc4bd97aae0d432463d3ec022ee1417cdebe458f64c17274c",
+      "bytes": 173269896
+    }
+  },
+  "models_downloaded_or_replaced": false,
+  "native_configuration": {
+    "execution": "CPU",
+    "threads": 4,
+    "context_tokens": 4096,
+    "max_tokens_per_turn": 128,
+    "run_token_limit": 128,
+    "embedding": "dedicated CPU E5 small Q8, 384 dimensions"
+  },
+  "verified_journeys": [
+    "same-UID pairing, one-use code, owner authorization, conflict and logout",
+    "durable accepted input, visible assistant output and history after process restart",
+    "opaque original request-key reconciliation without repeated generation",
+    "real E5 semantic channel and linked source navigation",
+    "freeform assistant profile persistence and stale-edit rejection",
+    "real Chromium: note form, profile read, source search/connections, saved history, mobile layout and private-view clearing",
+    "standalone user note contains satin finish; no user chat input contains satin; fresh-process question answered satin",
+    "real-model assistant-initiated messages, no fabricated user exchange, durable inbox, dismissal and disabling initiative",
+    "resumed initiative check requires a new undismissed ID, rather than accepting an older mailbox item"
+  ],
+  "retrieval_fixture": {
+    "note": "For my garden bench, I want a satin finish.",
+    "question": "What finish do I want for my garden bench? Answer briefly using saved memory.",
+    "expected_answer_contains": "satin",
+    "note_fact_absent_from_all_user_chat_inputs": true,
+    "note_fact_absent_from_other_user_and_assistant_chat_exchanges": true
+  },
+  "native_outreach": [
+    {
+      "text": "Hey! How's your bicycle doing at the next initiative check?",
+      "dismissed": true
+    },
+    {
+      "text": "Hey! How's your garden bench doing at the next initiative check?",
+      "dismissed": true
+    }
+  ],
+  "final_initiative_enabled": false,
+  "quality_gates": {
+    "workspace": {
+      "passed": 675,
+      "failed": 0,
+      "ignored": 16,
+      "threads": 1,
+      "note": "Full workspace before final explicit-note addition; latest application packages and workspace check rerun afterward."
+    },
+    "latest_application_packages": {
+      "passed": 131,
+      "ignored": 2
+    },
+    "frontend_units": {
+      "passed": 14,
+      "skipped": 1
+    },
+    "chromium": {
+      "passed": 17,
+      "note": "Fixture journeys; real-daemon browser also passed separately."
+    },
+    "native_build_helper_tests": 12,
+    "experimental_extraction_feature": "compile-check passed; not enabled in product"
+  },
+  "development_failures_and_corrections": [
+    "The original 120-second CPU smoke allowance could interrupt valid multi-turn inference; the smoke now bounds the whole interaction at 300 seconds and reports native progress.",
+    "An overly specific browser assertion assumed every first search result had a responds_to link; it now checks connected evidence/navigation, including learned_from notes.",
+    "The optional resumed smoke retains only marked synthetic data, reuses durable foreground keys, and distinguishes new initiative IDs from old dismissed items."
+  ],
+  "limits": [
+    "CPU prompt prefills observed around 55–127 seconds in development runs; this is not a controlled performance benchmark. GPU latency was not measured.",
+    "Native scenarios are limited development evidence, not proof of correct behavior for every topic/personality.",
+    "Whole-memory restore and end-to-end forgetting controls are not exposed in WebUI.",
+    "Synthetic store retained outside the repository only for repeatable local checking."
+  ],
+  "post_native_display_change": "Removed an internal formation-state label from source cards; frontend checks/build passed and daemon was rebuilt. Core/runtime code unchanged after native verification.",
+  "latest_executable_sha256": "7e01546e5a96c3f60809e48f5d3adb7022b3604f3e3e5756d7aa71078c258923"
+}

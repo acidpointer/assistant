@@ -7,17 +7,38 @@ export class RequestError extends Error {
     super(code);
   }
 }
-export async function request(path: string, options: RequestInit = {}): Promise<unknown> {
+let version = 1;
+export function configureApi(apiVersion: number) {
+  version = apiVersion;
+}
+export function apiVersion() {
+  return version;
+}
+export async function response(path: string, options: RequestInit = {}): Promise<Response> {
   const headers = new Headers(options.headers);
   headers.set('Content-Type', 'application/json');
   headers.set('X-Assistant-Client', 'webui');
-  const response = await fetch(`/api/v1${path}`, {
+  const result = await fetch(`/api/v${version}${path}`, {
     ...options,
-    credentials: 'same-origin',
+    credentials: 'omit',
     headers,
   });
-  if (!response.ok) throw new RequestError(`http_${response.status}`, response.status);
-  const body: unknown = await response.json();
+  if (!result.ok) {
+    const failure: unknown = await result.json().catch(() => null);
+    const code =
+      failure &&
+      typeof failure === 'object' &&
+      'code' in failure &&
+      typeof failure.code === 'string'
+        ? failure.code
+        : `http_${result.status}`;
+    throw new RequestError(code, result.status);
+  }
+  return result;
+}
+export async function request(path: string, options: RequestInit = {}): Promise<unknown> {
+  const result = await response(path, options);
+  const body: unknown = await result.json();
   return body;
 }
 export function post(path: string, body: unknown): Promise<unknown> {

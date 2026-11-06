@@ -11,7 +11,20 @@ const INITIAL: &str = include_str!("schema.sql");
 const OPERATIONS: &str = include_str!("migrations/0002-operations.sql");
 const EMBEDDINGS: &str = include_str!("migrations/0003-embeddings.sql");
 const OUTCOMES: &str = include_str!("migrations/0004-product-outcomes.sql");
-const MIGRATIONS: &[&str] = &[INITIAL, OPERATIONS, EMBEDDINGS, OUTCOMES];
+const HISTORY: &str = include_str!("migrations/0005-operation-history.sql");
+const INDEX_FAILURES: &str = include_str!("migrations/0006-index-failures.sql");
+const STAGED_BUDGETS: &str = include_str!("migrations/0007-staged-job-budgets.sql");
+const UNIVERSAL: &str = include_str!("migrations/0008-universal-assistant.sql");
+const MIGRATIONS: &[&str] = &[
+    INITIAL,
+    OPERATIONS,
+    EMBEDDINGS,
+    OUTCOMES,
+    HISTORY,
+    INDEX_FAILURES,
+    STAGED_BUDGETS,
+    UNIVERSAL,
+];
 
 pub(super) fn migrate(connection: &mut Connection) -> MemoryResult<()> {
     let existing: bool = connection.query_row(

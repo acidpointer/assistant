@@ -1,0 +1,72 @@
+{
+  "date": "2026-11-05",
+  "pin": "a34de8618b25dfc32ee43749db47d767a9f0a25d",
+  "measurements": {
+    "debug": {
+      "command": "cargo build --offline -p assistant-daemon --bin assistant",
+      "seconds": 242.05,
+      "exit_code": 0
+    },
+    "check-final": {
+      "command": "cargo check --workspace --offline",
+      "seconds": 5.65,
+      "exit_code": 0
+    },
+    "tests": {
+      "command": "cargo test --workspace --offline",
+      "seconds": 31.22,
+      "exit_code": 0
+    },
+    "tests-final": {
+      "command": "cargo test --workspace --offline",
+      "seconds": 7.35,
+      "exit_code": 101
+    },
+    "tests-serial": {
+      "command": "cargo test --workspace --offline -- --test-threads=1",
+      "seconds": 32.8,
+      "exit_code": 0
+    },
+    "debug-final": {
+      "command": "cargo build --offline -p assistant-daemon --bin assistant",
+      "seconds": 6.99,
+      "exit_code": 0
+    },
+    "release-final": {
+      "command": "cargo build --release --offline -p assistant-daemon --bin assistant",
+      "seconds": 16.02,
+      "exit_code": 0
+    },
+    "release-repeat": {
+      "command": "cargo build --release --offline -p assistant-daemon --bin assistant",
+      "seconds": 0.11,
+      "exit_code": 0
+    }
+  },
+  "evidence": {
+    "normal_debug_objects_observed": 294,
+    "objects_recompiled_during_warm_debug": 0,
+    "release_native_cmake_build_tree_exists": false,
+    "release_import_exists": true,
+    "generated_shader_cpp_identical": 155,
+    "generated_shader_cpp_different": 0,
+    "shared_mtmd_configuration": "passed; CLI targets absent; shared linking not exercised"
+  },
+  "tests": {
+    "reported_passed": 617,
+    "failed": 0,
+    "ignored": 14
+  },
+  "limitations": [
+    "Measurements are development observations, not paired cold-build benchmarks.",
+    "The earlier parallel workspace run passed; a later rerun hit an existing global logging callback test race. The final full suite passed with --test-threads=1.",
+    "GPU and full-model cases followed their optional skip paths.",
+    "Native bundle reuse currently covers static native Linux GNU system-toolchain builds on Arch/Debian; other configurations retain CMake.",
+    "No installed sccache/ccache was available to measure compiler-cache hit rates."
+  ],
+  "supplementary_helper_tests": {
+    "passed": 10,
+    "failed": 0,
+    "includes": "Native cache/configuration, source staging, and real shim compiler forwarding with spaces/apostrophes in paths."
+  }
+}

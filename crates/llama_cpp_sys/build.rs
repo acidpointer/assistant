@@ -3,12 +3,15 @@
 //! The upstream submodule is read-only. Native ABI guards prevent stale libraries
 //! from silently omitting the fork's runtime safety and callback contracts.
 
+mod native_build;
+mod native_cache;
 mod patch_staging;
 mod patch_verification;
+mod source_staging;
 use patch_verification::patches_match_new_side;
 
-use cmake::Config;
 use glob::glob;
+use native_build::Config;
 use patch_apply::{Line, Patch};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -447,99 +450,6 @@ fn llama_src_version(src: &Path, patches_dir: &Path) -> String {
         .unwrap_or_else(|_| "unknown".to_owned());
     // Mix in patch contents so that updating patches forces a re-copy+re-patch.
     format!("{}:{}:{PATCH_STAGING_VERSION}", base, ph)
-}
-
-/// Copy a directory tree. This runs on the *host*, so cfg!(unix/windows) is
-/// correct here. Always a real copy — hardlinks are unsafe because build-time
-/// patch application mutates files in the copied tree.
-///
-/// The copy lands in a temporary sibling and is renamed into place only once it
-/// has succeeded, so `dst` is either absent or complete — never a half-tree.
-/// That matters because the caller writes a version sentinel next to `dst` and
-/// skips the copy on later builds when it matches: a partial tree accepted once
-/// would be reused forever, and the symptom is a baffling CMake error about a
-/// missing `LICENSE` or `ggml-version.h.in` rather than anything about copying.
-///
-/// # Panics
-///
-/// Panics if the copy command cannot be run, exits non-zero, or produces a tree
-/// missing files known to be required.
-fn copy_folder(src: &Path, dst: &Path) {
-    let parent = dst
-        .parent()
-        .expect("destination for the llama.cpp copy has no parent directory");
-    std::fs::create_dir_all(parent).expect("Failed to create dst parent directory");
-
-    // Stage under a temporary name in the same directory, so the rename below
-    // is a cheap same-filesystem move.
-    let staging = parent.join(".llama.cpp.copy-tmp");
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging).expect("failed to clear the stale copy staging dir");
-    }
-
-    let status = if cfg!(unix) {
-        std::process::Command::new("cp")
-            .arg("-rf")
-            .arg(src)
-            .arg(&staging)
-            .status()
-            .expect("Failed to execute cp command")
-    } else {
-        // robocopy reports success with exit codes 0-7; 8 and above are real
-        // failures. `.status()` alone would therefore flag ordinary copies as
-        // errors, hence the explicit check further down.
-        std::process::Command::new("robocopy.exe")
-            .arg("/e")
-            .arg("/nfl")
-            .arg("/ndl")
-            .arg("/njh")
-            .arg("/njs")
-            .arg(src)
-            .arg(&staging)
-            .status()
-            .expect("Failed to execute robocopy command")
-    };
-
-    let ok = if cfg!(windows) {
-        status.code().is_some_and(|c| c < 8)
-    } else {
-        status.success()
-    };
-    assert!(
-        ok,
-        "copying {} to {} failed ({status}). The source tree may have been \
-         changing underneath the copy — a concurrent `git checkout` of the \
-         llama.cpp submodule will do it.",
-        src.display(),
-        staging.display()
-    );
-
-    // A copy can exit zero and still be short if the source moved under it, so
-    // check for files CMake will demand before we commit to this tree.
-    //
-    // Only files whose absence is *fatal* to CMake belong here. `LICENSE` does
-    // not: `cmake/license.cmake` merely warns, and the packaged crate is a
-    // filtered copy that legitimately differs from the git checkout — requiring
-    // it would reject `cargo package` output.
-    for required in [
-        "CMakeLists.txt",
-        "ggml/src/ggml-version.h.in",
-        "src/llama-version.h.in",
-    ] {
-        assert!(
-            staging.join(required).exists(),
-            "the copy of llama.cpp is missing `{required}`, so it is incomplete. \
-             If {} is the vendored submodule, check it is fully checked out; if \
-             it is a `target/package/...` tree, the file is missing from the \
-             `include` list in llama_cpp_sys/Cargo.toml.",
-            src.display()
-        );
-    }
-
-    if dst.exists() {
-        std::fs::remove_dir_all(dst).expect("failed to remove the previous llama.cpp copy");
-    }
-    std::fs::rename(&staging, dst).expect("failed to move the llama.cpp copy into place");
 }
 
 /// Extract library names from the build output directory.
@@ -1009,6 +919,12 @@ fn compile_shims(manifest_dir: &Path, llama_dst: &Path, target: &str) {
         .include(llama_dst.join("common"))
         .warnings(false);
 
+    let shim_output = PathBuf::from(
+        env::var_os("OUT_DIR").unwrap_or_else(|| native_input_error("missing OUT_DIR")),
+    );
+    native_build::cache_shims(&mut build, target, &shim_output)
+        .unwrap_or_else(|error| native_input_error(&error));
+
     let mut any = false;
     for name in SHIM_DIRS {
         let shim_dir = manifest_dir.join(name);
@@ -1286,7 +1202,7 @@ fn emscripten_include_dirs() -> Vec<PathBuf> {
 }
 
 /// Configure cmake to cross-compile to wasm through the Emscripten SDK.
-fn configure_emscripten(config: &mut cmake::Config, target: &str) {
+fn configure_emscripten(config: &mut Config, target: &str) {
     let emsdk = emsdk_root();
     let toolchain = emsdk.join("upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake");
     assert!(
@@ -1865,7 +1781,7 @@ fn llama_cmake_options(target: &str) -> BTreeMap<String, String> {
 /// advance — so after exporting a new one for the first time, run
 /// `cargo clean -p llama_cpp_sys`. Configuring it in a file instead avoids
 /// that entirely.
-fn forward_llama_cmake_options(config: &mut cmake::Config, target: &str) {
+fn forward_llama_cmake_options(config: &mut Config, target: &str) {
     for (key, value) in llama_cmake_options(target) {
         debug_log!("Passing {key}={value} to CMake");
         println!("cargo:warning=Passing {key}={value} to CMake");
@@ -1986,23 +1902,17 @@ fn main() {
     let needs_copy =
         !llama_dst.exists() || stored_version.trim() != current_version.trim() || !patches_applied;
     if needs_copy {
-        if llama_dst.exists() {
-            debug_log!(
-                "Source version or patch postcondition changed — removing stale OUT_DIR copy"
-            );
-            if let Err(error) = std::fs::remove_dir_all(&llama_dst) {
-                native_input_error(&format!("remove stale native source copy: {error}"));
-            }
-        }
-        debug_log!("Copy {} to {}", llama_src.display(), llama_dst.display());
-        copy_folder(&llama_src, &llama_dst);
-
-        apply_patches(&staged_dir, &llama_dst);
-        match patches_match_new_side(&staged_dir, &llama_src, &llama_dst) {
+        let candidate = out_dir.join("llama-source-candidate");
+        source_staging::copy_tree(&llama_src, &candidate)
+            .unwrap_or_else(|error| native_input_error(&error));
+        apply_patches(&staged_dir, &candidate);
+        match patches_match_new_side(&staged_dir, &llama_src, &candidate) {
             Ok(true) => {}
             Ok(false) => native_input_error("native patch postcondition was not satisfied"),
             Err(error) => native_input_error(&format!("verify applied native patches: {error}")),
         }
+        source_staging::publish(&candidate, &llama_dst)
+            .unwrap_or_else(|error| native_input_error(&error));
         if let Err(error) = std::fs::write(&sentinel, &current_version) {
             native_input_error(&format!("write native source version sentinel: {error}"));
         }
@@ -2481,34 +2391,11 @@ fn main() {
         }
     }
 
-    // ── sccache launcher ────────────────────────────────────────────────────
-    // When sccache is on PATH (or SCCACHE_PATH is set) and the caller has not
-    // explicitly disabled it (LLAMA_NO_SCCACHE=1), wrap every C/C++ compiler
-    // call with sccache.  This makes feature-flag toggles essentially free
-    // after the first build: toggling --features q1 only recompiles the ~5
-    // files changed by the patch; the other 459 are cache hits.
-    if env::var("LLAMA_NO_SCCACHE").as_deref() != Ok("1") {
-        let sccache = env::var("SCCACHE_PATH")
-            .ok()
-            .map(PathBuf::from)
-            .filter(|p| p.exists())
-            .or_else(|| {
-                let exe = if cfg!(windows) {
-                    "sccache.exe"
-                } else {
-                    "sccache"
-                };
-                env::var_os("PATH").and_then(|paths| {
-                    std::env::split_paths(&paths)
-                        .map(|d| d.join(exe))
-                        .find(|p| p.exists())
-                })
-            });
-        if let Some(sc) = sccache {
-            debug_log!("sccache found at {}", sc.display());
-            config.define("CMAKE_C_COMPILER_LAUNCHER", sc.to_str().unwrap());
-            config.define("CMAKE_CXX_COMPILER_LAUNCHER", sc.to_str().unwrap());
-        }
+    if let Some(launcher) =
+        native_build::compiler_launcher().unwrap_or_else(|error| native_input_error(&error))
+    {
+        config.define("CMAKE_C_COMPILER_LAUNCHER", &launcher);
+        config.define("CMAKE_CXX_COMPILER_LAUNCHER", &launcher);
     }
 
     // Enable mold linker for faster linking on Linux
@@ -2563,11 +2450,11 @@ fn main() {
     // shim and then fail to link its implementation. Tools (including mtmd)
     // remain opt-in.
     config.define("LLAMA_BUILD_COMMON", "ON");
-    if cfg!(feature = "mtmd") {
-        config.define("LLAMA_BUILD_TOOLS", "ON");
-    } else {
-        config.define("LLAMA_BUILD_TOOLS", "OFF");
-    }
+    config.define_default("LLAMA_BUILD_TOOLS", "OFF");
+    config.define(
+        "LLAMA_BUILD_MTMD",
+        if cfg!(feature = "mtmd") { "ON" } else { "OFF" },
+    );
 
     config.define(
         "BUILD_SHARED_LIBS",
@@ -2936,11 +2823,10 @@ fn main() {
         .out_dir(&cmake_out_dir)
         .profile(&profile)
         .very_verbose(std::env::var("CMAKE_VERBOSE").is_ok()) // Not verbose by default
-        .always_configure(false);
+        .always_configure(true);
 
-    // The cmake crate skips re-configuration when CMakeCache.txt already exists
-    // (always_configure = false).  Detect and clear any stale cache that
-    // would cause the wrong cmake settings to be used:
+    // Configuration is refreshed on every build-script invocation. Clear a
+    // structurally incompatible or interrupted cache before that refresh:
     //
     //  1. CMakeCache.txt exists but no Makefile / build.ninja: the previous
     //     configure run was interrupted.  cmake --build would fail with "No
@@ -3103,6 +2989,8 @@ fn main() {
     }
 
     let build_dir = config.build();
+    // An imported immutable bundle has its own link root, never a shared CMake tree.
+    let cmake_out_dir = build_dir.clone();
 
     // ── Link search paths ────────────────────────────────────────────────────
     println!(

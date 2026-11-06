@@ -2,7 +2,7 @@
 //! explicit writer barriers, a real process kill and `SQLite` page exhaustion;
 //! no model, network or application runtime is required.
 
-use super::{Directory, claim, key, text, version};
+use super::{Directory, claim, job_clock, key, text, version};
 use crate::memory::{
     ClaimObject, ClientRequestKey, ConsumerRequirement, ExtractionChanges, ExtractionOutcome,
     FormationState, MemoryError, MemoryId, MemoryJobUsage, MemoryReceipt, MemoryStore,
@@ -19,6 +19,82 @@ fn admission(request: &str) -> OperationAdmission {
         observed_at: 1_000_000,
         limits: OperationLimits::new(131_072, 2, 16_384).expect("limits"),
     }
+}
+
+#[tokio::test]
+async fn preservation_keeps_one_source_and_job_and_replay_cannot_resurrect_forgetting() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let handle = store.handle();
+    let owner = store.owner();
+    let admitted = handle
+        .admit_operation(&owner, admission("preserve"))
+        .await
+        .expect("input committed")
+        .value;
+    assert!(
+        !handle
+            .source(&owner, admitted.input.id)
+            .await
+            .expect("source")
+            .preserved
+    );
+    let before = handle.storage_health(&owner).await.expect("health");
+    let saved = handle
+        .preserve_source(&owner, key("preserve-source"), admitted.input)
+        .await
+        .expect("preserve existing");
+    assert_eq!(saved.value.id, admitted.input.id);
+    assert!(saved.value.preserved);
+    assert!(
+        handle
+            .preserve_source(&owner, key("preserve-source"), admitted.input)
+            .await
+            .expect("replay")
+            .replayed
+    );
+    assert_eq!(
+        handle
+            .storage_health(&owner)
+            .await
+            .expect("health")
+            .pending_jobs,
+        before.pending_jobs,
+        "retention never grants model work"
+    );
+    assert_eq!(
+        handle
+            .history(&owner, None, 32)
+            .await
+            .expect("history")
+            .exchanges
+            .len(),
+        1
+    );
+    handle
+        .suppress_source(
+            &owner,
+            key("forget-preserved"),
+            admitted.input.id,
+            admitted.input.revision,
+        )
+        .await
+        .expect("journaled suppression");
+    assert!(matches!(
+        handle
+            .preserve_source(&owner, key("preserve-source"), admitted.input)
+            .await,
+        Err(MemoryError::Gone)
+    ));
+    assert!(
+        handle
+            .history(&owner, None, 32)
+            .await
+            .expect("eligible history")
+            .exchanges
+            .is_empty()
+    );
+    store.shutdown().await.expect("shutdown");
 }
 fn finalization(outcome: TerminalOutcome) -> OperationFinalization {
     OperationFinalization {
@@ -141,7 +217,7 @@ async fn migration_preserves_legacy_data_and_rejects_tampered_history() {
             .query_row("SELECT count(*) FROM migration_history", [], |r| r
                 .get::<_, i64>(0))
             .expect("history"),
-        4
+        8
     );
     connection
         .execute(
@@ -684,7 +760,7 @@ async fn deferred_formation_and_consumer_cursor_commit_together() {
     .await
     .expect("consumer");
     let lease = h
-        .claim_extraction_job(&o, 1_000_000)
+        .claim_extraction_job(&o, job_clock())
         .await
         .expect("claim")
         .expect("job");
@@ -1190,7 +1266,7 @@ async fn rejected_proposal_constraints_do_not_block_healthy_storage() {
         .await
         .expect("source");
     let lease = h
-        .claim_extraction_job(&o, 1_000_000)
+        .claim_extraction_job(&o, job_clock())
         .await
         .expect("lease")
         .expect("job");

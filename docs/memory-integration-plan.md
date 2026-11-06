@@ -1,29 +1,28 @@
 # Memory system: final implementation delivery
 
-Status: paused at the owner's request, 2026-11-05.
-The [stop/resume checkpoint](memory-native-integration.md#stop-checkpoint--2026-11-05)
-records completed work, remaining scope, interrupted edits and temporary shutdown.
-Audited baseline: `0205229` (`feat: initial comprehensive memory system`).
-The selected owner-supplied E5 Q8 artifact now has native CPU indexing/recall and
-an opt-in durable headless application path. **This final delivery is not complete.**
-See [executable progress and failed qualification](memory-native-integration.md).
-Automatic graph formation is not activated: the current LFM3 extraction preflight
-fails semantic checks. Authentication/UI, personality/attention, proof paths,
-correction/publication/recovery integration and full qualification remain open.
-The complete scope below is unchanged; these are not new completion milestones.
+Status, 2026-11-06: the universal memory/personality/initiative implementation
+is in place. [ADR 0007](decisions/0007-universal-assistant-memory.md) is the
+current design authority; [the user guide](assistant-memory.md) describes the
+actual APIs, WebUI and limits. The selected chat/E5 models remain unchanged.
 
-The next implementation task delivers the complete remaining memory experience
-in one integrated delivery. The order below is an internal build/test sequence,
-not another series of storage-only milestones. Completion requires working
-headless and authenticated web journeys, real model evidence and owner controls.
-Do not stop after registering a plugin, wiring literal storage or passing mock
-model tests.
+Implemented: durable conversations and source links, freeform assistant notes,
+semantic entry-point search and paged traversal tools, pinned editable personality,
+optional background initiative, durable assistant-only mailbox, revocable core owner
+access, direct local WebUI access and the corresponding controls. D-Bus and
+socket adapters can reuse the owner API; their transports are future work.
 
-The [implementation specification](memory-implementation-spec.md) remains the
-v1 behavior authority. This plan replaces the earlier incremental integration
-sequence and closes its remaining execution details. The
-[storage contract](memory-storage.md) describes the implemented foundation;
-[original research](memory-system-plan.md) supplies rationale and alternatives.
+Default deterministic tests and Chromium journeys pass. The final real-model
+recheck is recorded in [native integration](memory-native-integration.md).
+End-to-end forgetting/publication controls and whole-memory restore are still
+not exposed in WebUI. The experimental domain extractor is not a product
+prerequisite and is excluded from default builds.
+
+## Historical broader v1 proposal
+
+The remainder preserves the previous research/proposal, including superseded
+fixed traits/moods, domain extraction and synthetic-corpus gates. It is not a
+current implementation checklist or a reason to block the universal source-graph
+experience. Current behavior and remaining limits are described above.
 
 ## Final delivery contract
 
@@ -40,7 +39,8 @@ sequence and closes its remaining execution details. The
 
 Complete v1 retains one Linux owner, one assistant identity, one active product
 interaction, SQLite authority, exact vector search and named JSON proposals.
-HTTP is optional; memory/background/inbox behavior must work without it.
+HTTP is optional to the core; the authenticated WebUI is required for this
+owner's delivery. Memory/background/inbox behavior must also work without it.
 Memory-disabled behavior remains supported. Keep bounded working history for
 immediate referents and tool protocol; prove permanent recall with that history
 cleared. No graph server, ANN migration, compact language, recurring calendar,
@@ -49,37 +49,201 @@ needed to finish this delivery.
 
 ## What the code actually contains
 
-The working tree was clean at the start of this review. The previous milestone
-records 645 passing workspace tests, 14 ignored, and 37 Rust 1.88 storage tests.
-Those are existing storage/runtime regression results, not memory-model or
-end-to-end qualification. This research did not rerun that suite.
+The 2026-11-06 audit reads the actual implementation and existing evidence;
+it does not rerun the native suite. The latest recorded workspace result is
+649 passed, 16 ignored, with the failing extraction preflight explicitly ignored.
+The earlier storage milestone recorded 37 passing Rust 1.88 storage tests.
+These are historical regression results, not model or end-to-end qualification.
+Untracked native-build work is present and outside this plan's changes.
 
 | Area | Implemented baseline | Remaining integration |
 | --- | --- | --- |
-| Storage | Migrations 1/2, durable product/tool commands, attributed sources, priority/reservations, suppression/journal/purge, FTS/qualified edges, fenced jobs, consumer cursors and backup candidates. | New domain records, eligibility/dependency queries, richer jobs and product outcomes; reuse the existing writer. |
-| Product coordinator | [`Coordinator::admit`](../crates/assistant/src/application/mod.rs) accepts and deduplicates in memory, then creates instance-scoped run IDs. | Required durable admission/status/finalization; stable operation identity and reconstructed views. |
-| Chat/tools | [`Request::execute`](../crates/assistant/src/chat/mod.rs) selects over cancellation; [`RunContext::execute_tool`](../crates/assistant/src/chat/runner.rs) has no durable authority/receipt participant. | Mandatory persistence outside optional middleware; effective dispatch/capture policy and owned settlement. |
-| Lifecycle | [`activate_services` / `shutdown`](../crates/assistant/src/runtime/mod.rs) start the application before service activation and close services before native worker joins. | Composite readiness, supervision and a storage-last drain barrier. |
+| Storage | Migrations 1–4; durable product/tool commands, attributed sources, priority/reservations, suppression/journal/purge, FTS/qualified edges, fenced jobs, consumer cursors, vectors/coverage, terminal details and backup candidates. | New domain/dependency records, richer jobs, generation switching and live restore; reuse the existing writer. |
+| Product coordinator | [`Coordinator::admit`](../crates/assistant/src/application/mod.rs) commits input/reservation and uses stable operation IDs in required mode; repeated submissions reconstruct stored outcomes. `run(id)` still reads bounded in-memory records. | Shared owner-authorized facade, responsive owned pending admission, canonical client options, durable lookup/status/history independent of resubmission and session lifetime. |
+| Chat/tools | [`MemoryOperation`](../crates/assistant/src/memory/session.rs) recalls before generation, validates effective tool dispatch, owns intent/result tasks and joins them before terminal settlement. | Complete short-circuit/failure matrix, evidence read sets, behavior snapshots and generation-checked publication across every reader. |
+| Lifecycle | [`MemoryRuntime`](../crates/assistant/src/memory/service.rs) gates readiness, owns storage/E5/indexing and joins them in order; diagnostic chat is isolated in required mode. | Extend composite ownership/supervision to extraction, personality, attention and restore; keep storage alive for every finalization owner. |
 | Internal inference | [`runtime/worker.rs`](../crates/assistant/src/runtime/worker.rs) has rotating active contexts and synchronous preparation, but no execution class or internal structured job API. | Reserved foreground capacity, priority before preparation/prefill, isolated JSON jobs and measured accounting. |
-| Knowledge | Current jobs offer whole sources, fixed input reservation and add-only changes. Graph reads return outgoing edges. | Chunk coverage, correction/read sets, aliases, paths, semantic vectors, situation and attention. |
+| Knowledge | E5 Q8 CPU worker, source-bound vectors/cursors and exact semantic search work. Recall takes eight semantic hits plus lexical results, at most twelve excerpts; the query is a 384-byte prefix and excerpts are byte-bounded. Graph reads are outgoing only. Formation jobs have no production model consumer. | Token-based query/chunks/evidence packing, rank fusion, index coverage/generations, isolated per-source retries, extraction/semantic validation, correction/read sets, aliases/inverses/proof paths and situation. |
 | Personality | No implemented personality/state module. | Versioned repository, compiler/reducer, profile editing and behavior snapshots. |
-| Web | Authority/origin checks in [`http.rs`](../crates/assistant-web/src/http.rs); no owner sessions. Frontend connection uses `EventSource`; submission abandons restart recovery and limits retries to nine minutes. | Pairing/authentication, v2 contracts, authenticated fetch streams, durable reconciliation and owner UI. |
-| Daemon | [`cli.rs`](../crates/assistant-daemon/src/cli.rs) requires a model for the existing command shape; prompt/stdin paths use ephemeral `Chat`. | Memory configuration, a pairing command without model startup, and authorized durable headless interactions. |
+| Web | Authority/origin/CSP checks; no owner sessions. Memory-enabled activation is rejected. Frontend uses `EventSource`, discards pending identity after restart and limits retries to nine minutes. Existing browser fixtures serve synthetic v1 HTTP/SSE, not a real memory daemon. | Pairing/authentication, v2 contracts, authenticated fetch streams, durable reconciliation/history, evidence/owner UI and real daemon browser acceptance. |
+| Daemon | [`cli.rs`](../crates/assistant-daemon/src/cli.rs) and [`app.rs`](../crates/assistant-daemon/src/app.rs) support `--memory-config` and durable prompt/stdin requests; raw/required-tool diagnostics conflict with required memory. | Pairing/status/maintenance commands without model startup, full configuration and shared owner command surfaces. |
 
-Audit anchors at this commit: application admission line 360; chat execution
-line 289 and tool dispatch line 325; runtime activation line 493 and shutdown
-line 588; worker prompt preparation line 507. The frontend connection constructs
-`EventSource` at line 83 of
+Concrete audit anchors: `AssistantHandle::{memory,submit,run}` and
+`Coordinator::{admit,run}` in `application/mod.rs`; `MemoryOperation::{prepare,
+execute_tool,settle}` in `memory/session.rs`; `MemoryAccess::recall_context` and
+`drain_index` in `memory/service.rs`; `Database::semantic_search` in
+`memory/store/embeddings.rs`; `BoundWeb::activate` in `assistant-web/src/service.rs`.
+The frontend connection constructs `EventSource` in
 [`assistant-connection.tsx`](../crates/assistant-web/frontend/src/app/connection/assistant-connection.tsx);
 [`submission.ts`](../crates/assistant-web/frontend/src/pages/chat/model/submission.ts)
-contains the restart reset and retry-window checks around lines 49-65. Embedding
-sequence slices start at `context.rs:413`; converter vocabulary selection starts
-at `conversion/bert.py:38`, and native WordPiece selection at
-`src/llama-vocab.cpp:2283` inside the pinned submodule.
+contains the restart reset and nine-minute retry-window checks. Symbol names are
+the audit anchors; line numbers from the earlier storage review are obsolete.
 
-The full specification still requires application work in human-owned crates.
-Implementation should proceed only when requested, then carry this entire scope
-through acceptance rather than treating the storage baseline as the product.
+The remaining implementation touches human-owned `assistant`, `assistant-web`
+and `assistant-daemon` code. The owner's 2026-11-06 request establishes that scope;
+the immediate deliverable of this turn is the researched plan. Subsequent code
+changes should carry the entire contract through acceptance.
+
+## Core boundary and WebUI delivery refinement — 2026-11-06
+
+Keep the current crate split. No new database service, UI framework, generic
+transport protocol or D-Bus dependency is needed to establish this boundary.
+Names below describe proposed Rust contracts, not existing public APIs.
+
+```mermaid
+flowchart TD
+    W[WebUI] --> H[HTTP adapter: pairing, bearer sessions, JSON and SSE]
+    L[Local host or headless CLI] --> A[Owner-authorized application handle]
+    H --> A
+    T[Future D-Bus or Unix socket adapter: peer authentication] -.-> A
+    A --> C[Application: commands, operation identity and publication]
+    C --> M[Memory: sources, graph, retrieval, jobs and owner workflows]
+    C --> P[Personality and attention]
+    M --> S[Single durable SQLite authority]
+    P --> S
+    M --> R[Runtime-owned internal inference and E5 workers]
+    C --> E[Typed snapshots and events]
+    E --> H
+    E --> L
+    E -.-> T
+```
+
+### Shared application contract
+
+- Introduce an owner-authorized application facade over the existing coordinator
+  and memory services. It accepts owned typed commands and returns typed receipts,
+  views and bounded subscriptions. Keep the store handle an internal service
+  boundary for product paths; adapters must not assemble multi-step mutations by
+  calling raw storage methods. Low-level binding/storage APIs remain available
+  to trusted hosts/tests under their documented contracts.
+- Authentication belongs to each adapter; authorization, owner intent, revisions,
+  operation identity, evidence eligibility and publication checks belong to the
+  core. A private host-issued access grant carries principal and revocation
+  generation; it is not deserializable. A web session owns a revocable grant,
+  not an unrestricted `MemoryAccess` clone. Revoke blocks new commands and closes
+  that grant's readers/subscriptions; it does not replay or roll back admitted
+  tools. Explicit cancellation is a separate durable product action.
+- Keep web token digests, HTTP headers/status codes, SSE frames and browser tab
+  identities out of `memory/`. Future socket peer credentials or D-Bus sender
+  credentials map to the same grant. Missing credentials fail closed. Connection
+  lifetime is not the lifetime of an admitted operation.
+- Stable owner/assistant/store/operation/source/notice identities outlive daemon
+  instances. Stream cursors and native working contexts remain disposable. Restore
+  advances store generation and invalidates old grants/cursors. Persist or
+  deterministically reconstruct the single logical conversation identity so
+  history is not tied to a newly generated runtime `chat_id`.
+- Durable client identity uses a host-assigned namespace, client ID, request ID
+  and a versioned canonical command digest, including explicit options. Session
+  tokens, event cursors, instance IDs and re-pairing do not enter that digest.
+  Separate adapters use distinct stable namespaces unless the host explicitly
+  grants reconciliation of another namespace; all use the same execution rules.
+- Add lookup by original key, durable status by operation ID and keyset-paginated
+  visible history. Initial snapshots contain a bounded recent window; history
+  pages come from eligible durable sources, never hidden reasoning or a raw model
+  transcript. A memory-disabled snapshot remains volatile. Lookup must work
+  without submitting the input again.
+- Keep pending admission in an owned task tracked by the coordinator. The current
+  `Command::Submit` awaits storage inside the actor loop; move that wait out so
+  status, cancellation, revocation and shutdown remain responsive. There is one
+  pending/active product interaction across adapters; duplicate pending keys
+  attach to its result and conflicting commands receive typed conflicts/busy.
+- Subscribe atomically with snapshot/cursor registration; lag forces resnapshot.
+  Events describe run state, visible text, evidence references, memory coverage,
+  invalidation, health, personality and notices. Durable rows remain authoritative.
+  Central publication leases/generations cover both subscription frames and
+  ordinary read responses; each adapter checks again at its final send boundary.
+
+| Shared command family | Core result needed by every adapter |
+| --- | --- |
+| Submit / lookup / status / cancel | Stable operation identity, commit boundary, provisional/terminal outcome and unknown-effect state |
+| Snapshot / history / subscribe | Bounded visible state, history continuation, instance cursor and invalidation generation |
+| Search / follow / inspect evidence | Qualified source/claim/path data, revisions, truncation and per-channel coverage |
+| Preserve / correct | Existing source retention or identified revision change; literal/structured/indexed receipt |
+| Forget preview / execute / status | Principal-bound reviewed selection and durable SQL/journal/publication/purge stages |
+| Profile / disposition / attention policy | Expected-revision edits and effective operation boundary |
+| Inbox / actions | Stable cause/notice identity, paginated state and seen/dismiss/snooze receipts |
+| Health / export / backup / restore | Sanitized component state or tracked maintenance operation; host-selected destinations |
+
+Implement the facade in `assistant::application` with domain DTOs under
+`assistant::memory`/`personality`; use narrow modules rather than expanding the
+existing coordinator into a storage/job monolith. Rust core errors contain no
+`status_url`; the web adapter adds route locations to its wire envelope. Derive
+wire schemas from versioned public DTOs where practical, with checked mappings
+where HTTP has a different representation. Update OpenAPI, Valibot and fixtures
+together. Do not expose the extraction proposal schema as a client authority API.
+
+### WebUI is the first required product client
+
+Preserve the existing chat/composer/Markdown/metrics experience. Add a small
+navigation surface for Memory, Inbox and Settings; source inspection is available
+from an answer's evidence references. A graph picture is optional polish; a
+complete readable supporting path with source/time qualifications is required.
+
+| Owner journey | Required UI behavior and failure state |
+| --- | --- |
+| Start and pair | Existing daemon startup plus memory config; run `assistant pair` against the already-running daemon without loading another model. Pair screen explains the local command; no personal bootstrap before authentication. |
+| Chat and restart | Show saved input separately from provisional answer text. Reload/restart/re-pair recovers durable recent history and a pending operation by its original key; terminal output is never regenerated automatically. |
+| See what was remembered | Message/answer actions open source excerpts, claims, full proof paths, corrections and evidence attribution/time. Receipts distinguish saved literal, pending/unresolved structuring and partial/unavailable indexing. |
+| Search and preserve | Search stored evidence with bounded paging/filters; preserve an existing accepted source rather than duplicate its text or grant another extraction budget. Empty and unavailable are distinct. |
+| Correct | Edit a selected claim using expected revision and replacement evidence. A stale edit reloads current state; an ambiguous natural-language correction stays visibly unresolved. |
+| Forget | Preview affected sources/derived content and active work; confirm the reviewed selection, show logical barrier progress and physical purge separately, then invalidate local cached views. |
+| Character and initiative | Edit profile/disposition/expiry/quiet hours/owner notice cap; show activation boundary. Inbox supports seen/dismiss/snooze without injecting fake user turns. |
+| Inspect and recover | Component health/backlog, export, backup and restore are reachable owner controls. Backup/restore select opaque server-managed backup IDs, never arbitrary browser-supplied filesystem paths. |
+
+Retain the selected in-memory bearer contract: reload requires pairing again;
+daemon restart invalidates sessions. Persist only bounded opaque pending namespace,
+client/request IDs in tab `sessionStorage` before submission, no credentials or
+conversation text. On re-pair, lookup restores accepted work. If lookup is absent
+after reload, the original text is unavailable: show that fact and require an
+explicit new submission; do not invent text or automatically execute. A committing
+or indeterminate result stays pending. Preserve a live draft on ordinary network
+failure; logout/revoke clears personal stores, rendered/queued text and credentials
+while retaining only opaque pending keys for later authorized reconciliation.
+
+Replace `EventSource` with a bounded fetch stream carrying Authorization. Parse
+UTF-8 incrementally, including split codepoints, BOM, LF/CRLF/CR, comments,
+multi-line data and incomplete events at EOF. Cap frame bytes and queued events;
+overflow disconnects/resnapshots. A 401 stops reconnecting and returns to pairing;
+transient failure retries with bounded backoff. Heartbeats and background
+subscriptions do not refresh owner-activity or idle-session deadlines. Cancel
+old fetch/readers on session change, hidden-tab suspension and invalidation.
+
+Add `GET /api/v2/history` for bounded visible history and explicit v2 backup
+create/list/status and restore-preview/execute/status routes to the specification's
+endpoint families. Match their typed core commands. A restore revokes the current
+session; after re-pairing the owner inspects its durable activation result. The
+public `GET /api/discovery` returns only API version and memory-disabled versus
+pairing-required mode, with no personal IDs, health details, counts or model paths.
+The existing v1 path stays usable only in memory-disabled mode. Do not merely
+remove `BoundWeb::activate`'s memory rejection before protected routes exist.
+
+### Concrete implementation order and review units
+
+These are small code-review units within the same delivery, not requests for a
+new approval at each row. Finish both adapters' journeys before declaring success.
+
+| Order | Focused change and affected surfaces | Exit evidence |
+| --- | --- | --- |
+| 1 | Re-establish format/check/test baseline; freeze dev/held-out quality corpus, artifact manifests and reproducible model commands (A). | Recorded current results; extraction failure reproduced without weakening assertions; no assumed model download. |
+| 2 | Shared authorized facade/DTOs, canonical options, durable lookup/history, responsive pending admission and publication-generation foundation (`application`, `memory`, daemon; B/F). | Direct Rust commands prove lost-reply/restart/duplicate/revocation behavior and durable history without HTTP. |
+| 3 | Pairing CLI/socket, owner sessions, protected v2 mapping, fetch-SSE and first working durable chat/history/evidence UI (`assistant-web`, frontend; E). | Real daemon/browser pair, save, restart, re-pair and reconcile; unauthorized personal routes fail; unqualified channels remain explicit in development. |
+| 4 | Internal inference class/priority/reservations, richer fenced jobs, production extractor/validator and E5 retry/coverage/accounting (`runtime`, `memory`; A/B/C). | No primary-chat mutation or tools; poison source does not block later indexing; native development extraction passes and held-out results remain separately scored. |
+| 5 | Alias/inverse/proof-path/hybrid retrieval, token packing, synchronous corrections, read-set invalidation and situation state (C/F). | Model-produced graph survives restart and supports qualified chain answers; correction interrupts stale publication in both core and WebUI. |
+| 6 | Profile/disposition and deterministic attention/inbox, with full owner editing/actions and notice publication checks (D/E/F). | Same evidence/facts across profiles; fake-clock/restart/dismissal invariants; every visible control works. |
+| 7 | Complete cross-exchange forgetting, export, backup/restore activation and recovery UI/CLI (E/F). | Blocked delivery/export/job cannot publish after barrier; old backup cannot resurrect forgotten data; activation crash tests pass. |
+| 8 | Native, direct-core, real-daemon browser, load/MSRV/package checks and owner walkthrough (G). | Q1–Q8 results and supported limits; timed live-notice validation remains explicitly separate. |
+
+Work on failed model qualification and independent core/UI plumbing can proceed
+without treating a syntactically valid JSON result as a qualified graph writer.
+Early WebUI integration is a development path with truthful coverage; it is not
+promotion of unqualified semantic memory. Shared invalidation infrastructure is
+built in order 2 and extended with each domain, not first considered at order 7.
+
+No D-Bus/socket implementation is required now. Prove extensibility by running
+the same command/receipt/forget/recovery scenarios through a direct authorized
+Rust client and HTTP adapter, by running `--no-web`, and by verifying that the
+core builds without `assistant-web`. No new transport may open another writer
+or implement its own extraction/scheduler/retention policy.
 
 ## Research findings that change the implementation order
 
@@ -138,9 +302,10 @@ These choices are required in the final implementation, not future API research:
 3. **Lookup:** add authorized lookup by original client key, because a lost
    admission reply leaves the client without an operation ID. Old acceptance
    receipts identify an operation; current status comes from the operation store.
-4. **Outcome:** persist terminal reason, truncation/deadline status, limit reason
-   and honest bounded usage/measurement availability. The current coarse storage
-   state cannot reconstruct every `RunView` outcome. Do not invent zero metrics
+4. **Outcome:** preserve migration 4's terminal reason, truncation/deadline status,
+   limit reason and usage availability in durable lookup/history projections.
+   Detailed performance/resource samples are still not fully reconstructible;
+   unavailable measurements must stay unavailable. Do not invent zero metrics
    or a successful full answer after restart.
 5. **Tool ordering:** all confirmed receipt/unknown-outcome writes settle before
    finalization is enqueued. The writer prioritizes finalization over other
@@ -162,10 +327,10 @@ These choices are required in the final implementation, not future API research:
 
 ```mermaid
 flowchart TD
-    A[Artifact and model preflight] --> B[Authorized durable runtime]
+    A[Artifact preflight and frozen quality harness] --> B[Shared authorized core and publication foundation]
+    B --> E[Authenticated WebUI durable chat and recovery]
     B --> C[Formation, hybrid recall and situation]
     C --> D[Personality and attention]
-    B --> E[Authenticated adapters and owner controls]
     D --> F[Complete publication, forgetting and recovery]
     E --> F
     F --> G[Native, headless, browser and load acceptance]
@@ -186,11 +351,13 @@ and evaluation tooling, memory fixtures and benchmark manifests.
   patches. Fix embedding dimension/pooling/rank/index/lifetime contracts, with
   error containment and real embedding tests. No unsafe slice from a guessed
   shape; invalid native indices must not abort the daemon.
-- Prepare the selected E5 artifact from a fixed upstream revision. Record source,
-  license, converter/options, tokenizer/model hashes, pooling/precision/prefixes
-  and reference-vector fixtures. Development/reference Python dependencies may
-  be isolated in preparation tooling; the daemon remains native Rust/llama.cpp.
-  Do not commit weights or machine-local paths; startup never downloads models.
+- Preserve the already-selected E5 Q8 artifact and its checksum; do not repeat
+  conversion or replace it to make a smoke case pass. Complete source-revision,
+  license, converter/options, tokenizer and reference-fixture provenance where
+  available; record unknowns honestly. Existing reference artifacts/fixtures may
+  be used for parity. Missing reference weights or tooling remain an explicit
+  qualification dependency, not authorization for downloads/installations. The
+  daemon remains native Rust/llama.cpp and never downloads models.
 - Check tokenizer parity on English/Ukrainian, punctuation, normalization,
   special tokens, maximum input and mixed batches. Require matched-FP32 vector
   cosine >=0.999, correct dimension/norm, and batch isolation.
@@ -199,6 +366,14 @@ and evaluation tooling, memory fixtures and benchmark manifests.
   output, termination reason, exact quotation entailment, identity and correction
   behavior. Fix prompt/chunk/handle selection within the selected budgets;
   do not lower semantic validation or count repaired syntax as semantic success.
+- Reproduce the current family/occupation failure first. Measure rendered input,
+  schema/handle overhead, output termination and thinking configuration before
+  tuning. Compare focused instruction/examples and smaller host-selected excerpts
+  on development cases only. Keep the v1 semantic output contract; an internal
+  schema reduction or staged extraction is an experiment whose additional calls
+  must fit the same root budget. Freeze a candidate before held-out evaluation.
+  Exact quotes and type checks alone cannot detect every wrong-but-well-typed
+  attribution; do not present structural host validation as an entailment oracle.
 - Build the complete quality harness now. Freeze development versus held-out
   data before tuning. Seeded graphs, scripted models and actual model-produced
   memory are different test tracks and receive separate results.
@@ -207,10 +382,11 @@ This stage uses development cases for early preflight. Full held-out quality is
 measured through the integrated implementation in G, not inferred from that
 preflight or the converter's supported-architecture registry.
 
-If the current chat artifact cannot pass Q4, compare a more capable explicitly
-configured local extraction model within the same runtime/resource contracts.
-An unresolved artifact/quality failure is a release blocker, not permission to
-omit semantic memory or rename literal search as the final brain.
+The owner requires the existing selected models; alternative models and model
+downloads are out of scope. If Q4 fails, revise the algorithm, host-selected
+scope or staged protocol within the resource contracts. An unresolved quality
+failure is a release blocker, not permission to omit semantic memory or rename
+literal search as the final brain.
 
 ### B. Authorized durable runtime and conversation
 
@@ -281,6 +457,12 @@ model-worker preparation and typed memory tools.
   bounded exact scans and authoritative eligibility hydration. Expose index
   coverage/watermarks, building/unavailable/partial states and rebuild/switch
   behavior. Keep full source/span mappings through E5's 384/64-token chunks.
+- Replace the indexer's current 640-byte advance/128-byte overlap with measured
+  tokenizer chunks, and isolate a failed source with persisted retry/fault state
+  so it cannot starve the rest of the backlog. Add total elapsed-time, visited
+  vector and byte limits to Rust's similarity loop; a SQLite progress handler
+  bounds SQL execution, not arbitrary host-side scoring. Report scanned/eligible
+  coverage on bounded scans rather than silently calling a partial top-k exact.
 - Run E5 through a dedicated native owner worker with noncausal batch decode and
   pooling, initially on CPU. Give query work priority over document batches and
   copy vectors into owned results before crossing threads. Do not send an
@@ -475,6 +657,21 @@ LLM/memory/web contracts, model preparation instructions, owner startup/controls
 recovery examples and the documentation map. Report existing lint debt separately
 from new warnings; do not edit generated bindings or weaken safety gates.
 
+Browser qualification has two tracks. Extend the existing HTTP fixture tests for
+session/stream parsing, races, keyboard/accessibility and rendering behavior, and
+add tests against the real Rust daemon and temporary durable store. A synthetic
+v2 fixture cannot establish storage, native extraction or restore correctness.
+Keep deterministic daemon tests separate from required-artifact native browser
+walkthroughs, recording model identities and coverage for each. Run the existing
+Chromium/Firefox/WebKit projects; report an unavailable engine explicitly.
+
+Transport conformance must compare authorized direct-core and HTTP runs for the
+same authored scenarios: admission/lookup/terminal receipt, revision conflict,
+forget barrier, inbox action and restart recovery. Verify web disabled with
+background progress and zero listener/pairing tasks; verify core package builds
+without the web crate. Future D-Bus/socket support then requires adapter tests,
+not a replacement memory engine.
+
 ## Completion and timed validation
 
 Implementation completion means every selected capability above exists, is wired
@@ -496,6 +693,32 @@ lowering thresholds, dropping semantic memory/personality/initiative, or present
 another storage-only result. No further architecture-research phase is planned.
 
 ## Primary research checked for this revision
+
+Rechecked on 2026-11-06 for the transport/UI refinement:
+
+- [WHATWG server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html):
+  `EventSource` exposes URL and credentials mode, not arbitrary authorization
+  headers. Its UTF-8, line-ending and dispatch rules are the parser contract for
+  the selected bearer-authenticated fetch stream. This supports retaining SSE,
+  not introducing WebSockets solely for authentication.
+- [Tokio UnixStream peer credentials](https://docs.rs/tokio/latest/tokio/net/struct.UnixStream.html#method.peer_cred)
+  and [D-Bus connection credentials](https://dbus.freedesktop.org/doc/dbus-specification.html#bus-messages-get-connection-credentials):
+  native caller credentials can be mapped by their adapters to a core access
+  grant. Inference: keeping credentials and transport serialization outside the
+  memory service permits future adapters without changing memory semantics.
+- [E5 model card](https://huggingface.co/intfloat/multilingual-e5-small):
+  384-dimensional output, masked mean pooling, normalization, query/passage
+  prefixes and 512-token input constrain the native path. The selected Q8 smoke
+  result is not reference parity or held-out retrieval evidence. Apply the same
+  declared whitespace transformation in reference/native comparison and retain
+  original source-byte citations separately.
+- [SQLite progress callback](https://www.sqlite.org/c3ref/progress_handler.html)
+  and [online backup API](https://www.sqlite.org/backup.html): progress callbacks
+  run during SQLite operations; the Rust scoring loop needs its own budget
+  checks. Online backup supplies a database copy; it does not implement the
+  daemon's grant revocation, publication barrier or atomic live-store activation.
+
+Earlier sources below remain background for the unchanged delivery contract.
 
 - E5's [configuration](https://huggingface.co/intfloat/multilingual-e5-small/raw/main/config.json)
   and [model card](https://huggingface.co/intfloat/multilingual-e5-small) establish

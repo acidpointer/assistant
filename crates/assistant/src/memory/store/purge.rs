@@ -49,6 +49,46 @@ fn purge_embeddings(
         |r| r.get(0),
     )?)
 }
+fn purge_connections(
+    connection: &Connection,
+    principal: &str,
+    source: &str,
+    budget: &mut Budget,
+) -> MemoryResult<bool> {
+    // Labels may contain private prose. Remove them under the same record/byte
+    // allowance as claims, before source FK cleanup.
+    for (table, predicate, size) in [
+        (
+            "memory_links",
+            "from_id=?2 OR to_id=?2",
+            "length(CAST(relation AS BLOB))",
+        ),
+        ("note_dependencies", "note_id=?2 OR source_id=?2", "64"),
+    ] {
+        let mut statement = connection.prepare(&format!(
+            "SELECT rowid,{size} FROM {table} WHERE principal=?1 AND ({predicate}) LIMIT 128"
+        ))?;
+        let rows = statement
+            .query_map(params![principal, source], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (row, bytes) in rows {
+            if !budget.take(1, payload_bytes(bytes)?) {
+                break;
+            }
+            connection.execute(&format!("DELETE FROM {table} WHERE rowid=?1"), [row])?;
+        }
+        if connection.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE principal=?1 AND ({predicate}))"),
+            params![principal, source],
+            |r| r.get::<_, bool>(0),
+        )? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
 impl Budget {
     fn take(&mut self, records: u64, bytes: u64) -> bool {
         if records > self.records || bytes > self.bytes {
@@ -201,6 +241,10 @@ fn cleanup(
     )?;
     connection.execute("DELETE FROM product_outcomes WHERE principal=?1 AND operation_id IN(SELECT operation_id FROM source_metadata WHERE principal=?1 AND source_id=?2)",params![principal,source])?;
     connection.execute(
+        "DELETE FROM assistant_notices WHERE principal=?1 AND source_id=?2",
+        params![principal, source],
+    )?;
+    connection.execute(
         "DELETE FROM sources WHERE principal=?1 AND id=?2",
         params![principal, source],
     )?;
@@ -236,11 +280,13 @@ impl Database {
         let arguments = purge_arguments(&tx, &principal, &id, &mut budget)?;
         let embeddings = purge_embeddings(&tx, &principal, &id, &mut budget)?;
         let claims = purge_claims(&tx, &principal, &id, &mut budget)?;
+        let connections = purge_connections(&tx, &principal, &id, &mut budget)?;
         let receipts = purge_receipts(&tx, &principal, &id, &mut budget)?;
         let complete = !arguments
             && !embeddings
             && !claims
             && !receipts
+            && !connections
             && cleanup(&tx, &principal, &id, &mut budget)?;
         tx.commit()?;
         Ok(complete)

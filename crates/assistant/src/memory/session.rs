@@ -11,21 +11,82 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct MemoryOperation {
+    recalled: std::sync::Mutex<Option<super::service::RecallContext>>,
+    instructions: std::sync::Mutex<Option<MemoryText>>,
+    visible: std::sync::Mutex<VisibleText>,
     pending: std::sync::Mutex<Vec<tokio::task::JoinHandle<MemoryResult<()>>>>,
     ordinal: std::sync::atomic::AtomicU16,
     unknown: std::sync::atomic::AtomicBool,
     pub(crate) record: OperationRecord,
     pub(crate) access: MemoryAccess,
 }
+/// Visible text across all model turns, independently of optional observers.
+/// Hidden reasoning and tool payloads never enter this source.
+#[derive(Default)]
+struct VisibleText {
+    text: String,
+    separate: bool,
+}
+impl std::fmt::Debug for VisibleText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VisibleText([redacted])")
+    }
+}
 impl MemoryOperation {
     pub(crate) fn new(record: OperationRecord, access: MemoryAccess) -> Arc<Self> {
         Arc::new(Self {
             record,
             access,
+            recalled: std::sync::Mutex::new(None),
+            instructions: std::sync::Mutex::new(None),
+            visible: std::sync::Mutex::new(VisibleText::default()),
             pending: std::sync::Mutex::new(Vec::new()),
             ordinal: std::sync::atomic::AtomicU16::new(0),
             unknown: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+    pub(crate) fn instructions(&self) -> ChatResult<String> {
+        self.instructions
+            .lock()
+            .map_err(|_| MemoryError::Unavailable)?
+            .as_ref()
+            .map(|text| text.as_str().to_owned())
+            .ok_or(crate::chat::ChatError::Memory(MemoryError::Unavailable))
+    }
+    pub(crate) fn recalled(&self) -> ChatResult<Option<super::service::RecallContext>> {
+        Ok(self
+            .recalled
+            .lock()
+            .map_err(|_| MemoryError::Unavailable)?
+            .clone())
+    }
+    pub(crate) fn record_visible(&self, event: &crate::chat::RunEvent) -> ChatResult<()> {
+        let mut visible = self.visible.lock().map_err(|_| MemoryError::Unavailable)?;
+        match event {
+            crate::chat::RunEvent::ModelTurnStarted { .. } => {
+                visible.separate = !visible.text.is_empty();
+            }
+            crate::chat::RunEvent::TextDelta { text, .. } if !text.is_empty() => {
+                let separator = if visible.separate { "\n\n" } else { "" };
+                if text.contains('\0')
+                    || visible
+                        .text
+                        .len()
+                        .saturating_add(separator.len())
+                        .saturating_add(text.len())
+                        > 131_072
+                {
+                    return Err(crate::chat::ChatError::Limit(
+                        "durable visible output bytes",
+                    ));
+                }
+                visible.text.push_str(separator);
+                visible.text.push_str(text);
+                visible.separate = false;
+            }
+            _ => {}
+        }
+        Ok(())
     }
     pub(crate) async fn execute_tool(
         self: &Arc<Self>,
@@ -99,6 +160,15 @@ impl MemoryOperation {
             .map_err(|_| crate::chat::ChatError::Memory(MemoryError::Unavailable))
     }
     pub(crate) async fn prepare(&self, input: &str) -> ChatResult<String> {
+        let profile = self
+            .access
+            .store
+            .assistant_profile(&self.access.owner)
+            .await?;
+        *self
+            .instructions
+            .lock()
+            .map_err(|_| MemoryError::Unavailable)? = Some(profile.settings.instructions);
         self.access
             .store
             .start_operation(
@@ -107,7 +177,13 @@ impl MemoryOperation {
                 self.record.id,
             )
             .await?;
-        self.access.recall_context(input).await
+        let context = self
+            .access
+            .recall_context(input, self.record.input.id)
+            .await?;
+        let rendered = context.render(context.len());
+        *self.recalled.lock().map_err(|_| MemoryError::Unavailable)? = Some(context);
+        Ok(rendered)
     }
     pub(crate) async fn settle(
         &self,
@@ -131,10 +207,23 @@ impl MemoryOperation {
                 RunStatus::Deadline | RunStatus::Failed => TerminalOutcome::Failed,
             }
         };
-        let assistant = if response.message.content.trim().is_empty() {
+        let captured = self
+            .visible
+            .lock()
+            .map_err(|_| MemoryError::Unavailable)?
+            .text
+            .clone();
+        // A middleware short circuit can return text without emitting deltas.
+        // Native/tool continuations use the complete captured visible sequence.
+        let content = if captured.is_empty() {
+            &response.message.content
+        } else {
+            &captured
+        };
+        let assistant = if content.trim().is_empty() {
             None
         } else {
-            Some(MemoryText::new(response.message.content.clone())?)
+            Some(MemoryText::new(content.clone())?)
         };
         let kind = if self.unknown.load(std::sync::atomic::Ordering::Acquire) {
             super::CompletionKind::Interrupted

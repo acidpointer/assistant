@@ -39,27 +39,34 @@ struct WebState {
     quiesce: Cancellation,
     stop: Cancellation,
     streams: Arc<Semaphore>,
+    #[cfg(target_os = "linux")]
+    owner: Option<assistant::application::OwnerHandle>,
 }
 pub(crate) fn router(
     assistant: AssistantHandle,
     quiesce: Cancellation,
     stop: Cancellation,
+    #[cfg(target_os = "linux")] owner: Option<assistant::application::OwnerHandle>,
 ) -> Router {
     let state = WebState {
         assistant,
         quiesce,
         stop,
         streams: Arc::new(Semaphore::new(4)),
+        #[cfg(target_os = "linux")]
+        owner,
     };
     Router::new()
         .route("/", get(index))
         .route("/assets/{*path}", get(static_asset))
+        .route("/api/discovery", get(discovery))
         .route("/api/v1/bootstrap", get(bootstrap))
         .route("/api/v1/chats/{id}", get(snapshot))
         .route("/api/v1/chats/{id}/events", get(events))
         .route("/api/v1/chats/{id}/runs", post(submit))
         .route("/api/v1/runs/{id}", get(run))
         .route("/api/v1/runs/{id}/cancel", post(cancel))
+        .merge(personal_routes())
         .fallback(|| async { Problem::new(StatusCode::NOT_FOUND, "not_found") })
         .method_not_allowed_fallback(|| async {
             Problem::new(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
@@ -67,6 +74,26 @@ pub(crate) fn router(
         .layer(DefaultBodyLimit::max(128 * 1024))
         .layer(middleware::from_fn_with_state(state.clone(), policy))
         .with_state(state)
+}
+
+#[cfg(target_os = "linux")]
+mod v2;
+fn personal_routes() -> Router<WebState> {
+    #[cfg(target_os = "linux")]
+    {
+        v2::routes()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Router::new()
+    }
+}
+async fn discovery(State(state): State<WebState>) -> Json<serde_json::Value> {
+    #[cfg(target_os = "linux")]
+    let required = state.owner.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let required = false;
+    Json(json!({"api_version":if required {2} else {1}, "authentication":"none"}))
 }
 
 fn valid_authority(authority: &str, local: std::net::SocketAddr) -> bool {
@@ -88,7 +115,7 @@ fn valid_authority(authority: &str, local: std::net::SocketAddr) -> bool {
     }
     host.parse::<IpAddr>().is_ok_and(|ip| ip == local.ip())
 }
-async fn policy(State(state): State<WebState>, request: Request, next: Next) -> Response {
+async fn policy(State(state): State<WebState>, mut request: Request, next: Next) -> Response {
     let failure = |code| Problem::new(StatusCode::FORBIDDEN, code).into_response();
     let local = request
         .extensions()
@@ -98,12 +125,16 @@ async fn policy(State(state): State<WebState>, request: Request, next: Next) -> 
     let allowed = local
         .zip(host)
         .is_some_and(|(address, host)| valid_authority(host, address));
-    let mut response = if !allowed {
+    let response = if !allowed {
         failure("invalid_authority")
     } else if state.quiesce.is_cancelled() {
         Problem::new(StatusCode::SERVICE_UNAVAILABLE, "closed").into_response()
     } else {
         let mutation = request.method() != Method::GET && request.method() != Method::HEAD;
+        #[cfg(target_os = "linux")]
+        let personal = state.owner.is_some();
+        #[cfg(not(target_os = "linux"))]
+        let personal = false;
         let origin_ok = request.headers().get("origin").is_none_or(|value| {
             value
                 .to_str()
@@ -114,7 +145,7 @@ async fn policy(State(state): State<WebState>, request: Request, next: Next) -> 
                         && uri.authority().is_some_and(|a| Some(a.as_str()) == host)
                         && uri.path_and_query().is_none_or(|path| path.as_str() == "/")
                 })
-        });
+        }) && (!personal || !mutation || request.headers().contains_key("origin"));
         let header_ok = request
             .headers()
             .get("x-assistant-client")
@@ -135,14 +166,50 @@ async fn policy(State(state): State<WebState>, request: Request, next: Next) -> 
         } else if mutation && !json_ok {
             Problem::new(StatusCode::UNSUPPORTED_MEDIA_TYPE, "json_required").into_response()
         } else {
+            #[cfg(target_os = "linux")]
+            let owner = if let Some(owner) = &state.owner {
+                let path = request.uri().path();
+                if path.starts_with("/api/v1/") {
+                    return secure_response(
+                        Problem::new(StatusCode::NOT_FOUND, "not_found").into_response(),
+                    );
+                }
+                if path.starts_with("/api/v2/") {
+                    if let Err(error) = owner.check() {
+                        return secure_response(Problem::from(error).into_response());
+                    }
+                    request.extensions_mut().insert(owner.clone());
+                    Some(owner.clone())
+                } else {
+                    None
+                }
+            } else {
+                if request.uri().path().starts_with("/api/v2/") {
+                    return secure_response(
+                        Problem::new(StatusCode::NOT_FOUND, "not_found").into_response(),
+                    );
+                }
+                None
+            };
             match tokio::time::timeout(Duration::from_secs(10), next.run(request)).await {
-                Ok(response) => response,
+                Ok(response) => {
+                    #[cfg(target_os = "linux")]
+                    if let Some(owner) = owner
+                        && let Err(error) = owner.check()
+                    {
+                        return secure_response(Problem::from(error).into_response());
+                    }
+                    response
+                }
                 Err(_) => {
                     Problem::new(StatusCode::REQUEST_TIMEOUT, "request_timeout").into_response()
                 }
             }
         }
     };
+    secure_response(response)
+}
+fn secure_response(mut response: Response) -> Response {
     if !response.headers().contains_key("cache-control") {
         response
             .headers_mut()

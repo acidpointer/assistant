@@ -2,12 +2,14 @@
 //! own independent query-only connections. Replies are owned snapshots. Losing
 //! a reply does not cancel a queued mutation. Shutdown joins all three threads.
 
+mod assistant;
 mod backup;
 mod database;
 mod embeddings;
 mod events;
-pub use embeddings::{EmbeddingTask, SemanticHit};
+pub use embeddings::{EmbeddingTask, IndexCoverage, SemanticHit};
 mod graph;
+mod history;
 mod jobs;
 mod migrations;
 mod operations;
@@ -114,13 +116,30 @@ impl MemoryHandle {
         owner: &OwnerCapability,
         utc_millis: i64,
     ) -> MemoryResult<Option<super::ExtractionLease>> {
+        self.claim_extraction_job_with_budget(
+            owner,
+            utc_millis,
+            super::ExtractionBudget::SinglePass,
+        )
+        .await
+    }
+
+    /// Reserve an entire staged envelope before dispatching its first pass.
+    /// # Errors
+    /// Rejects foreign authority, invalid clocks or exhausted root/daily capacity.
+    pub async fn claim_extraction_job_with_budget(
+        &self,
+        owner: &OwnerCapability,
+        utc_millis: i64,
+        budget: super::ExtractionBudget,
+    ) -> MemoryResult<Option<super::ExtractionLease>> {
         self.authorize(owner)?;
         if utc_millis < 0 {
             return Err(MemoryError::InvalidInput("job clock"));
         }
         self.0
             .writer
-            .call(move |db| db.claim_extraction_job(utc_millis))
+            .call(move |db| db.claim_extraction_job(utc_millis, budget))
             .await
     }
 
@@ -135,7 +154,31 @@ impl MemoryHandle {
         outcome: super::ExtractionOutcome,
         usage: super::MemoryJobUsage,
     ) -> MemoryResult<Vec<Claim>> {
+        self.finish_extraction_job_accounted(
+            owner,
+            lease,
+            changes,
+            outcome,
+            super::ExtractionAccounting { usage, passes: 1 },
+        )
+        .await
+    }
+
+    /// Reconcile actual pass/token/time usage with its durable conservative envelope.
+    /// # Errors
+    /// Rejects stale fences, invalid proposals and usage above the reservation.
+    pub async fn finish_extraction_job_accounted(
+        &self,
+        owner: &OwnerCapability,
+        lease: super::ExtractionLease,
+        changes: super::ExtractionChanges,
+        outcome: super::ExtractionOutcome,
+        accounting: super::ExtractionAccounting,
+    ) -> MemoryResult<Vec<Claim>> {
         self.authorize(owner)?;
+        if !(1..=4).contains(&accounting.passes) {
+            return Err(MemoryError::InvalidInput("extraction passes"));
+        }
         if changes.entities.len() > 8 || changes.claims.len() > 4 {
             return Err(MemoryError::InvalidInput("extraction size"));
         }
@@ -149,7 +192,27 @@ impl MemoryHandle {
         }
         self.0
             .writer
-            .critical(move |db| db.finish_extraction_job(&lease, &changes, outcome, usage))
+            .critical(move |db| db.finish_extraction_job(&lease, &changes, outcome, accounting))
+            .await
+    }
+
+    /// Renew one matching live lease without extending its 120-second hard end.
+    /// The controller calls this every 20 seconds while work is owned.
+    /// # Errors
+    /// Rejects expired/stale fences, changed evidence/generation or invalid clocks.
+    pub async fn heartbeat_extraction_job(
+        &self,
+        owner: &OwnerCapability,
+        lease: super::ExtractionLease,
+        utc_millis: i64,
+    ) -> MemoryResult<()> {
+        self.authorize(owner)?;
+        if utc_millis < 0 {
+            return Err(MemoryError::InvalidInput("job clock"));
+        }
+        self.0
+            .writer
+            .critical(move |db| db.heartbeat_extraction_job(&lease, utc_millis))
             .await
     }
     pub(super) fn authorize(&self, owner: &OwnerCapability) -> MemoryResult<()> {
@@ -296,7 +359,7 @@ impl MemoryHandle {
             .await
     }
 
-    /// Follow current outgoing factual edges with cumulative node/edge/depth bounds.
+    /// Navigate current factual edges in either direction with cumulative bounds.
     /// # Errors
     /// Rejects depths outside 1..=12, foreign authority and storage failure.
     pub async fn follow(

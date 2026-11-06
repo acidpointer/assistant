@@ -26,6 +26,9 @@ use tokio::sync::{mpsc, oneshot};
 pub const E5_Q8_SHA256: &str = "0a34067a40f25d3149b36885faa62bee0e5284d0f9edc102acfc00e115d953e8";
 /// E5 output width; serialized vectors use little-endian f32 after L2 normalization.
 pub const E5_DIMENSIONS: usize = 384;
+/// Derived-index identity includes artifact, normalization, prefixes and literal
+/// window policy. Older coverage never masquerades as coverage for this policy.
+pub const E5_INDEX_ID: &str = "0a34067a40f25d3149b36885faa62bee0e5284d0f9edc102acfc00e115d953e8:ws1:passage384-overlap64:l2f32";
 
 /// Startup-only path to the selected E5 `Q8_0` GGUF. Debug omits the local path.
 #[derive(Clone)]
@@ -101,10 +104,26 @@ impl Embedding {
     }
 }
 #[derive(Debug)]
-struct Command {
-    text: MemoryText,
-    reply: oneshot::Sender<MemoryResult<Embedding>>,
-    purpose: EmbeddingPurpose,
+enum Command {
+    Embed {
+        text: MemoryText,
+        reply: oneshot::Sender<MemoryResult<Embedding>>,
+        purpose: EmbeddingPurpose,
+    },
+    Window {
+        text: MemoryText,
+        cursor: u32,
+        purpose: EmbeddingPurpose,
+        reply: oneshot::Sender<MemoryResult<(u32, u32)>>,
+    },
+}
+impl Command {
+    fn is_closed(&self) -> bool {
+        match self {
+            Self::Embed { reply, .. } => reply.is_closed(),
+            Self::Window { reply, .. } => reply.is_closed(),
+        }
+    }
 }
 /// Cloneable client with no native state or shutdown authority.
 #[derive(Debug, Clone)]
@@ -126,7 +145,21 @@ impl EmbeddingHandle {
                 };
                 let mut values = vec![0.0; E5_DIMENSIONS];
                 values[0] = 1.0;
-                let _ = command.reply.send(Embedding::from_values(values));
+                match command {
+                    Command::Embed { reply, .. } => {
+                        let _ = reply.send(Embedding::from_values(values));
+                    }
+                    Command::Window {
+                        reply,
+                        text,
+                        cursor,
+                        ..
+                    } => {
+                        let _ = reply.send(passage_window(text.as_str(), cursor, |text| {
+                            Ok(text.chars().count())
+                        }));
+                    }
+                }
             }
         });
         Self {
@@ -159,7 +192,7 @@ impl EmbeddingHandle {
                 EmbeddingPurpose::Passage => &self.passage,
             };
             sender
-                .try_send(Command {
+                .try_send(Command::Embed {
                     text,
                     reply,
                     purpose,
@@ -170,6 +203,49 @@ impl EmbeddingHandle {
                 })?;
             receiver.await.map_err(|_| MemoryError::Unavailable)?
         })
+    }
+    /// Locate the next literal UTF-8 span using the resident encoder tokenizer.
+    /// The full prefixed input is at most 384 tokens, with up to 64 tokens of
+    /// preceding overlap. A separate 16 KiB span limit bounds tokenization work.
+    /// # Errors
+    /// Rejects invalid cursors, unavailable capacity or unsupported tokenization.
+    pub async fn passage_window(&self, text: MemoryText, cursor: u32) -> MemoryResult<(u32, u32)> {
+        self.window(text, cursor, EmbeddingPurpose::Passage).await
+    }
+    pub(crate) async fn query_window(&self, text: MemoryText) -> MemoryResult<u32> {
+        if text.as_str().len() > 16_384 {
+            return Err(MemoryError::InvalidInput("embedding query bytes"));
+        }
+        self.window(text, 0, EmbeddingPurpose::Query)
+            .await
+            .map(|(_, end)| end)
+    }
+    async fn window(
+        &self,
+        text: MemoryText,
+        cursor: u32,
+        purpose: EmbeddingPurpose,
+    ) -> MemoryResult<(u32, u32)> {
+        if self.stop.is_cancelled() {
+            return Err(MemoryError::Unavailable);
+        }
+        let (reply, receiver) = oneshot::channel();
+        let sender = match purpose {
+            EmbeddingPurpose::Query => &self.query,
+            EmbeddingPurpose::Passage => &self.passage,
+        };
+        sender
+            .try_send(Command::Window {
+                text,
+                cursor,
+                purpose,
+                reply,
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => MemoryError::Capacity,
+                mpsc::error::TrySendError::Closed(_) => MemoryError::Unavailable,
+            })?;
+        receiver.await.map_err(|_| MemoryError::Unavailable)?
     }
 }
 /// Join authority for the dedicated native worker. Drop requests stop; shutdown
@@ -261,24 +337,49 @@ impl EmbeddingWorker {
                     let Some(command) = command else {
                         break;
                     };
-                    if command.reply.is_closed() {
+                    if command.is_closed() {
                         continue;
                     }
-                    let prefix = match command.purpose {
+                    let (text, reply, purpose) = match command {
+                        Command::Window {
+                            text,
+                            cursor,
+                            purpose,
+                            reply,
+                        } => {
+                            let result = passage_window(text.as_str(), cursor, |text| {
+                                model
+                                    .str_to_token(
+                                        &encoder_copy(
+                                            match purpose {
+                                                EmbeddingPurpose::Query => "query: ",
+                                                EmbeddingPurpose::Passage => "passage: ",
+                                            },
+                                            text,
+                                        ),
+                                        AddBos::Always,
+                                    )
+                                    .map(|tokens| tokens.len())
+                                    .map_err(|_| MemoryError::InvalidInput("E5 tokenization"))
+                            });
+                            let _ = reply.send(result);
+                            continue;
+                        }
+                        Command::Embed {
+                            text,
+                            reply,
+                            purpose,
+                        } => (text, reply, purpose),
+                    };
+                    let prefix = match purpose {
                         EmbeddingPurpose::Query => "query: ",
                         EmbeddingPurpose::Passage => "passage: ",
                     };
                     let result = (|| {
                         // Normalize only the encoder copy. Literal source text
                         // retains every original byte and evidence offset.
-                        let normalized = command
-                            .text
-                            .as_str()
-                            .split_whitespace()
-                            .collect::<Vec<_>>()
-                            .join(" ");
                         let tokens = model
-                            .str_to_token(&format!("{prefix}{normalized}"), AddBos::Always)
+                            .str_to_token(&encoder_copy(prefix, text.as_str()), AddBos::Always)
                             .map_err(|_| MemoryError::InvalidInput("E5 tokenization"))?;
                         if tokens.len() > 512 {
                             return Err(MemoryError::InvalidInput("E5 token limit"));
@@ -309,7 +410,7 @@ impl EmbeddingWorker {
                         result.tokens = token_count;
                         Ok(result)
                     })();
-                    let _ = command.reply.send(result);
+                    let _ = reply.send(result);
                 }
             })?;
         match started.await {
@@ -351,6 +452,104 @@ impl EmbeddingWorker {
                 .map_err(|_| MemoryError::Unavailable)?;
         }
         Ok(())
+    }
+}
+
+fn encoder_copy(prefix: &str, text: &str) -> String {
+    format!(
+        "{prefix}{}",
+        text.split_whitespace().collect::<Vec<_>>().join(" ")
+    )
+}
+
+/// Choose checked boundaries from measured substring counts, never decoded token
+/// pieces: normalization/subword pieces need not map one-to-one to literal bytes.
+fn passage_window(
+    text: &str,
+    cursor: u32,
+    mut count: impl FnMut(&str) -> MemoryResult<usize>,
+) -> MemoryResult<(u32, u32)> {
+    let cursor = usize::try_from(cursor).map_err(|_| MemoryError::Capacity)?;
+    if cursor >= text.len() || !text.is_char_boundary(cursor) {
+        return Err(MemoryError::InvalidInput("embedding cursor"));
+    }
+    let mut floor = cursor.saturating_sub(8192);
+    while !text.is_char_boundary(floor) {
+        floor += 1;
+    }
+    let starts = text[floor..cursor]
+        .char_indices()
+        .map(|(i, _)| floor + i)
+        .chain(std::iter::once(cursor))
+        .collect::<Vec<_>>();
+    let mut low = 0;
+    let mut high = starts.len() - 1;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if count(&text[starts[middle]..cursor])? <= 64 {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    let start = starts[low];
+    let mut ceiling = text.len().min(start + 16384);
+    while !text.is_char_boundary(ceiling) {
+        ceiling -= 1;
+    }
+    let ends = text[cursor..ceiling]
+        .char_indices()
+        .map(|(i, c)| cursor + i + c.len_utf8())
+        .collect::<Vec<_>>();
+    let mut low = 0;
+    let mut high = ends.len();
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if count(&text[start..ends[middle]])? <= 384 {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let end = low
+        .checked_sub(1)
+        .and_then(|index| ends.get(index))
+        .copied()
+        .ok_or(MemoryError::InvalidInput("E5 chunk progress"))?;
+    // Token counts can change around subword boundaries. Recheck the chosen
+    // exact literal substring before reporting coverage or dispatching compute.
+    if count(&text[start..end])? > 384 {
+        return Err(MemoryError::InvalidInput("E5 chunk tokens"));
+    }
+    Ok((
+        u32::try_from(start).map_err(|_| MemoryError::Capacity)?,
+        u32::try_from(end).map_err(|_| MemoryError::Capacity)?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn measured_windows_cover_unicode_and_restart_at_literal_boundaries() {
+        let text = "Привіт, Києве! hello 👋 ".repeat(100);
+        let mut cursor = 0;
+        let mut chunks = 0;
+        while usize::try_from(cursor).expect("cursor") < text.len() {
+            let (start, end) = passage_window(&text, cursor, |part| Ok(part.chars().count() + 4))
+                .expect("bounded measured window");
+            let part = text
+                .get(start as usize..end as usize)
+                .expect("literal UTF-8 span");
+            assert!(part.chars().count() + 4 <= 384);
+            assert!(start <= cursor && end > cursor);
+            assert!(text[start as usize..cursor as usize].chars().count() + 4 <= 64);
+            cursor = end;
+            chunks += 1;
+        }
+        assert!(chunks > 1);
+        assert_eq!(cursor as usize, text.len());
+        assert!(passage_window(&text, 1, |_| Ok(0)).is_err());
     }
 }
 impl Drop for EmbeddingWorker {

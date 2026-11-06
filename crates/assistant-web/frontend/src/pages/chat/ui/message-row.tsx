@@ -37,6 +37,12 @@ export const MessageRow = memo(function MessageRow({ id }: { id: string }) {
           <div className="user-text">{message.text}</div>
         )}
         {message.role === 'assistant' && <MessagePerformance performance={performance} />}
+        {message.role === 'assistant' && complete && run?.usage_available === false && (
+          <p className="retention-note">Token usage was not recorded for this saved exchange.</p>
+        )}
+        {message.role === 'assistant' && complete && run?.outcome_details_available === false && (
+          <p className="retention-note">Detailed completion information was not recorded.</p>
+        )}
         {message.role === 'assistant' &&
           complete &&
           !hasLaterTurn &&

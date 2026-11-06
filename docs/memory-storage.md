@@ -1,18 +1,22 @@
 # Durable memory storage
 
-Status: Linux storage readiness milestone, 2026-11-05. This is the storage
+Status: Linux storage plus opt-in E5/core/WebUI integration, documentation refreshed
+2026-11-06. This is the storage
 foundation of [the implementation specification](memory-implementation-spec.md).
 The [storage decision](decisions/0006-durable-memory-storage.md) records the
 implemented boundary and compatibility choice.
-The daemon and WebUI do not enable it yet. Automatic extraction, semantic
-embeddings, personality, initiative and product output barriers remain separate
-integration work; this module does not claim complete v1 delivery.
+The daemon enables it explicitly through `--memory-dir` and `--embedding-model` for authenticated
+WebUI or headless product requests, including E5 source indexing/recall.
+Universal conversation/note graph commands, freeform personality and a durable
+initiative mailbox are integrated. The production runtime does not depend on the
+experimental typed extractor. Complete forgetting/publication barriers and
+whole-memory restore are not exposed in WebUI. See [the current user guide](assistant-memory.md).
 See the [final integration plan](memory-integration-plan.md) for the complete
 remaining runtime, model, personality, attention and product delivery.
 
 The first integration package now supplies durable **library commands** for
-product admission, tool intent/result and finalization. The application still
-does not call them. A successful library receipt establishes a committed storage
+product admission, tool intent/result and finalization. The opt-in application
+path calls them through `MemoryOperation`. A successful library receipt establishes a committed storage
 boundary; it does not imply authenticated HTTP, a publication barrier or a
 qualified memory model.
 
@@ -177,8 +181,8 @@ is at most 12, and history inspection pages contain at most 256 versions.
 Purge batches share a 256-logical-record / 1-MiB accounted-payload allowance
 across tool arguments, claims and receipts, including conservative final
 source/index maintenance. This does not bound SQLite's physical I/O. No automatic
-retention is enabled. Reservations exist in the library; live application
-admission does not use them yet.
+retention is enabled. Required-memory application admission uses operation
+reservations; memory-disabled traffic remains volatile.
 
 Soft quota exhaustion returns `Capacity` and keeps bounded cleanup possible.
 `StorageFull` distinguishes actual SQLite/filesystem allocation failure (map it
@@ -244,8 +248,41 @@ semantic extraction or qualify a model.
 Migrations 3/4 add source-bound E5 vectors/byte coverage and bounded product
 terminal metadata. Source suppression excludes vector reads immediately; bounded
 purge accounts for derived vectors before FK source cleanup. The opt-in Linux
-runtime now owns E5/indexing and durable headless admission/tool settlement/recall.
-This is not the complete final memory system; automatic graph formation,
-authenticated web/owner controls and other planned contracts remain open. See
+runtime owns E5/indexing and durable admission/tool settlement/recall.
+Migration 5 adds stable operation-history ordinals and original client keys;
+legacy keys remain explicitly absent. Migration 6 adds source-specific index
+failure/retry state. Historical migration contents remain unchanged. The current
+E5 generation includes the artifact and measured 384/64-token window policy;
+coverage for the previous byte-window policy does not count as current coverage.
+Owner-preserve changes the existing source flag without duplicating evidence or
+formation jobs. Durable history survives presentation eviction and restart.
+
+Authenticated web access is implemented through the shared owner facade. This
+is not the complete final memory system; automatic graph formation, destructive
+owner commands and other planned contracts remain open. See
 [the executable integration record](memory-native-integration.md) for artifact
 selection, usage, failed semantic qualification and exact limitations.
+
+
+## Universal assistant storage (migration 8)
+
+`memory_links` connects immutable source versions with freeform labels. Product
+admission/finalization records conversation links in the same transaction as the
+source. Assistant notes have assistant attribution and flattened source
+dependencies; suppression includes dependent interpretations and journal entries.
+Purge removes labels/dependencies under its existing record/byte allowance before
+source FK cleanup. Semantic search ranks source entry points; adjacency pages
+retain directions and cursors, so a dense graph remains traversable with small
+model replies. Bounded multi-hop snapshots are also available to trusted hosts.
+
+`assistant_profile` stores freeform instructions, a settings revision and an
+optional durable initiative schedule. Settings use the same quota headroom
+policy as ordinary writes; disabling initiative without replacing instructions
+may use revocation headroom. A timer claim advances the durable schedule before
+native work. Settlement checks the settings version and live evidence; message
+source and mailbox insertion commit together. The next check is at least one
+interval after settlement, including slow or failed decisions. No fictitious
+user operation is inserted. Dismissal changes mailbox visibility, not retention.
+The composite runtime retires pending legacy extraction jobs and avoids creating
+new ones, while the low-level experimental storage APIs and existing claims are
+retained for compatibility.

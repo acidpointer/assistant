@@ -25,7 +25,7 @@ pub(super) fn tag(value: &impl Serialize) -> MemoryResult<String> {
         .map(str::to_owned)
         .ok_or(MemoryError::CorruptStore)
 }
-fn read_tag<T: DeserializeOwned>(value: &str) -> MemoryResult<T> {
+pub(super) fn read_tag<T: DeserializeOwned>(value: &str) -> MemoryResult<T> {
     decode(&json(&value)?)
 }
 fn source_ref(id: &str) -> MemoryResult<SourceRef> {
@@ -39,6 +39,12 @@ fn source_ref(id: &str) -> MemoryResult<SourceRef> {
 /// Host-selected attribution and reserved source slot, never inferred from prose.
 pub(super) enum SourceOrigin {
     ExplicitMemory,
+    ObservedMemory {
+        observed_at: i64,
+    },
+    Generated {
+        observed_at: i64,
+    },
     User {
         operation: MemoryId,
         observed_at: i64,
@@ -61,7 +67,13 @@ pub(super) fn insert_source(
     job_limit: u32,
 ) -> MemoryResult<()> {
     let (role, operation, ordinal, observed, form) = match origin {
+        SourceOrigin::Generated { observed_at } => {
+            (SourceRole::Assistant, None, None, Some(observed_at), false)
+        }
         SourceOrigin::ExplicitMemory => (SourceRole::User, None, None, None, true),
+        SourceOrigin::ObservedMemory { observed_at } => {
+            (SourceRole::User, None, None, Some(observed_at), true)
+        }
         SourceOrigin::User {
             operation,
             observed_at,
@@ -113,6 +125,9 @@ pub(super) fn schedule_formation(
     source: SourceRef,
     limit: u32,
 ) -> MemoryResult<()> {
+    if limit == 0 {
+        return Ok(());
+    }
     let existing: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM jobs WHERE principal=?1 AND source_id=?2 AND source_revision=?3)", params![principal,source.id.to_string(),source.revision.get()], |r|r.get(0))?;
     if existing {
         return Ok(());
@@ -132,7 +147,7 @@ pub(super) fn schedule_formation(
     Ok(())
 }
 
-fn operation(
+pub(super) fn operation(
     connection: &Connection,
     principal: &str,
     id: MemoryId,
@@ -243,7 +258,7 @@ pub(super) fn suppression_sources(
              AND m.source_id=s.id AND m.source_revision=s.revision WHERE s.principal=?1 AND (s.id=?2
              OR (?3 IS NOT NULL AND m.operation_id=?3)) ORDER BY s.id LIMIT 35",
     )?;
-    let sources = statement
+    let mut sources = statement
         .query_map(params![principal, id.to_string(), operation], |r| {
             Ok((r.get(0)?, r.get(1)?))
         })?
@@ -251,6 +266,16 @@ pub(super) fn suppression_sources(
     if sources.len() > 34 {
         return Err(MemoryError::CorruptStore);
     }
+    let original = sources.clone();
+    for (source, _) in original {
+        let mut dependents=connection.prepare("SELECT s.id,s.revision FROM note_dependencies d JOIN sources s ON s.principal=d.principal AND s.id=d.note_id WHERE d.principal=?1 AND d.source_id=?2")?;
+        let notes = dependents
+            .query_map(params![principal, source], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<(String, i64)>, _>>()?;
+        sources.extend(notes);
+    }
+    sources.sort();
+    sources.dedup();
     Ok(sources)
 }
 
@@ -315,6 +340,10 @@ impl Database {
             tx.execute("INSERT INTO
              product_operations(principal,id,input_source,state,observed_at,limits_json,reserved_bytes)
              VALUES(?1,?2,?3,'accepted',?4,?5,?6)", params![principal,id.to_string(),source.id.to_string(),input.observed_at,json(&input.limits)?,i64::try_from(reservation).map_err(|_|MemoryError::Capacity)?])?;
+            tx.execute(
+                "INSERT INTO operation_history(principal,operation_id,client_key) VALUES(?1,?2,?3)",
+                params![principal, id.to_string(), json(&input.key)?],
+            )?;
             insert_source(
                 tx,
                 &principal,
@@ -326,6 +355,19 @@ impl Database {
                 },
                 limit,
             )?;
+            let previous: Option<String> = tx.query_row("SELECT p.assistant_source FROM operation_history h JOIN product_operations p ON p.principal=h.principal AND p.id=h.operation_id JOIN sources s ON s.principal=p.principal AND s.id=p.assistant_source WHERE h.principal=?1 AND p.id<>?2 AND p.redacted=0 AND s.suppressed=0 ORDER BY h.ordinal DESC LIMIT 1",params![principal,id.to_string()],|r|r.get(0)).optional()?.flatten();
+            if let Some(previous) = previous {
+                super::assistant::connect(
+                    tx,
+                    &principal,
+                    SourceRef {
+                        id: source.id,
+                        revision: source.revision,
+                    },
+                    source_ref(&previous)?,
+                    "continues",
+                )?;
+            }
             operation(tx, &principal, id)
         };
         self.mutate_budget(
@@ -559,6 +601,21 @@ impl Database {
                     SourceOrigin::Assistant { operation: id },
                     limit,
                 )?;
+                let input_id: String = tx.query_row(
+                    "SELECT input_source FROM product_operations WHERE principal=?1 AND id=?2",
+                    params![principal, id.to_string()],
+                    |r| r.get(0),
+                )?;
+                super::assistant::connect(
+                    tx,
+                    &principal,
+                    SourceRef {
+                        id: source.id,
+                        revision: source.revision,
+                    },
+                    source_ref(&input_id)?,
+                    "responds_to",
+                )?;
                 Some(source.id.to_string())
             } else {
                 None
@@ -601,17 +658,8 @@ impl Database {
         Ok(())
     }
 
-    fn source_record(&self, id: MemoryId) -> MemoryResult<SourceRecord> {
-        let source = self.source(id)?;
-        let (role,op,observed,formation):(String,Option<String>,Option<i64>,String)=self.connection.query_row("SELECT role,operation_id,observed_at,formation FROM source_metadata WHERE principal=?1
-             AND source_id=?2 AND source_revision=?3",params![self.owner.principal().to_string(),id.to_string(),source.revision.get()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-        Ok(SourceRecord {
-            source,
-            role: read_tag(&role)?,
-            operation_id: op.map(|id| MemoryId::parse(&id)).transpose()?,
-            observed_at: observed,
-            formation: read_tag(&formation)?,
-        })
+    pub(super) fn source_record(&self, id: MemoryId) -> MemoryResult<SourceRecord> {
+        source_record(&self.connection, &self.owner.principal().to_string(), id)
     }
 
     fn storage_health(&self) -> MemoryResult<StorageHealth> {
@@ -643,6 +691,26 @@ impl Database {
 }
 
 impl MemoryHandle {
+    /// Preserve an existing source without copying it or scheduling new model work.
+    /// # Errors
+    /// Rejects stale/suppressed sources, conflicting keys, authority or write failure.
+    pub async fn preserve_source(
+        &self,
+        owner: &OwnerCapability,
+        key: OperationKey,
+        source: SourceRef,
+    ) -> MemoryResult<MemoryReceipt<Source>> {
+        self.authorize(owner)?;
+        self.0.writer.call(move |db| {
+            let principal = db.owner.principal().to_string();
+            db.mutate(&key, &source, "source_preserve", move |tx, _, _| {
+                let (rev, text): (i64, String) = tx.query_row("SELECT revision,text FROM sources WHERE principal=?1 AND id=?2 AND suppressed=0", params![principal,source.id.to_string()], |r|Ok((r.get(0)?,r.get(1)?)))?;
+                if rev != source.revision.get() { return Err(MemoryError::Conflict); }
+                tx.execute("UPDATE sources SET preserved=1 WHERE principal=?1 AND id=?2 AND revision=?3 AND suppressed=0",params![principal,source.id.to_string(),rev])?;
+                Ok(Source { id: source.id, revision: source.revision, text: MemoryText::new(text).map_err(|_|MemoryError::CorruptStore)?, preserved: true })
+            })
+        }).await
+    }
     /// Commit a product input and its worst-case settlement reservation atomically.
     /// # Errors
     /// Rejects invalid bounds/time, foreign authority, quota, another active run or key conflict.
@@ -840,4 +908,27 @@ impl MemoryHandle {
         }
         Ok(health)
     }
+}
+
+/// Hydrate an attributed source using the caller's existing snapshot.
+pub(super) fn source_record(
+    connection: &Connection,
+    principal: &str,
+    id: MemoryId,
+) -> MemoryResult<SourceRecord> {
+    let (rev,text,preserved):(i64,String,bool)=connection.query_row("SELECT revision,text,preserved FROM sources WHERE principal=?1 AND id=?2 AND suppressed=0 ORDER BY revision DESC LIMIT 1",params![principal,id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    let source = Source {
+        id,
+        revision: revision(rev)?,
+        text: MemoryText::new(text).map_err(|_| MemoryError::CorruptStore)?,
+        preserved,
+    };
+    let (role,op,observed,formation):(String,Option<String>,Option<i64>,String)=connection.query_row("SELECT role,operation_id,observed_at,formation FROM source_metadata WHERE principal=?1 AND source_id=?2 AND source_revision=?3",params![principal,id.to_string(),rev],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
+    Ok(SourceRecord {
+        source,
+        role: read_tag(&role)?,
+        operation_id: op.map(|id| MemoryId::parse(&id)).transpose()?,
+        observed_at: observed,
+        formation: read_tag(&formation)?,
+    })
 }

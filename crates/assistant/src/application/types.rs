@@ -10,6 +10,9 @@ use serde::Serialize;
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ApplicationError {
+    /// Caller access expired or was revoked.
+    #[error("owner authorization required")]
+    Unauthorized,
     /// Required memory could not confirm admission; reconcile the same key.
     #[error("required memory is unavailable; reconcile the original key")]
     StorageUnavailable,
@@ -95,6 +98,8 @@ pub struct DisplayMessage {
 /// Retained interaction metadata; it never retains complete raw model responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunView {
+    /// False for legacy operations whose original caller key was never persisted.
+    pub client_identity_available: bool,
     /// Whether the terminal usage counters are known, including after restart.
     pub usage_available: bool,
     /// Whether full/truncated/deadline status is recorded beyond coarse state.

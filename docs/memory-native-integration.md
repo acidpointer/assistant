@@ -1,16 +1,137 @@
 # Native memory integration progress
 
-Status: implemented opt-in E5 indexing/recall and durable headless request path;
-**the final memory-system delivery is incomplete and unqualified**, 2026-11-05.
+Current access contract: the owner requested CLI-only startup and direct local
+WebUI access. Pairing, bearer/session authentication and its Unix socket have
+been removed. Open the loopback URL to connect, including after reload/restart.
+The benchmark manifests below retain historical verification of the earlier
+access mechanism; they are not startup instructions for the current service.
+Direct-access recheck passed: workspace formatting/check, daemon/web package
+tests, 14 frontend unit checks, 17 Chromium journeys, and the real-daemon browser
+smoke with reload and process restart. The real smoke ran without
+`XDG_RUNTIME_DIR` and reused completed synthetic request keys, avoiding repeated
+chat generation while verifying the changed transport.
+
+Current implementation, 2026-11-06: [ADR 0007](decisions/0007-universal-assistant-memory.md)
+is implemented: conversation/note graphs, semantic search and paged traversal
+tools, freeform personality, a durable optional initiative loop, local
+WebUI settings, standalone notes, graph browsing and an SSE mailbox. The core
+owner API is independent of HTTP. See [using memory](assistant-memory.md).
+
+[Versioned journey evidence](benchmarks/memory-journey-2026-11-06.json) binds the
+current local LFM3/E5 files and tested executable. No weights were downloaded or
+replaced. Real CPU/native checks passed pairing, browser use, source connections,
+personality persistence, process restart/reconciliation, and retrieval of a
+standalone satin-finish note absent from chat inputs. Two actual model-initiated
+messages were committed and dismissed; the resumed check required a new ID and
+verified no fictitious user exchange. Foreground keys are reused on retry to avoid
+repeating already committed inference.
+
+Verification: workspace formatting/check; full serialized workspace suite 675
+passed/16 ignored; after the final explicit-note addition, application packages
+131 passed/2 ignored and workspace check passed. Frontend type/lint/build and
+14 unit checks passed (one optional fixture skipped), as did 17 Chromium fixture
+journeys and a separate real-daemon Chromium journey. The optional historical
+extraction feature also compiles; product builds exclude it. Native-build helper
+checks passed and equivalent configurations imported verified native libraries.
+
+The initial CPU smoke timeout and a browser assumption about the first semantic
+hit's relationship label were corrected. These are development checks, not
+exhaustive topic/personality qualification. CPU prefills observed around 55–127
+seconds; GPU latency was not measured. Whole-memory restore and end-to-end
+forgetting controls are not yet exposed in WebUI. The specialized extraction
+experiments below are historical and do not run in production.
+
+## Historical checkpoint and extraction experiments
+
+Status: opt-in E5 recall, durable core/history and authenticated WebUI implemented;
+**the final memory-system delivery is incomplete and unqualified**, 2026-11-06.
 The complete contract remains [the final integration plan](memory-integration-plan.md).
 This document records executable progress and failures, not a replacement scope.
 Artifact identities and measured observations are recorded in the
 [preflight manifest](benchmarks/memory-preflight-2026-11-05.json).
 
+Planning update, 2026-11-06: the owner requested completing the feature with
+WebUI as the first client and transport-independent core commands. The
+[refreshed delivery plan](memory-integration-plan.md#core-boundary-and-webui-delivery-refinement--2026-11-06)
+supersedes the pause for current planning. No new implementation or model/test
+results are claimed by this documentation update. The checkpoint below records
+the state at the historical stop; its two source edits and manifest are now
+tracked in `1fca696`, but their recorded verification limits still apply.
+
+## Current implementation and evidence — 2026-11-06
+
+The owner authorized implementation and requires the existing selected models.
+No alternative model or model download is part of this work. The protocol was
+changed to fit LFM3: identify source-local names, classify fixed family dimensions,
+then extract occupations. Host code supplies record IDs, types and evidence spans;
+the model never chooses authority or database identities. The original unchanged
+family/occupation semantic assertions now pass the real staged development
+preflight. This is **one development case, not held-out qualification**.
+
+Artifact provenance discrepancy: an independent `sha256sum` and the evaluation
+harness both hash the current local `LFM3-1.7B-Heretic-Abliterated-Q6_K.gguf` as
+`616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1`.
+The historical 2026-11-05 manifest records `077f001f…` for that filename. This work
+did not edit or replace weights. The cause of the mismatch is unestablished;
+current results bind to the current file and do not qualify the older checksum
+or isolate algorithm changes from that historical provenance discrepancy.
+
+Implemented since the checkpoint:
+
+- Transport-independent revocable `OwnerHandle`; durable lookup/history and
+  restart projection with explicit legacy metadata availability. Admission runs
+  outside the coordinator task, remains owned after a lost waiter and only
+  publishes acceptance after commit. Activation awaits history hydration.
+- Mandatory bounded capture of all visible assistant/tool-continuation text,
+  independently of optional observers. Hidden reasoning is excluded.
+- Restricted internal inference over resident weights, isolated from product
+  hooks/history/tools. Separate bounded queue/context capacity and foreground
+  priority use native scheduling boundaries; no native preemption is claimed.
+- Authenticated loopback WebUI with private same-UID pairing, one-use expiring
+  codes, bounded hashed sessions, revocation-aware fetch SSE, reload-safe opaque
+  request identities, history browsing, source search/preservation and health.
+- Source retrieval uses rank fusion and excludes the active input from its own
+  historical evidence. Answer policy is separate from untrusted quotations.
+- E5 passage windows now use measured tokenizer counts (384 including prefix and
+  special tokens, up to 64 overlap) with literal UTF-8 mappings and atomic byte
+  coverage. The generation identity includes artifact/preprocessing/window policy;
+  previous byte-window coverage is not reused as current coverage. Failed sources
+  have persistent 5/30-second retries and review status after three failures.
+  Rust vector scoring has elapsed/visited bounds and reports timeout rather than
+  returning a partial ranking as exact.
+
+Completed checks at this point: 103 core library tests, 5 web library tests;
+frontend type/lint/build checks; 12 frontend unit tests (one optional contract
+fixture skipped); 14 Chromium browser cases including v1 regression and owner
+pairing/reload/revocation/logout. Real selected-E5 tests verify multilingual
+recall after restart and multi-window literal coverage. The real two-daemon
+[`check-memory-web.py`](../scripts/check-memory-web.py) passes saved chat,
+authorization, conflict, history, E5 search, fresh-process retry reconciliation
+and an E5-backed generated answer. CPU-only, local selected artifacts, synthetic
+temporary stores; no production daemon or user history is used.
+
+The answer smoke initially hit its token limit while discussing the active
+question as a recalled source. Excluding that source and separating answer policy
+from quotation data fixed the unchanged completion check. The harness also now
+drains daemon diagnostics throughout its lifetime to avoid pipe backpressure.
+
+Open work remains the complete A–G contract: durable staged job reservations,
+heartbeat/coverage/read sets and automatic formation; graph aliases/inverses/
+proof paths and corrections; situation/personality/attention/inbox; publication,
+forgetting/export/restore barriers; frozen held-out corpus/reference parity,
+load/resource/security recovery qualification and timed opt-in initiative.
+Automatic graph formation remains inactive and health explicitly says
+`unqualified`. Existing storage tests do not establish those product contracts.
+
+The full workspace test gate is currently blocked by pre-existing untracked
+native-build tests referring to unavailable dev dependencies. Those files and
+the native submodule were left unchanged; narrow application gates are recorded
+separately. No commit has been made.
+
 ## Stop checkpoint — 2026-11-05
 
-**Paused at the owner's request. Do not resume implementation until requested.**
-Current committed implementation anchor: `0dae27c` (`wip: semantic graph memory`).
+**Historical stop: paused at the owner's request on 2026-11-05.**
+Committed implementation anchor at that stop: `0dae27c` (`wip: semantic graph memory`).
 The working tree also contains the documentation/manifest updates and two small
 source edits described below. Nothing was committed as part of this checkpoint.
 
@@ -144,19 +265,13 @@ not yet integrated.
 
 ## Headless use
 
-Create a private local configuration (paths resolve relative to that file):
-
-```json
-{
-  "data_directory": "./memory-data",
-  "embedding_model": "./multilingual-e5-small-q8_0.gguf"
-}
-```
+Supply memory paths as CLI flags, relative to the working directory:
 
 ```sh
 cargo run -p assistant-daemon --offline -- \
   --model ./LFM3-1.7B-Heretic-Abliterated-Q6_K.gguf \
-  --memory-config ./memory-config.json --no-web \
+  --memory-dir "$HOME/.local/share/assistant/memory" \
+  --embedding-model ./multilingual-e5-small-q8_0.gguf --no-web \
   --prompt 'Remember this fact: my bicycle is blue.' \
   --request-id bicycle-1 --cpu --no-tools
 ```
@@ -164,8 +279,8 @@ cargo run -p assistant-daemon --offline -- \
 Run a fresh process with a different request key and ask about the bicycle. A
 retry must reuse the original key **and exact input**; it reconciles the original
 operation without generating or executing tools again. `--interactive` uses the
-same durable path. `--raw` conflicts with required memory. The memory configuration
-is bounded to 4096 bytes and rejects unknown fields. Explicit `--require-tool` conflicts with `--memory-config` until durable
+same durable path. `--raw` conflicts with required memory. Both memory flags are
+required together; configuration files are not used. Explicit `--require-tool` conflicts with `--memory-dir` until durable
 client-option identity is integrated; automatic registered tools remain available.
 
 The existing unauthenticated v1 web adapter **rejects memory-enabled activation**.

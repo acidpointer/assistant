@@ -38,6 +38,43 @@ fn text(value: &str) -> MemoryText {
 fn version() -> Revision {
     Revision::new(1).expect("positive version")
 }
+/// Stable fake-clock origin near the actual epoch, so production completion's
+/// wall-clock expiry checks and explicit test lease advances share one scale.
+fn job_clock() -> i64 {
+    static BASE: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    *BASE.get_or_init(|| super::session::utc_millis().expect("test clock"))
+}
+
+#[tokio::test]
+async fn product_recall_bounds_long_questions_and_accepts_punctuation_without_losing_storage_errors()
+ {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let access = super::service::MemoryAccess::for_test(&store);
+    access
+        .remember(key("source"), text("My bicycle is blue."))
+        .await
+        .expect("source");
+    let query = (0..40)
+        .map(|index| format!("word{index}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let result = access
+        .recall(text(&query), 8)
+        .await
+        .expect("a long question is not an invalid storage query");
+    assert!(result.query_truncated);
+    let result = access
+        .recall(text("???"), 8)
+        .await
+        .expect("punctuation-only product input is valid");
+    assert!(result.sources.is_empty());
+    store.shutdown().await.expect("close required storage");
+    assert!(
+        access.recall(text("???"), 8).await.is_err(),
+        "optional query channels cannot hide closed required storage"
+    );
+}
 fn claim(
     subject: MemoryId,
     predicate: Predicate,
@@ -424,12 +461,12 @@ async fn reclaimed_fence_cannot_publish_and_completion_is_atomic_and_idempotent(
         .expect("source")
         .value;
     let old = h
-        .claim_extraction_job(&o, 1_000_000)
+        .claim_extraction_job(&o, job_clock())
         .await
         .expect("claim attempt")
         .expect("pending job");
     let current = h
-        .claim_extraction_job(&o, 1_060_001)
+        .claim_extraction_job(&o, job_clock() + 60_001)
         .await
         .expect("reclaim expired job")
         .expect("reclaimed job");
@@ -505,7 +542,7 @@ async fn failed_claim_application_rolls_back_job_and_budget_completion() {
         .expect("source")
         .value;
     let lease = h
-        .claim_extraction_job(&o, 1_000_000)
+        .claim_extraction_job(&o, job_clock())
         .await
         .expect("claim attempt")
         .expect("pending");
@@ -764,7 +801,7 @@ async fn crashed_attempts_keep_compute_reservations_across_restarts() {
         .expect("source");
     store
         .handle()
-        .claim_extraction_job(&store.owner(), 1_000_000)
+        .claim_extraction_job(&store.owner(), job_clock())
         .await
         .expect("first reservation")
         .expect("job");
@@ -772,7 +809,7 @@ async fn crashed_attempts_keep_compute_reservations_across_restarts() {
     let store = MemoryStore::open(dir.config()).await.expect("restart");
     store
         .handle()
-        .claim_extraction_job(&store.owner(), 900_000)
+        .claim_extraction_job(&store.owner(), job_clock() - 100_000)
         .await
         .expect("second reservation despite backward clock")
         .expect("recovered job");
@@ -783,11 +820,151 @@ async fn crashed_attempts_keep_compute_reservations_across_restarts() {
     assert!(matches!(
         store
             .handle()
-            .claim_extraction_job(&store.owner(), 800_000)
+            .claim_extraction_job(&store.owner(), job_clock() - 200_000)
             .await,
         Err(MemoryError::Capacity)
     ));
     store.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn staged_jobs_reserve_all_passes_and_only_rebate_measured_completion() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let o = store.owner();
+    h.remember(&o, key("staged"), text("My sister Lena is a veterinarian."))
+        .await
+        .expect("source");
+    let lease = h
+        .claim_extraction_job_with_budget(&o, job_clock(), ExtractionBudget::StagedRoot)
+        .await
+        .expect("reserve staged")
+        .expect("lease");
+    let connection =
+        rusqlite::Connection::open(dir.0.join("memory.sqlite3")).expect("inspect accounting");
+    let charged: (i64, i64, i64, i64) = connection
+        .query_row(
+            "SELECT passes,input_tokens,output_tokens,native_millis FROM job_attempts",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("durable before inference");
+    assert_eq!(charged, (4, 4096, 1024, 120000));
+    let accounting = ExtractionAccounting {
+        passes: 3,
+        usage: MemoryJobUsage {
+            input_tokens: 800,
+            output_tokens: 130,
+            native_millis: 500,
+        },
+    };
+    assert!(matches!(
+        h.finish_extraction_job_accounted(
+            &o,
+            lease.clone(),
+            ExtractionChanges::default(),
+            ExtractionOutcome::Complete,
+            ExtractionAccounting {
+                usage: MemoryJobUsage {
+                    input_tokens: 4097,
+                    ..accounting.usage
+                },
+                ..accounting
+            }
+        )
+        .await,
+        Err(MemoryError::InvalidInput(_))
+    ));
+    h.finish_extraction_job_accounted(
+        &o,
+        lease.clone(),
+        ExtractionChanges::default(),
+        ExtractionOutcome::Complete,
+        accounting,
+    )
+    .await
+    .expect("reconcile measured usage");
+    h.finish_extraction_job_accounted(
+        &o,
+        lease,
+        ExtractionChanges::default(),
+        ExtractionOutcome::Complete,
+        accounting,
+    )
+    .await
+    .expect("lost completion reply replays");
+    let actual: (i64, i64, i64, i64) = connection
+        .query_row(
+            "SELECT passes,input_tokens,output_tokens,native_millis FROM job_attempts",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .expect("actual totals");
+    assert_eq!(actual, (3, 800, 130, 500));
+    drop(connection);
+    store.shutdown().await.expect("join storage");
+}
+
+#[tokio::test]
+async fn heartbeat_never_revives_expiry_or_extends_the_hard_end() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let o = store.owner();
+    h.remember(&o, key("source"), text("My sister Lena is a veterinarian."))
+        .await
+        .expect("source");
+    let clock = job_clock();
+    let lease = h
+        .claim_extraction_job_with_budget(&o, clock, ExtractionBudget::StagedRoot)
+        .await
+        .expect("claim")
+        .expect("lease");
+    for advance in [20_000, 40_000, 60_000, 80_000, 100_000] {
+        h.heartbeat_extraction_job(&o, lease.clone(), clock + advance)
+            .await
+            .expect("renew within lease and hard end");
+    }
+    let connection =
+        rusqlite::Connection::open(dir.0.join("memory.sqlite3")).expect("inspect hard end");
+    let until: i64 = connection
+        .query_row("SELECT lease_until FROM jobs", [], |r| r.get(0))
+        .expect("lease deadline");
+    assert_eq!(until, clock + 120_000);
+    assert!(matches!(
+        h.heartbeat_extraction_job(&o, lease.clone(), clock + 120_000)
+            .await,
+        Err(MemoryError::Conflict)
+    ));
+    assert!(
+        h.claim_extraction_job_with_budget(&o, clock + 120_001, ExtractionBudget::StagedRoot)
+            .await
+            .expect("exhausted root becomes unresolved")
+            .is_none()
+    );
+    assert!(matches!(
+        h.finish_extraction_job_accounted(
+            &o,
+            lease,
+            ExtractionChanges::default(),
+            ExtractionOutcome::Complete,
+            ExtractionAccounting {
+                usage: MemoryJobUsage::default(),
+                passes: 1
+            }
+        )
+        .await,
+        Err(MemoryError::Conflict)
+    ));
+    let charged: i64 = connection
+        .query_row("SELECT sum(input_tokens) FROM job_attempts", [], |r| {
+            r.get(0)
+        })
+        .expect("crashed work remains charged");
+    assert_eq!(charged, 4096);
+    drop(connection);
+    store.shutdown().await.expect("join storage");
 }
 
 #[tokio::test]
@@ -844,7 +1021,127 @@ async fn graph_follows_eight_edges_after_restart_without_conversation_history() 
         .expect("eight-edge traversal");
     assert_eq!(bundle.claims.len(), 8);
     assert!(!bundle.truncated);
+    let reverse = store
+        .handle()
+        .follow_at(&store.owner(), nodes[8], 8, 1000)
+        .await
+        .expect("inverse navigation");
+    assert_eq!(
+        reverse.claims.len(),
+        8,
+        "inverse adjacency does not manufacture additional facts"
+    );
+    assert_eq!(reverse.entities.len(), 9);
+    assert_eq!(reverse.sources.len(), 1);
+    assert_eq!(reverse.sources[0].role, SourceRole::User);
+    assert!(
+        reverse.sources[0].observed_at.is_none(),
+        "legacy/standalone observation time is unknown"
+    );
+    for path in &reverse.paths {
+        assert!(!path.steps.is_empty() && path.steps.len() <= 8);
+        assert_eq!(path.steps[0].from, nodes[8]);
+        for adjacent in path.steps.windows(2) {
+            assert_eq!(adjacent[0].to, Some(adjacent[1].from));
+        }
+        assert!(bundle.claims.iter().any(|claim| claim.id == path.claim));
+    }
     store.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn inverse_parent_navigation_keeps_original_direction_and_suppressed_labels_private() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let o = store.owner();
+    let source = h
+        .remember(&o, key("father"), text("My father Oleh is a teacher."))
+        .await
+        .expect("source")
+        .value;
+    let lease = h
+        .claim_extraction_job(&o, job_clock())
+        .await
+        .expect("lease")
+        .expect("job");
+    let parent = Entity {
+        id: MemoryId::new().expect("parent ID"),
+        kind: EntityKind::Person,
+        label: text("Oleh"),
+    };
+    let job = Entity {
+        id: MemoryId::new().expect("occupation ID"),
+        kind: EntityKind::Occupation,
+        label: text("teacher"),
+    };
+    let claims = h
+        .finish_extraction_job(
+            &o,
+            lease,
+            ExtractionChanges {
+                entities: vec![parent.clone(), job.clone()],
+                claims: vec![
+                    claim(
+                        parent.id,
+                        Predicate::ParentOf,
+                        ClaimObject::Reference(o.principal()),
+                        &source,
+                        source.text.as_str(),
+                    ),
+                    claim(
+                        parent.id,
+                        Predicate::HasOccupation,
+                        ClaimObject::Reference(job.id),
+                        &source,
+                        source.text.as_str(),
+                    ),
+                ],
+            },
+            ExtractionOutcome::Complete,
+            MemoryJobUsage::default(),
+        )
+        .await
+        .expect("authored graph fixture, not model evidence");
+    let graph = h
+        .follow_at(&o, o.principal(), 2, job_clock())
+        .await
+        .expect("navigate incoming parent and outgoing occupation");
+    assert_eq!(graph.claims.len(), 2);
+    assert!(
+        graph
+            .claims
+            .iter()
+            .any(|edge| edge.input.subject == parent.id
+                && edge.input.predicate == Predicate::ParentOf)
+    );
+    let occupation = claims
+        .iter()
+        .find(|edge| edge.input.predicate == Predicate::HasOccupation)
+        .expect("occupation claim");
+    let path = graph
+        .paths
+        .iter()
+        .find(|path| path.claim == occupation.id)
+        .expect("full navigation provenance");
+    assert_eq!(path.steps.len(), 2);
+    assert_eq!(path.steps[0].from, o.principal());
+    assert_eq!(path.steps[0].to, Some(parent.id));
+    assert_eq!(path.steps[1].to, Some(job.id));
+    h.suppress_source(&o, key("forget-father"), source.id, source.revision)
+        .await
+        .expect("storage suppression");
+    let graph = h
+        .follow_at(&o, parent.id, 2, job_clock())
+        .await
+        .expect("read after suppression, before physical purge");
+    assert!(graph.claims.is_empty() && graph.paths.is_empty() && graph.sources.is_empty());
+    assert_eq!(
+        graph.entities[0].label.as_str(),
+        "[forgotten]",
+        "source-backed label eligibility is checked before purge"
+    );
+    store.shutdown().await.expect("join store");
 }
 
 #[tokio::test]
@@ -1102,4 +1399,304 @@ async fn exact_vectors_follow_source_revision_suppression_and_purge() {
             .expect("coverage purge"),
         0
     );
+}
+
+#[tokio::test]
+async fn universal_memory_keeps_interleaved_private_preferences_links_and_corrections_after_restart()
+ {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let owner = store.owner();
+    let persona = h
+        .remember(
+            &owner,
+            key("persona"),
+            text("Please be a playful anime companion, but speak plainly when we work on Rust."),
+        )
+        .await
+        .expect("arbitrary persona request")
+        .value;
+    let preference=h.remember(&owner,key("private"),text("My private interests include adult fiction. Keep recommendations private; I prefer romance to horror.")).await.expect("arbitrary private preference").value;
+    h.remember(
+        &owner,
+        key("unrelated"),
+        text("The daemon project should also serve a Unix socket someday."),
+    )
+    .await
+    .expect("interleaved engineering conversation");
+    let original=h.remember_note(&owner,key("note"),text("The owner prefers private romantic adult fiction recommendations and a playful companion persona."),vec![(SourceRef{id:preference.id,revision:preference.revision},text("preference")),(SourceRef{id:persona.id,revision:persona.revision},text("presentation"))],job_clock()).await.expect("freeform interpretation").value;
+    let correction=h.remember(&owner,key("correction"),text("Actually, keep recommendations literary rather than anime themed. The companion persona is just how I want you to talk.")).await.expect("later correction").value;
+    let revised=h.remember_note(&owner,key("revised"),text("Recommendation subject and assistant persona are separate: literary romance recommendations, playful companion voice."),vec![(SourceRef{id:original.id,revision:original.revision},text("clarifies")),(SourceRef{id:correction.id,revision:correction.revision},text("based_on"))],job_clock()).await.expect("source-backed correction").value;
+    assert_eq!(
+        h.source_record(&owner, original.id)
+            .await
+            .expect("attribution")
+            .role,
+        SourceRole::Assistant
+    );
+    let profile = h.assistant_profile(&owner).await.expect("default profile");
+    h.update_assistant(&owner,profile.revision,AssistantSettings{instructions:text("Be a playful anime companion. Use plain technical language for work. Respect the owner's private literary preferences."),initiative_interval_seconds:Some(1800)},job_clock()).await.expect("persist arbitrary role");
+    store.shutdown().await.expect("close first process");
+    let store = MemoryStore::open(dir.config()).await.expect("reopen");
+    let h = store.handle();
+    let owner = store.owner();
+    let graph = h
+        .follow_sources(&owner, preference.id, 4)
+        .await
+        .expect("walk incoming and outgoing links");
+    assert!(
+        graph
+            .sources
+            .iter()
+            .any(|record| record.source.id == revised.id)
+    );
+    assert!(graph.links.iter().any(|link| link.from.id == revised.id
+        && link.to.id == original.id
+        && link.relation.as_str() == "clarifies"));
+    assert!(
+        h.assistant_profile(&owner)
+            .await
+            .expect("durable personality")
+            .settings
+            .instructions
+            .as_str()
+            .contains("playful anime companion")
+    );
+    h.suppress_source(
+        &owner,
+        key("forget-private"),
+        preference.id,
+        preference.revision,
+    )
+    .await
+    .expect("forget private evidence and derived interpretations");
+    assert!(h.source(&owner, original.id).await.is_err());
+    assert!(
+        h.source(&owner, revised.id).await.is_err(),
+        "transitive interpretation cannot resurrect forgotten evidence"
+    );
+    assert!(
+        h.source(&owner, persona.id).await.is_ok(),
+        "unrelated experiences remain independently usable"
+    );
+    while !h
+        .purge_next_batch(&owner)
+        .await
+        .expect("bounded graph-label/receipt/source purge")
+    {}
+    store.shutdown().await.expect("close");
+}
+
+#[tokio::test]
+async fn initiative_claims_mailbox_profile_edits_and_forgetting_are_durable() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let owner = store.owner();
+    let now = job_clock();
+    let source = h
+        .remember(
+            &owner,
+            key("project"),
+            text("I'm building a garden bench this weekend; ask me later how it went."),
+        )
+        .await
+        .expect("ongoing life context")
+        .value;
+    let profile = h.assistant_profile(&owner).await.expect("profile");
+    assert!(
+        h.claim_attention(&owner, now + 100_000)
+            .await
+            .expect("disabled is idle")
+            .is_none()
+    );
+    let enabled = h
+        .update_assistant(
+            &owner,
+            profile.revision,
+            AssistantSettings {
+                instructions: text(
+                    "Be warmly curious about my projects. Ask about the bench when appropriate.",
+                ),
+                initiative_interval_seconds: Some(60),
+            },
+            now,
+        )
+        .await
+        .expect("enable initiative");
+    assert!(
+        h.update_assistant(&owner, profile.revision, enabled.settings.clone(), now)
+            .await
+            .is_err(),
+        "stale editors cannot silently overwrite personality"
+    );
+    assert!(
+        h.claim_attention(&owner, now + 59_999)
+            .await
+            .expect("before due")
+            .is_none()
+    );
+    let claimed = h
+        .claim_attention(&owner, now + 60_000)
+        .await
+        .expect("due")
+        .expect("one durable claim");
+    assert!(
+        h.claim_attention(&owner, now + 60_001)
+            .await
+            .expect("already claimed")
+            .is_none()
+    );
+    h.settle_attention(
+        &owner,
+        claimed.revision,
+        Some(text("How did your garden bench turn out?")),
+        vec![SourceRef {
+            id: source.id,
+            revision: source.revision,
+        }],
+        now + 60_002,
+        "completed",
+    )
+    .await
+    .expect("assistant-only delivery");
+    assert!(
+        h.history(&owner, None, 8)
+            .await
+            .expect("product history")
+            .exchanges
+            .is_empty(),
+        "no fictitious user exchange was created"
+    );
+    store.shutdown().await.expect("close");
+    let store = MemoryStore::open(dir.config()).await.expect("restart");
+    let h = store.handle();
+    let owner = store.owner();
+    let notices = h.assistant_notices(&owner).await.expect("durable inbox");
+    assert_eq!(notices.len(), 1);
+    assert_eq!(
+        h.source_record(&owner, notices[0].id)
+            .await
+            .expect("notice role")
+            .role,
+        SourceRole::Assistant
+    );
+    assert!(
+        h.claim_attention(&owner, now + 60_003)
+            .await
+            .expect("restart no duplicate")
+            .is_none()
+    );
+    h.dismiss_notice(&owner, notices[0].id)
+        .await
+        .expect("dismiss");
+    assert!(h.assistant_notices(&owner).await.expect("dismiss state")[0].dismissed);
+    let current = h.assistant_profile(&owner).await.expect("current");
+    h.update_assistant(
+        &owner,
+        current.revision,
+        AssistantSettings {
+            instructions: text("Be quiet unless I ask."),
+            initiative_interval_seconds: None,
+        },
+        now + 70_000,
+    )
+    .await
+    .expect("disable/revise");
+    assert!(
+        h.settle_attention(
+            &owner,
+            claimed.revision,
+            Some(text("stale personality message")),
+            Vec::new(),
+            now + 70_001,
+            "completed"
+        )
+        .await
+        .is_err()
+    );
+    h.suppress_source(&owner, key("forget-project"), source.id, source.revision)
+        .await
+        .expect("forget evidence");
+    assert!(
+        h.assistant_notices(&owner)
+            .await
+            .expect("read-time suppression")
+            .is_empty()
+    );
+    store.shutdown().await.expect("close");
+}
+
+#[tokio::test]
+async fn graph_pages_reach_every_neighbor_without_enlarging_the_model_context() {
+    let dir = Directory::new();
+    let store = MemoryStore::open(dir.config()).await.expect("store");
+    let h = store.handle();
+    let owner = store.owner();
+    let root = h
+        .remember(
+            &owner,
+            key("hub"),
+            text("A collection of independent projects and preferences."),
+        )
+        .await
+        .expect("entry point")
+        .value;
+    let mut expected = std::collections::BTreeSet::new();
+    for index in 0..23 {
+        let note = h
+            .remember_note(
+                &owner,
+                key(&format!("neighbor-{index}")),
+                text(&format!("Project note {index} with its own topic.")),
+                vec![(
+                    SourceRef {
+                        id: root.id,
+                        revision: root.revision,
+                    },
+                    text("related_to"),
+                )],
+                job_clock(),
+            )
+            .await
+            .expect("neighbor")
+            .value;
+        expected.insert(note.id);
+    }
+    let mut found = std::collections::BTreeSet::new();
+    let mut cursor = None;
+    let mut pages = 0;
+    loop {
+        let page = h
+            .source_page(&owner, root.id, cursor)
+            .await
+            .expect("bounded adjacency page");
+        for link in &page.links {
+            assert_eq!(link.to.id, root.id);
+            found.insert(link.from.id);
+        }
+        assert!(
+            page.sources
+                .iter()
+                .all(|record| record.role == SourceRole::Assistant || record.source.id == root.id)
+        );
+        pages += 1;
+        assert!(pages <= 23, "cursor always makes progress");
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert!(pages > 1);
+    assert_eq!(
+        found, expected,
+        "no high-degree connection is permanently discarded"
+    );
+    assert!(
+        h.source_page(&owner, root.id, Some("malformed cursor".into()))
+            .await
+            .is_err()
+    );
+    store.shutdown().await.expect("close");
 }

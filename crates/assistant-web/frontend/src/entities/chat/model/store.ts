@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { createNotifications } from '@/shared/lib/store';
 import type { ChatSnapshot, ChatUpdate, Message, Run } from '../api/contracts';
+import { clearNotices } from './notices';
 import { terminal } from '../api/contracts';
 const notifications = createNotifications();
 const messages = new Map<string, Message>();
@@ -29,6 +30,26 @@ export function connection(status: string) {
 }
 export function getChat() {
   return meta;
+}
+export function clearChat() {
+  clearNotices();
+  const oldIds = ids;
+  const oldRuns = Array.from(runs.keys());
+  messages.clear();
+  messageBytes.clear();
+  runs.clear();
+  ids = [];
+  metadata({
+    chatId: '',
+    instanceId: '',
+    activeRunId: null,
+    connection: 'locked',
+    activity: '',
+    truncated: false,
+  });
+  notifications.notify('ids');
+  oldIds.forEach((id) => notifications.notify(id));
+  oldRuns.forEach((id) => notifications.notify(`run:${id}`));
 }
 export function getRun(id: string) {
   return runs.get(id);

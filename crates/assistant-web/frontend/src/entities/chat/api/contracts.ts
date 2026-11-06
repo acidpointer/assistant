@@ -21,8 +21,11 @@ export const messageSchema = v.object({
 export const runSchema = v.object({
   id,
   chat_id: id,
-  client_id: id,
-  client_request_id: id,
+  client_identity_available: v.optional(v.boolean()),
+  usage_available: v.optional(v.boolean()),
+  outcome_details_available: v.optional(v.boolean()),
+  client_id: v.pipe(v.string(), v.maxLength(128)),
+  client_request_id: v.pipe(v.string(), v.maxLength(128)),
   status: statusSchema,
   error: v.nullable(v.string()),
   input_tokens: v.number(),

@@ -1,11 +1,22 @@
 # Memory, personality and assistant loop: implementation specification
 
+> Current authority: [ADR 0007](decisions/0007-universal-assistant-memory.md) and
+> [the user guide](assistant-memory.md). Universal source graphs, freeform
+> personality and one initiative loop are implemented. The specialized extraction,
+> fixed personality/mood and synthetic-corpus requirements below are historical
+> design proposals and are superseded. Remaining restore/forgetting UI limits are
+> listed explicitly in the user guide.
+
+## Historical specification
+
+
 The [final integration plan](memory-integration-plan.md) audits the committed
 storage foundation and specifies one complete remaining delivery, including
 model qualification and end-to-end acceptance. This specification remains the
 authority for selected v1 behavior.
 
-Status: implementation design baseline, 2026-11-05. Application code remains
+Status: implementation design baseline, transport/UI refinement 2026-11-06.
+Application code remains
 human-owned; this document does not authorize implementing it. It selects the
 first complete system from the alternatives in [the research](memory-system-plan.md)
 and [protocol experiments](compact-model-protocol.md). Where they differ, this
@@ -20,10 +31,15 @@ implementation dependent on an unspecified architecture decision.
 
 The [storage implementation](memory-storage.md) supplies Linux library primitives,
 ordered migrations, operation/tool settlement commands, reservations and
-deterministic failure tests. Application admission/finalization does not call
-these commands yet; automatic model jobs, semantic recall, personality, initiative
-and HTTP integration are not enabled. The selected wrapper is rusqlite 0.39.0 after the 0.40.1
-candidate failed the actual Rust 1.88 build; the workspace MSRV is unchanged.
+deterministic failure tests. The opt-in Linux headless path now participates in
+durable admission, tool settlement, finalization and E5 semantic recall.
+Automatic graph formation remains inactive after a failed extraction preflight;
+personality, initiative and authenticated memory HTTP integration remain unbuilt.
+See the [executable checkpoint](memory-native-integration.md) for evidence and
+the [current delivery refinement](memory-integration-plan.md#core-boundary-and-webui-delivery-refinement--2026-11-06)
+for shared application contracts, first-client UI journeys and implementation
+order. The selected wrapper is rusqlite 0.39.0 after the 0.40.1 candidate failed
+the actual Rust 1.88 build; the workspace MSRV is unchanged.
 
 ## Scope and closed decisions
 
@@ -36,7 +52,9 @@ extension points, with an optional authenticated HTTP/WebUI adapter.
 One Linux OS owner, one assistant identity,
 one active product interaction and one local data directory are supported.
 
-HTTP is not a memory dependency. `--no-web` omits the web plugin, listener,
+HTTP is not a memory dependency. The owner's 2026-11-06 delivery requires the
+authenticated WebUI as its first real client, while the core stays independently
+usable and testable. `--no-web` omits the web plugin, listener,
 browser sessions, SSE and web-pairing endpoint; memory/personality services,
 background jobs and the durable initiative inbox continue running. No transport
 is required for background progress. Without a delivery adapter, notices remain
@@ -50,6 +68,15 @@ each authenticates its caller and obtains a host-issued capability. Existing
 low-level diagnostic `Chat` calls remain ephemeral unless explicitly integrated
 with the durable product path. Headless mode does not bypass memory authorization
 or mandatory persistence.
+
+Adapters call an owner-authorized application facade, not a collection of raw
+store mutations. The core owns command orchestration, revision/intent checks,
+durable lookup/history and publication generations; adapters own authentication
+and encoding. A revocable core access grant represents an authenticated owner
+without embedding bearer/session/D-Bus/socket types in memory. Its identity does
+not enter durable client-command digests. Disconnect closes connection-owned
+readers; revoke also invalidates the grant and blocks new commands. Accepted
+operations retain owned settlement. Cancellation remains an explicit command.
 
 The web plugin depends on core capabilities and readiness; memory never depends
 on web types or activation. Its pairing mechanism is installed only with the web
@@ -131,6 +158,8 @@ Debug output redacts private text, credentials, paths and full model responses.
 | --- | --- | --- |
 | Admit | Owner capability, client namespace/key, literal input, behavior selection, reservation | Operation ID, commit sequence, durable acceptance |
 | Finalize | Operation ID, terminal status, visible messages, bounded receipts | Idempotent terminal receipt |
+| Lookup/status | Original client namespace/ID/request key or stable operation ID | Current durable operation/receipt, without resubmitting input |
+| Snapshot/history/subscribe | Access grant, bounded page/cursor | Visible state/history and atomically registered subsequent events |
 | Remember | Current authorized source selection, preserve flag | Source receipt with stored/structured/indexed states |
 | Search | Query, typed filters, minimum commit sequence, budget | Evidence bundle, coverage by channel, snapshot sequence |
 | Follow | Offered reference/continuation, finite pattern, remaining budget | Qualified path bundle and single-use continuation |
@@ -140,6 +169,7 @@ Debug output redacts private text, credentials, paths and full model responses.
 | Set disposition | Expected revision, override, expiry | State revision and expiry |
 | Inbox action | Notice revision, seen/dismiss/snooze action | Durable action receipt |
 | Inspect/export | Typed selection, cursor, byte limit | Bounded records with provenance, or resumable export operation |
+| Backup/restore | Host-managed backup ID/selection, expected generation and reviewed activation intent | Tracked candidate/activation operation and recovery state |
 
 Each mutation carries a unique client operation key and a versioned canonical
 input digest. Canonicalize by serializing the validated typed request in a fixed
@@ -509,7 +539,9 @@ the existing custom header. No credentialed cross-origin CORS. Logout or owner
 revocation closes the session's subscriptions and removes queued personal
 responses. All personal routes, including old v1 chat/bootstrap routes, require
 authentication in enabled mode; a legacy endpoint cannot become a bypass.
-Only static UI assets and minimal session exchange are public. No raw diagnostics
+Only static UI assets, minimal session exchange and `GET /api/discovery` are
+public. Discovery returns only API version and memory-disabled versus
+pairing-required mode. No raw diagnostics
 endpoint exposes memories, model paths or credentials.
 
 Use `/api/v2` for the complete durable contract; v1 remains only for memory-disabled
@@ -536,6 +568,7 @@ Concrete v2 route mapping (all IDs are opaque; scope comes from the session):
 | `POST /runs`, `GET /operations/{id}`, `POST /runs/{id}/cancel` | Durable submit; status/receipt reconciliation; cancel |
 | `POST /operations/lookup` | Authorized lookup by original client namespace/ID/request key when an admission reply was lost; no new execution |
 | `GET /snapshot`, `GET /events` | Atomic display snapshot; authenticated fetch-SSE |
+| `GET /history` | Bounded keyset-paginated visible history from eligible durable sources |
 | `POST /memory/search`, `GET /memory/evidence/{id}` | Query/filter/budget; bounded source inspection |
 | `POST /memory/remember`, `POST /memory/corrections` | Literal source capture; identified correction |
 | `POST /memory/forget-preview`, `POST /memory/forget` | Selection/revision preview token; execute suppression workflow |
@@ -545,11 +578,14 @@ Concrete v2 route mapping (all IDs are opaque; scope comes from the session):
 | `GET /inbox`, `POST /inbox/{id}/actions` | Paginated notices; seen/dismiss/snooze with expected revision |
 | `GET /memory/health` | Sanitized component states, coverage and backlog counts |
 | `POST /memory/exports`, `GET /memory/exports/{id}` | Start export; status or authorized bounded download |
+| `POST /memory/backups`, `GET /memory/backups`, `GET /memory/backups/{id}` | Start backup; list host-managed backups; inspect bounded status/manifest |
+| `POST /memory/restore-preview`, `POST /memory/restores`, `GET /memory/restores/{id}` | Review a host-managed backup and deletion coverage; activate; inspect durable recovery state |
 
 Mutation receipt envelope: `operation_id`, `commit_seq`, `state`, nullable
 `result` and `error`, `status_url`. State identifies the typed operation's durable
 boundary; do not confuse a committed command with completion of its downstream
-jobs. Expected revisions and sequences use decimal strings. HTTP handlers
+jobs. `status_url` belongs to the HTTP envelope, not the core Rust receipt.
+Expected revisions and sequences use decimal strings. HTTP handlers
 deserialize bounded typed bodies; schema generation and matching TypeScript
 validators are required in P2, before opening these routes.
 
@@ -559,6 +595,17 @@ registration are serialized by the coordinator. Durable inbox/operation tables
 are authoritative; an event ring is never the only copy. UI must distinguish
 provisional streamed text, committed outcomes, interrupted runs, unknown effects,
 partial recall, memory health and stored/structured/indexed receipts.
+
+Stable logical history is separate from runtime `chat_id` and stream cursor.
+Serve a bounded recent window after pairing and page older eligible messages
+through `/history`. Retain pending namespace/client/request IDs in tab
+`sessionStorage` before submit, but no token or conversation text. On reload,
+pair again and lookup that key; an absent record cannot reconstruct an unsaved
+draft and must not trigger automatic resubmission. Logout/revoke clears all
+personal UI stores/queues; opaque pending keys may remain for later authorized
+reconciliation. The public app entry exposes only mode/API discovery, not the
+personal bootstrap. The first-client journeys and fetch-parser cases are
+specified in the [delivery refinement](memory-integration-plan.md#webui-is-the-first-required-product-client).
 
 ## Forgetting, export, retention and disaster recovery
 
@@ -681,7 +728,9 @@ data resurfacing. Retain supported facts and uncertainty throughout. Complete
 core v1 is declared only after the transport-independent parts of P0-P8 and
 Q1-Q8 pass, including a complete headless acceptance run. HTTP route/session/SSE
 and browser checks apply to the optional web adapter and must pass before that
-adapter is promoted. Test both memory-enabled/headless and memory-enabled/web
+adapter is promoted. The owner's current delivery explicitly includes that
+adapter, so these checks are required for delivery completion. Test both
+memory-enabled/headless and memory-enabled/web
 configurations, plus existing memory-disabled behavior. Q9 and other excluded
 experiments do not expand that definition.
 

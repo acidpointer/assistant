@@ -6,6 +6,10 @@
 
 mod types;
 pub use types::*;
+#[cfg(target_os = "linux")]
+mod owner;
+#[cfg(target_os = "linux")]
+pub use owner::OwnerHandle;
 
 use crate::{
     chat::{
@@ -58,6 +62,8 @@ enum Command {
     Subscribe(Reply<Subscription>),
     Run(String, Reply<RunView>),
     Cancel(String, Reply<RunView>),
+    #[cfg(target_os = "linux")]
+    Pending(String, String, String, Reply<bool>),
 }
 
 /// Restricted, cloneable entry point for transports. It owns no runtime shutdown
@@ -136,7 +142,25 @@ impl AssistantHandle {
         if id.len() > 128 {
             return Err(ApplicationError::NotFound);
         }
-        self.call(|reply| Command::Run(id.into(), reply)).await
+        let result = self.call(|reply| Command::Run(id.into(), reply)).await;
+        #[cfg(target_os = "linux")]
+        if matches!(result, Err(ApplicationError::NotFound))
+            && let Some(memory) = &self.memory
+        {
+            let id = crate::memory::MemoryId::parse(id).map_err(|_| ApplicationError::NotFound)?;
+            let exchange = memory
+                .store
+                .exchange(&memory.owner, id)
+                .await
+                .map_err(memory_application_error)?;
+            let (_, input) = exchange_input(&exchange);
+            return Ok(restored_run(
+                &exchange.operation,
+                &input,
+                &format!("{}-primary", memory.owner.principal()),
+            ));
+        }
+        result
     }
     /// Request cooperative cancellation. A terminal outcome remains unchanged.
     /// # Errors
@@ -156,6 +180,7 @@ pub(crate) struct Application {
     stop: Cancellation,
     task: JoinHandle<ChatResult<()>>,
     finished: watch::Receiver<bool>,
+    ready: Option<oneshot::Receiver<()>>,
 }
 impl Application {
     #[cfg(any(test, not(target_os = "linux")))]
@@ -208,8 +233,9 @@ impl Application {
             actor.memory = memory;
         }
         let (completion, finished) = watch::channel(false);
+        let (ready, readiness) = oneshot::channel();
         let task = tokio::spawn(async move {
-            let result = actor.run(incoming).await;
+            let result = actor.run(incoming, ready).await;
             completion.send_replace(true);
             result
         });
@@ -218,7 +244,14 @@ impl Application {
             stop,
             task,
             finished,
+            ready: Some(readiness),
         })
+    }
+    pub(crate) async fn ready(&mut self) -> ChatResult<()> {
+        if let Some(ready) = self.ready.take() {
+            ready.await.map_err(|_| ChatError::Closed)?;
+        }
+        Ok(())
     }
     pub(crate) async fn terminated(&self) -> ChatResult<()> {
         let mut finished = self.finished.clone();
@@ -402,15 +435,15 @@ impl Coordinator {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
     }
-    async fn admit(
+    fn check_admission(
         &mut self,
-        scope: String,
-        input: Submission,
-    ) -> Result<(RunView, bool), ApplicationError> {
+        scope: &str,
+        input: &Submission,
+    ) -> Result<Option<RunView>, ApplicationError> {
         if self.closed.load(Ordering::Acquire) {
             return Err(ApplicationError::Closed);
         }
-        if !Self::identifier(&scope)
+        if !Self::identifier(scope)
             || !Self::identifier(&input.client_id)
             || !Self::identifier(&input.request_id)
             || input.text.len() > INPUT_BYTES
@@ -418,8 +451,6 @@ impl Coordinator {
         {
             return Err(ApplicationError::InvalidInput);
         }
-        // Keep measurements with their visible exchanges even after the minimum
-        // deduplication window. The fixed record/message caps still apply.
         let visible = self
             .messages
             .iter()
@@ -436,98 +467,44 @@ impl Coordinator {
                 && r.input.request_id == input.request_id
         }) {
             return if record.input.text == input.text {
-                Ok((record.view.clone(), false))
+                Ok(Some(record.view.clone()))
             } else {
                 Err(ApplicationError::Conflict)
             };
         }
         if self.active.is_some() {
-            #[cfg(target_os = "linux")]
-            if let Some(memory) = &self.memory {
-                let key = crate::memory::ClientRequestKey::new(
-                    &scope,
-                    &input.client_id,
-                    &input.request_id,
-                )
-                .map_err(memory_application_error)?;
-                match memory.store.operation_by_key(&memory.owner, key).await {
-                    Ok(record) => {
-                        let source = memory
-                            .store
-                            .source(&memory.owner, record.input.id)
-                            .await
-                            .map_err(memory_application_error)?;
-                        if source.text.as_str() != input.text {
-                            return Err(ApplicationError::Conflict);
-                        }
-                        return Ok((restored_run(&record, &input, &self.chat_id), false));
-                    }
-                    Err(crate::memory::MemoryError::NotFound) => {}
-                    Err(error) => return Err(memory_application_error(error)),
-                }
-            }
             return Err(ApplicationError::Busy);
         }
         if self.records.len() >= REQUEST_LIMIT {
             return Err(ApplicationError::Capacity);
         }
-        self.run_sequence += 1;
-        let mut id = format!("{}-r{}", self.instance, self.run_sequence);
-        #[cfg(target_os = "linux")]
-        if let Some(memory) = &self.memory {
-            let (record, fresh) = memory
-                .admit_product(&scope, &input.client_id, &input.request_id, &input.text)
-                .await
-                .map_err(memory_application_error)?;
-            id = record.id.to_string();
-            if !fresh {
-                let view = restored_run(&record, &input, &self.chat_id);
-                let memory = memory.clone();
-                let assistant = match record.assistant {
-                    Some(source) => Some(
-                        memory
-                            .store
-                            .source(&memory.owner, source.id)
-                            .await
-                            .map_err(memory_application_error)?,
-                    ),
-                    None => None,
-                };
-                self.add_message(DisplayMessage {
-                    id: format!("{id}-user"),
-                    run_id: id.clone(),
-                    role: "user",
-                    text: input.text.clone(),
-                    status: view.status,
-                });
-                if let Some(source) = assistant {
-                    self.add_message(DisplayMessage {
-                        id: format!("{id}-assistant-0"),
-                        run_id: id.clone(),
-                        role: "assistant",
-                        text: source.text.as_str().to_owned(),
-                        status: view.status,
-                    });
-                }
-                self.records.push_back(Record {
-                    scope,
-                    input,
-                    view: view.clone(),
-                    created: Instant::now(),
-                });
-                return Ok((view, false));
-            }
-            self.active_operation = Some(crate::memory::session::MemoryOperation::new(
-                record,
-                memory.clone(),
-            ));
+        Ok(None)
+    }
+    async fn admit(
+        &mut self,
+        scope: String,
+        input: Submission,
+    ) -> Result<(RunView, bool), ApplicationError> {
+        if let Some(view) = self.check_admission(&scope, &input)? {
+            return Ok((view, false));
         }
+        self.run_sequence += 1;
+        let id = format!("{}-r{}", self.instance, self.run_sequence);
+        self.install_admission(scope, input, id)
+    }
+    fn install_admission(
+        &mut self,
+        scope: String,
+        input: Submission,
+        id: String,
+    ) -> Result<(RunView, bool), ApplicationError> {
         let mut resources = crate::telemetry::ResourceWindow::default();
         if let Some(sample) = &self.resource_sample {
             resources.observe(sample);
         }
         resources.started = Some(crate::telemetry::boundary());
         let view = RunView {
+            client_identity_available: true,
             usage_available: false,
             outcome_details_available: false,
             performance: Vec::new(),
@@ -915,14 +892,60 @@ impl Coordinator {
             inference: self.inference.clone(),
         });
     }
-    async fn run(mut self, mut commands: mpsc::Receiver<Command>) -> ChatResult<()> {
+    async fn run(
+        mut self,
+        mut commands: mpsc::Receiver<Command>,
+        ready: oneshot::Sender<()>,
+    ) -> ChatResult<()> {
+        #[cfg(target_os = "linux")]
+        if let Some(memory) = self.memory.clone() {
+            self.chat_id = format!("{}-primary", memory.owner.principal());
+            let page = memory.store.history(&memory.owner, None, 32).await?;
+            self.truncated = page.next_before.is_some();
+            for exchange in page.exchanges.into_iter().rev() {
+                let (scope, input) = exchange_input(&exchange);
+                let view = restored_run(&exchange.operation, &input, &self.chat_id);
+                let id = view.id.clone();
+                self.add_message(DisplayMessage {
+                    id: format!("{id}-user"),
+                    run_id: id.clone(),
+                    role: "user",
+                    text: input.text.clone(),
+                    status: view.status,
+                });
+                if let Some(source) = exchange.assistant {
+                    self.add_message(DisplayMessage {
+                        id: format!("{id}-assistant-0"),
+                        run_id: id,
+                        role: "assistant",
+                        text: source.source.text.as_str().to_owned(),
+                        status: view.status,
+                    });
+                }
+                self.records.push_back(Record {
+                    scope,
+                    input,
+                    view,
+                    created: Instant::now(),
+                });
+            }
+        }
+        let _receiver_gone = ready.send(());
         let (progress_tx, mut progress_rx) = mpsc::channel::<QueuedProgress>(256);
         let mut runs = JoinSet::new();
+        #[cfg(target_os = "linux")]
+        let mut admissions = JoinSet::new();
+        #[cfg(target_os = "linux")]
+        let mut pending: Option<(String, Submission, Vec<Reply<RunView>>)> = None;
         let mut stopping = false;
         let mut sampler = Some(crate::telemetry::Sampler::default());
         let mut observations = JoinSet::new();
         let mut sample_at = tokio::time::Instant::now();
         loop {
+            #[cfg(target_os = "linux")]
+            let admission_pending = !admissions.is_empty();
+            #[cfg(not(target_os = "linux"))]
+            let admission_pending = false;
             tokio::select! {
                 () = tokio::time::sleep_until(sample_at), if sampler.is_some() && (self.active.is_some() || self.outgoing.receiver_count() > 0) && !stopping => {
                     if let Some(mut provider) = sampler.take() {
@@ -954,7 +977,43 @@ impl Coordinator {
                         }
                         Command::Run(id, reply) => { let _ = reply.send(self.record(&id)); }
                         Command::Cancel(id, reply) => { let result = self.cancel(&id); let _ = reply.send(result); }
+                        #[cfg(target_os = "linux")]
+                        Command::Pending(scope, client, request, reply) => {
+                            let committing = pending.as_ref().is_some_and(|(s, input, _)| *s == scope && input.client_id == client && input.request_id == request);
+                            let _ = reply.send(Ok(committing));
+                        }
                         Command::Submit(scope, input, reply) => {
+                            #[cfg(target_os = "linux")]
+                            if let Some(memory) = self.memory.clone() {
+                                if let Some((pending_scope, pending_input, replies)) = &mut pending {
+                                    let same_key = *pending_scope == scope && pending_input.client_id == input.client_id && pending_input.request_id == input.request_id;
+                                    if same_key && pending_input.text == input.text && replies.len() < 32 { replies.push(reply); }
+                                    else { let _ = reply.send(Err(if same_key && pending_input.text == input.text { ApplicationError::Capacity } else if same_key { ApplicationError::Conflict } else { ApplicationError::Busy })); }
+                                    continue;
+                                }
+                                let admission = self.check_admission(&scope, &input);
+                                let task_scope = scope.clone();
+                                let task_input = input.clone();
+                                // Own the whole durable lookup/admission path before
+                                // its first database await, independently of waiters.
+                                // Existing keys remain reconcilable while a new run is busy.
+                                admissions.spawn(async move {
+                                    if let Err(rejection) = admission {
+                                        let key=crate::memory::ClientRequestKey::new(&task_scope,&task_input.client_id,&task_input.request_id).map_err(memory_application_error)?;
+                                        let record=match memory.store.operation_by_key(&memory.owner,key).await {
+                                            Ok(record)=>record,
+                                            Err(crate::memory::MemoryError::NotFound)=>return Err(rejection),
+                                            Err(error)=>return Err(memory_application_error(error)),
+                                        };
+                                        let source=memory.source(record.input.id).await.map_err(memory_application_error)?;
+                                        if source.source.text.as_str()!=task_input.text {return Err(ApplicationError::Conflict);}
+                                        return Ok((record,false));
+                                    }
+                                    memory.admit_product(&task_scope, &task_input.client_id, &task_input.request_id, &task_input.text).await.map_err(memory_application_error)
+                                });
+                                pending = Some((scope, input, vec![reply]));
+                                continue;
+                            }
                             let text = input.text.clone();
                             let admitted = self.admit(scope, input).await;
                             if let Ok((_, true)) = &admitted
@@ -964,6 +1023,36 @@ impl Coordinator {
                             }
                             let _ = reply.send(admitted.map(|(view, _)| view));
                         }
+                    }
+                }
+                result = async {
+                    #[cfg(target_os = "linux")]
+                    { admissions.join_next().await }
+                    #[cfg(not(target_os = "linux"))]
+                    { std::future::pending::<Option<Result<(), tokio::task::JoinError>>>().await }
+                }, if admission_pending => {
+                    #[cfg(target_os = "linux")]
+                    {
+                    let Some(result) = result else { continue };
+                    let (scope, input, replies) = pending.take().ok_or_else(|| ChatError::Configuration("admission ownership missing".into()))?;
+                    let record = result.map_err(|_| ChatError::Configuration("admission task terminated".into()))?;
+                    let admitted = match record {
+                        Err(error) => Err(error),
+                        Ok((record, false)) => Ok((self.record(&record.id.to_string()).unwrap_or_else(|_|restored_run(&record, &input, &self.chat_id)), false)),
+                        Ok((record, true)) => {
+                            let memory = self.memory.clone().ok_or_else(|| ChatError::Configuration("admission memory missing".into()))?;
+                            let id = record.id.to_string();
+                            self.active_operation = Some(crate::memory::session::MemoryOperation::new(record, memory));
+                            let text = input.text.clone();
+                            let accepted = self.install_admission(scope, input, id);
+                            if let Some((_, cancellation)) = &self.active {
+                                if stopping { cancellation.cancel(); }
+                                runs.spawn(self.request(text, cancellation.clone(), progress_tx.clone()).run());
+                            }
+                            accepted
+                        }
+                    };
+                    for reply in replies { let _ = reply.send(admitted.as_ref().map(|(view, _)| view.clone()).map_err(|error| *error)); }
                     }
                 }
                 Some(queued) = progress_rx.recv(), if self.active.is_some() => { self.progress(queued.progress); }
@@ -988,13 +1077,33 @@ impl Coordinator {
                     }
                 }
             }
-            if stopping && runs.is_empty() {
+            #[cfg(target_os = "linux")]
+            let admission_done = admissions.is_empty();
+            #[cfg(not(target_os = "linux"))]
+            let admission_done = true;
+            if stopping && runs.is_empty() && admission_done {
                 break;
             }
         }
         while observations.join_next().await.is_some() {}
         Ok(())
     }
+}
+
+#[cfg(target_os = "linux")]
+fn exchange_input(exchange: &crate::memory::OperationExchange) -> (String, Submission) {
+    let [scope, client_id, request_id] = exchange
+        .client_key
+        .clone()
+        .map_or_else(|| [String::new(), String::new(), String::new()], Into::into);
+    (
+        scope,
+        Submission {
+            client_id,
+            request_id,
+            text: exchange.input.source.text.as_str().to_owned(),
+        },
+    )
 }
 
 /// Close observed process windows and fold exact measured native counters. Keeping
@@ -1046,6 +1155,8 @@ mod tests;
 fn memory_application_error(error: crate::memory::MemoryError) -> ApplicationError {
     use crate::memory::MemoryError;
     match error {
+        MemoryError::InvalidInput(_) => ApplicationError::InvalidInput,
+        MemoryError::Forbidden => ApplicationError::Unauthorized,
         MemoryError::Conflict => ApplicationError::Conflict,
         MemoryError::Busy => ApplicationError::Busy,
         MemoryError::Capacity | MemoryError::StorageFull => ApplicationError::Capacity,
@@ -1100,6 +1211,7 @@ fn restored_run(
             crate::memory::CompletionLimit::RunTokens => "run_tokens",
         });
     RunView {
+        client_identity_available: !input.client_id.is_empty(),
         usage_available: input_tokens.is_some() && generated_tokens.is_some(),
         outcome_details_available: record.details.is_some(),
         performance: Vec::new(),

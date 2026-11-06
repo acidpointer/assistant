@@ -2,10 +2,13 @@
 //! explicit execution with `ASSISTANT_REQUIRE_MEMORY_MODEL=1` fails if unavailable.
 //! This is development evidence, not held-out quality qualification.
 #![cfg(target_os = "linux")]
+#[cfg(feature = "experimental-extraction")]
 use assistant::{
     AssistantRuntime,
-    chat::{RequestOptions, ToolUse},
-    engine::{ExecutionMode, LLMConfig, ModelEngine},
+    engine::{ExecutionMode, LLMConfig},
+};
+use assistant::{
+    engine::ModelEngine,
     memory::{
         MemoryConfig, MemoryId, MemoryText, OperationKey,
         embedding::EmbeddingConfig,
@@ -107,8 +110,67 @@ async fn selected_e5_persists_recall() {
 }
 
 static MODEL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "semantic qualification gate: current local chat model fails this case"]
+#[ignore = "explicit native tokenizer/window development check"]
+async fn selected_e5_token_windows_preserve_literal_coverage() {
+    use assistant::memory::embedding::{EmbeddingPurpose, EmbeddingWorker};
+    let e5 =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../multilingual-e5-small-q8_0.gguf");
+    if !e5.is_file() {
+        assert!(
+            std::env::var_os("ASSISTANT_REQUIRE_MEMORY_MODEL").is_none(),
+            "required selected artifact absent"
+        );
+        return;
+    }
+    let _guard = MODEL_LOCK.lock().expect("native test lock");
+    if ModelEngine::get_instance().is_err() {
+        ModelEngine::init().expect("backend");
+    }
+    let worker = EmbeddingWorker::start(
+        ModelEngine::get_instance().expect("engine"),
+        EmbeddingConfig::e5_q8(e5),
+    )
+    .await
+    .expect("E5 worker");
+    let handle = worker.handle();
+    let text = "Марія працює з тваринами. Lena is a veterinarian.\n".repeat(40);
+    let source = MemoryText::new(text.clone()).expect("literal source");
+    let mut cursor = 0;
+    let mut chunks = 0;
+    while (cursor as usize) < text.len() {
+        let (start, end) = handle
+            .passage_window(source.clone(), cursor)
+            .await
+            .expect("token measured window");
+        assert!(start <= cursor && end > cursor);
+        let span = text
+            .get(start as usize..end as usize)
+            .expect("exact UTF-8 span");
+        let vector = handle
+            .embed(
+                EmbeddingPurpose::Passage,
+                MemoryText::new(span).expect("literal chunk"),
+            )
+            .await
+            .expect("native chunk");
+        assert!(
+            vector.tokens <= 384,
+            "prefix and special tokens are charged"
+        );
+        assert_eq!(vector.values().len(), 384);
+        cursor = end;
+        chunks += 1;
+    }
+    assert!(chunks > 1);
+    assert_eq!(cursor as usize, text.len());
+    worker.shutdown().await.expect("join native owner");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "explicit staged extraction development preflight; not held-out qualification"]
+#[cfg(feature = "experimental-extraction")]
 async fn lfm_named_json_semantic_preflight() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let chat = std::env::var_os("ASSISTANT_TEST_MODEL").map_or_else(
@@ -136,72 +198,153 @@ async fn lfm_named_json_semantic_preflight() {
     config.max_new_tokens = 512;
     config.threads = 4;
     let runtime=AssistantRuntime::builder(engine).model("main",config).system("Extract only explicitly stated facts. Return the requested JSON object, with no commentary.").build().expect("config").start().await.expect("chat startup");
-    let prompt = r#"Extract explicit personal knowledge into the constrained JSON object.
-Rules: version=1. coverage is complete only if all offered text is examined; otherwise partial or none.
-Entities: introduce n0..n7 for new named entities; kind must describe the label. Each needs source=e0 and an exact quotation proving its presence. u is the user. Do not use a or x handles: none offered.
-Claims: use action=add and target=null. NO existing c handles were offered, so corrections are forbidden. subject and reference objects must resolve to u or a declared n handle. Family sibling_of connects two people. has_occupation goes from the person who has the occupation to an occupation entity. Preserve direction.
-Polarity is positive unless explicitly negated. Modality is asserted for direct statements, reported for attributed reports, hypothetical only for possibilities, question for questions, fiction for fiction.
-valid_from and valid_to are null unless the source explicitly supplies a validity time. Source handles are not dates. conditions is [] unless a condition is explicitly stated. Evidence quotes exact unique substrings. unresolved is [] when no ambiguity remains. Do not infer unstated claims.
-Example source: I prefer tea.
-Example output: {"version":1,"coverage":"complete","entities":[],"claims":[{"action":"add","target":null,"subject":"u","predicate":"prefers","object":{"kind":"text","value":"tea"},"polarity":"positive","modality":"asserted","valid_from":null,"valid_to":null,"conditions":[],"evidence":[{"source":"e0","quote":"I prefer tea."}]}],"unresolved":[]}
-Now extract source e0 (speaker=user): My sister Lena is a veterinarian."#;
-    let response = runtime
-        .chat()
-        .request(prompt)
-        .options(RequestOptions {
-            json_schema: Some(include_str!("../../../docs/memory-extraction.schema.json").into()),
-            max_new_tokens: Some(512),
-            tool_use: ToolUse::Disabled,
-            ..RequestOptions::default()
-        })
-        .run()
-        .await;
-    let stopped = runtime.shutdown().await;
-    let response = response.expect("real constrained extraction");
-    stopped.expect("join chat");
-    eprintln!(
-        "extraction status={:?} sampled={} output={}",
-        response.status, response.usage.generated_tokens, response.message.content
+    use assistant::memory::{
+        ClaimModality, ExtractionAccounting, ExtractionBudget, ExtractionOutcome, MemoryStore,
+        Predicate,
+    };
+    let directory = TestDirectory(std::env::temp_dir().join(format!(
+        "assistant-formation-native-{}",
+        MemoryId::new().expect("identity")
+    )));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory.0)
+        .expect("private store");
+    let store = MemoryStore::open(MemoryConfig::new(&directory.0))
+        .await
+        .expect("store");
+    let handle = store.handle();
+    let owner = store.owner();
+    let source = handle
+        .remember(
+            &owner,
+            OperationKey::new("preflight", "family-job").expect("key"),
+            MemoryText::new("My sister Lena is a veterinarian.").expect("source"),
+        )
+        .await
+        .expect("commit source")
+        .value;
+    let clock = || {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_millis(),
+        )
+        .expect("clock bounds")
+    };
+    let lease = handle
+        .claim_extraction_job_with_budget(&owner, clock(), ExtractionBudget::StagedRoot)
+        .await
+        .expect("reserve staged root")
+        .expect("source lease");
+    assert_eq!(lease.source.id, source.id);
+    let record = handle
+        .source_record(&owner, source.id)
+        .await
+        .expect("host attribution");
+    let internal = runtime
+        .internal_inference("main")
+        .expect("internal capability");
+    let evaluation = assistant::memory::formation::extract_source(
+        &internal,
+        &record,
+        owner.principal(),
+        assistant::engine::Cancellation::default(),
     );
-    let proposal: serde_json::Value =
-        serde_json::from_str(&response.message.content).expect("unrepaired JSON");
-    assert_eq!(proposal["version"], 1);
-    let entities = proposal["entities"].as_array().expect("entities");
-    let lena = entities
-        .iter()
-        .find(|e| e["label"] == "Lena" && e["kind"] == "person")
-        .expect("Lena identity")["handle"]
-        .as_str()
-        .expect("handle");
-    let occupation = entities
-        .iter()
-        .find(|e| e["label"] == "veterinarian" && e["kind"] == "occupation")
-        .expect("occupation identity")["handle"]
-        .as_str()
-        .expect("handle");
-    let claims = proposal["claims"].as_array().expect("claims");
+    tokio::pin!(evaluation);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + Duration::from_secs(20),
+        Duration::from_secs(20),
+    );
+    let report = loop {
+        tokio::select! {
+            result = &mut evaluation => break result.expect("bounded staged semantic formation"),
+            _ = heartbeat.tick() => handle.heartbeat_extraction_job(&owner,lease.clone(),clock()).await.expect("renew live fence without extending hard end"),
+        }
+    };
+    assert!(
+        report.usage.input_tokens <= 4096
+            && report.usage.output_tokens <= 1024
+            && report.usage.native_millis <= 120000
+    );
+    assert_eq!(report.passes, 3);
+    eprintln!(
+        "staged development accounting: {:?}, passes={}",
+        report.usage, report.passes
+    );
+    let principal = owner.principal();
+    let changes = report.changes;
     assert_eq!(
-        claims.len(),
+        changes.claims.len(),
         2,
         "exactly the two supported development facts"
     );
+    let lena = changes
+        .entities
+        .iter()
+        .find(|entity| {
+            entity.label.as_str() == "Lena" && entity.kind == assistant::memory::EntityKind::Person
+        })
+        .expect("Lena identity");
+    let occupation = changes
+        .entities
+        .iter()
+        .find(|entity| {
+            entity.label.as_str() == "veterinarian"
+                && entity.kind == assistant::memory::EntityKind::Occupation
+        })
+        .expect("occupation identity");
     assert!(
-        claims.iter().any(|c| c["subject"] == "u"
-            && c["predicate"] == "sibling_of"
-            && c["object"]["value"] == lena),
+        changes.claims.iter().any(|c| c.subject == principal
+            && c.predicate == Predicate::SiblingOf
+            && matches!(c.object,assistant::memory::ClaimObject::Reference(id) if id==lena.id)),
         "family direction"
     );
-    assert!(
-        claims.iter().any(|c| c["subject"] == lena
-            && c["predicate"] == "has_occupation"
-            && c["object"]["value"] == occupation),
-        "occupation attribution"
-    );
-    for claim in claims {
-        assert_eq!(claim["action"], "add");
-        assert!(claim["target"].is_null());
-        assert_eq!(claim["modality"], "asserted");
-        assert_eq!(claim["polarity"], "positive");
-        assert!(claim["valid_from"].is_null() && claim["valid_to"].is_null());
+    assert!(changes.claims.iter().any(|c|c.subject==lena.id && c.predicate==Predicate::HasOccupation && matches!(c.object,assistant::memory::ClaimObject::Reference(id) if id==occupation.id)),"occupation attribution");
+    for claim in &changes.claims {
+        assert_eq!(claim.modality, ClaimModality::Asserted);
+        assert!(!claim.negative);
+        assert!(
+            claim.conditions.is_empty() && claim.valid_from.is_none() && claim.valid_to.is_none(),
+            "no invented conditions or validity times"
+        );
+        assert_eq!(claim.evidence[0].source_id, source.id);
+        assert_eq!(
+            claim.evidence[0].quote.as_str(),
+            "My sister Lena is a veterinarian."
+        );
     }
+    // This explicit development test promotes only after its authored semantic
+    // assertions. It does not activate an unqualified production formation loop.
+    handle
+        .finish_extraction_job_accounted(
+            &owner,
+            lease,
+            changes,
+            ExtractionOutcome::Complete,
+            ExtractionAccounting {
+                usage: report.usage,
+                passes: report.passes,
+            },
+        )
+        .await
+        .expect("atomic fenced graph completion");
+    let graph = handle
+        .follow_at(&owner, principal, 2, clock())
+        .await
+        .expect("model-produced graph read");
+    assert_eq!(graph.claims.len(), 2);
+    runtime.shutdown().await.expect("join native owner");
+    store.shutdown().await.expect("close store");
+    let store = MemoryStore::open(MemoryConfig::new(&directory.0))
+        .await
+        .expect("reopen graph");
+    let graph = store
+        .handle()
+        .follow_at(&store.owner(), principal, 2, clock())
+        .await
+        .expect("fresh store graph proof");
+    assert_eq!(graph.claims.len(), 2);
+    store.shutdown().await.expect("close reopened store");
 }

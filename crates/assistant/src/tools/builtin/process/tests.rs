@@ -116,6 +116,8 @@ fn maximum_results_fit_the_default_tool_budget_even_with_json_escaping() {
 #[cfg(target_os = "linux")]
 fn context(cancellation: Cancellation) -> ToolContext {
     ToolContext {
+        #[cfg(target_os = "linux")]
+        memory: None,
         invocation_id: "process-test".into(),
         cancellation,
     }

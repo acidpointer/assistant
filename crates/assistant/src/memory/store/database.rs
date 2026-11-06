@@ -246,6 +246,26 @@ impl Database {
         key: &OperationKey,
         text: &MemoryText,
     ) -> MemoryResult<MemoryReceipt<Source>> {
+        self.remember_origin(key, text, super::operations::SourceOrigin::ExplicitMemory)
+    }
+    pub(super) fn remember_observed(
+        &mut self,
+        key: &OperationKey,
+        text: &MemoryText,
+        now: i64,
+    ) -> MemoryResult<MemoryReceipt<Source>> {
+        self.remember_origin(
+            key,
+            text,
+            super::operations::SourceOrigin::ObservedMemory { observed_at: now },
+        )
+    }
+    fn remember_origin(
+        &mut self,
+        key: &OperationKey,
+        text: &MemoryText,
+        origin: super::operations::SourceOrigin,
+    ) -> MemoryResult<MemoryReceipt<Source>> {
         let principal = self.owner.principal.to_string();
         let payload = text.clone();
         let limit = self.pending_job_limit;
@@ -256,14 +276,7 @@ impl Database {
                 text: payload,
                 preserved: true,
             };
-            super::operations::insert_source(
-                tx,
-                &principal,
-                operation,
-                &source,
-                super::operations::SourceOrigin::ExplicitMemory,
-                limit,
-            )?;
+            super::operations::insert_source(tx, &principal, operation, &source, origin, limit)?;
             Ok(source)
         })
     }

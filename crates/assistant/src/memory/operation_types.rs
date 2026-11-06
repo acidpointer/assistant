@@ -154,6 +154,28 @@ pub struct OperationRecord {
     pub unknown_tool_outcome: bool,
 }
 
+/// One eligible operation with only its visible input and terminal output.
+#[derive(Debug, Clone, Serialize)]
+pub struct OperationExchange {
+    /// Current persisted outcome.
+    pub operation: OperationRecord,
+    /// Original caller identity; absent for pre-history legacy operations.
+    pub client_key: Option<ClientRequestKey>,
+    /// Literal user source and host attribution.
+    pub input: SourceRecord,
+    /// Committed visible assistant source, absent before settlement.
+    pub assistant: Option<SourceRecord>,
+}
+
+/// Newest-first bounded durable history; not a native prompt or event replay log.
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryPage {
+    /// Eligible exchanges in descending stable admission order.
+    pub exchanges: Vec<OperationExchange>,
+    /// Exclusive cursor for the next older page, absent when exhausted.
+    pub next_before: Option<Revision>,
+}
+
 /// Exact host-observed terminal boundary, distinct from coarse storage state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -333,6 +355,17 @@ pub struct SourceRecord {
     pub formation: FormationState,
 }
 
+/// Attribution without copying the full literal payload into graph responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceAttribution {
+    /// Immutable evidence identity and version.
+    pub source: SourceRef,
+    /// Host-provided speaker class.
+    pub role: SourceRole,
+    /// Observed UTC milliseconds, explicitly unknown for legacy/standalone input.
+    pub observed_at: Option<i64>,
+}
+
 /// Explicitly paginated assertion history.
 #[derive(Debug, Clone)]
 pub struct ClaimHistoryPage {
@@ -343,7 +376,8 @@ pub struct ClaimHistoryPage {
 }
 
 /// Storage availability only; semantic/model qualification is a separate component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum StorageStatus {
     /// Ordinary admission is available.

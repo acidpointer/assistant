@@ -12,6 +12,8 @@ async fn registry_checks_selection_arguments_and_domain_errors() {
     );
     assert!(registry.select(&["missing".into()]).is_err());
     let context = || ToolContext {
+        #[cfg(target_os = "linux")]
+        memory: None,
         invocation_id: "test".into(),
         cancellation: Cancellation::default(),
     };

@@ -448,8 +448,38 @@ pub struct GraphBundle {
     pub sequence: Option<Revision>,
     /// Current qualified edges encountered during traversal.
     pub claims: Vec<Claim>,
+    /// Eligible labels for encountered nodes, with suppressed labels redacted.
+    #[serde(default)]
+    pub entities: Vec<Entity>,
+    /// Navigation provenance, without transitive or causal conclusions.
+    #[serde(default)]
+    pub paths: Vec<GraphPath>,
+    /// Host source roles/times for every supporting quotation, in this snapshot.
+    #[serde(default)]
+    pub sources: Vec<super::SourceAttribution>,
     /// True if work/result limits stopped the traversal.
     pub truncated: bool,
+}
+
+/// One adjacency step, retaining the original supporting assertion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphStep {
+    /// Original assertion identity and revision.
+    pub claim: MemoryId,
+    /// Checked original assertion revision.
+    pub revision: Revision,
+    /// Node from which navigation examined the assertion.
+    pub from: MemoryId,
+    /// Reference reached, absent for a literal-object assertion.
+    pub to: Option<MemoryId>,
+}
+/// Bounded provenance for locating an edge, not a logical derivation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphPath {
+    /// Emitted assertion reached by this trace.
+    pub claim: MemoryId,
+    /// At most the requested depth; no manufactured inverse assertion.
+    pub steps: Vec<GraphStep>,
 }
 
 /// A claimed extraction attempt. Private fence fields cannot come from model JSON.
@@ -461,6 +491,33 @@ pub struct ExtractionLease {
     pub(crate) generation: i64,
     /// Immutable evidence offered to this attempt.
     pub source: Source,
+}
+
+/// Conservative model-work envelope chosen by the trusted formation controller.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum ExtractionBudget {
+    /// One pass: at most 1,024 input and 512 sampled output tokens.
+    SinglePass,
+    /// Up to four passes sharing 4,096 input/1,024 output tokens and 120 seconds.
+    StagedRoot,
+}
+impl ExtractionBudget {
+    pub(crate) fn limits(self) -> (i64, i64, i64, i64) {
+        match self {
+            Self::SinglePass => (1, 1024, 512, 120_000),
+            Self::StagedRoot => (4, 4096, 1024, 120_000),
+        }
+    }
+}
+
+/// Actual completed staged work, measured by the host native owner.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ExtractionAccounting {
+    /// All evaluated input, sampled output and native time.
+    pub usage: MemoryJobUsage,
+    /// All dispatched passes, including failed or repair passes.
+    pub passes: u8,
 }
 
 /// Accounted native work. Values come from the host inference worker.

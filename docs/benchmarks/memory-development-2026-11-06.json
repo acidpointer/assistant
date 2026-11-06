@@ -1,0 +1,235 @@
+{
+  "algorithm_sha256": "6a2097e39dd0c962dd99d1ea3aa95c02b90e87c69d4946210cd8ba0cdbe5967e",
+  "all_exact": false,
+  "complete_corpus": true,
+  "corpus_sha256": "605d9658c2ce4370aa905289ba6527534619527c95114d889ea318d993771dc1",
+  "formation_sha256": "398e5da7e0310651b642ea6843cfeb1ae73778f8f0161c73690b45ffe26f2959",
+  "full_memory_qualified": false,
+  "model_sha256": "616775686c9abcbc1a0d302f75dc0a1f12498f272170bd7cda556a706c5606e1",
+  "results": [
+    {
+      "actual": [
+        {
+          "condition_or_time": null,
+          "mode": "reported",
+          "negated": false,
+          "object": "Lena",
+          "relation": "sibling_of",
+          "subject": "user"
+        },
+        {
+          "condition_or_time": null,
+          "mode": "asserted",
+          "negated": false,
+          "object": "veterinarian",
+          "relation": "has_occupation",
+          "subject": "Lena"
+        }
+      ],
+      "error": null,
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 1,
+      "id": "family-job",
+      "input_tokens": 638,
+      "native_millis": 98199,
+      "output_tokens": 120,
+      "passes": 3,
+      "true_positive": 1
+    },
+    {
+      "actual": [
+        {
+          "condition_or_time": null,
+          "mode": "asserted",
+          "negated": false,
+          "object": "user",
+          "relation": "parent_of",
+          "subject": "Oleh"
+        },
+        {
+          "condition_or_time": null,
+          "mode": "asserted",
+          "negated": false,
+          "object": "teacher",
+          "relation": "has_occupation",
+          "subject": "Oleh"
+        }
+      ],
+      "error": null,
+      "exact": true,
+      "false_negative": 0,
+      "false_positive": 0,
+      "id": "reverse-parent",
+      "input_tokens": 635,
+      "native_millis": 92866,
+      "output_tokens": 118,
+      "passes": 3,
+      "true_positive": 2
+    },
+    {
+      "actual": [
+        {
+          "condition_or_time": null,
+          "mode": "asserted",
+          "negated": false,
+          "object": "engineer",
+          "relation": "has_occupation",
+          "subject": "Iryna"
+        }
+      ],
+      "error": null,
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "parent-child",
+      "input_tokens": 643,
+      "native_millis": 100650,
+      "output_tokens": 121,
+      "passes": 3,
+      "true_positive": 1
+    },
+    {
+      "actual": [],
+      "error": "invalid memory input: ambiguous extraction kind",
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "self-occupation",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "negative-family",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "reported-family",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "question-family",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 0,
+      "false_positive": 0,
+      "id": "unknown-question",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 0,
+      "false_positive": 0,
+      "id": "conditional-family",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [
+        {
+          "condition_or_time": null,
+          "mode": "asserted",
+          "negated": false,
+          "object": "Оксана",
+          "relation": "sibling_of",
+          "subject": "user"
+        },
+        {
+          "condition_or_time": null,
+          "mode": "reported",
+          "negated": false,
+          "object": "ветеринарка",
+          "relation": "has_occupation",
+          "subject": "Оксана"
+        }
+      ],
+      "error": null,
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 1,
+      "id": "ukrainian-family-job",
+      "input_tokens": 655,
+      "native_millis": 99848,
+      "output_tokens": 123,
+      "passes": 3,
+      "true_positive": 1
+    },
+    {
+      "actual": [],
+      "error": "memory store unavailable",
+      "exact": false,
+      "false_negative": 1,
+      "false_positive": 0,
+      "id": "injection-data",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    },
+    {
+      "actual": [],
+      "error": "invalid memory input: ambiguous extraction kind",
+      "exact": true,
+      "false_negative": 0,
+      "false_positive": 0,
+      "id": "ambiguous-repeated-name",
+      "input_tokens": null,
+      "native_millis": null,
+      "output_tokens": null,
+      "passes": null,
+      "true_positive": 0
+    }
+  ],
+  "scope": "Authored synthetic source-local family/occupation development cases. Not held-out data and not complete semantic memory qualification.",
+  "track": "development",
+  "notes": [
+    "Authored synthetic development data only; not held-out qualification.",
+    "The role-grid candidate failed; automatic graph formation remains inactive.",
+    "Native failures in this historical run were collapsed to a generic unavailable error. The harness now preserves phase/cause/observed usage for subsequent runs.",
+    "Existing local model file was not replaced. Its current independently verified checksum differs from the historical 2026-11-05 manifest."
+  ]
+}

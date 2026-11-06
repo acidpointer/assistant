@@ -22,6 +22,7 @@ const REQUIRED: &[&str] = &[
     "0006-runtime-state-safety.patch",
     "0007-vulkan-resource-lifecycle.patch",
     "0011-vulkan-blocking-fence-wait.patch",
+    "0012-vulkan-incremental-shader-build.patch",
 ];
 
 /// Stage exactly the selected patches; no unlisted patch can become active.

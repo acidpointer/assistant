@@ -793,3 +793,102 @@ summary::-webkit-details-marker {
     scroll-behavior: auto !important;
   }
 }
+/* Connection status and saved memory use the existing application surface. */
+.connection-screen {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.memory-panel form {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+}
+.memory-panel input {
+  padding: 12px;
+  border: 1px solid #454548;
+  border-radius: 8px;
+  background: #222225;
+  color: #efefef;
+  width: 100%;
+}
+.memory-panel {
+  position: fixed;
+  inset: 70px 12px 12px auto;
+  width: min(520px, calc(100% - 24px));
+  overflow: auto;
+  background: #181819;
+  border: 1px solid #363638;
+  border-radius: 14px;
+  padding: 24px;
+  z-index: 10;
+  box-shadow: 0 12px 50px #0008;
+}
+.memory-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.memory-source {
+  padding: 16px 0;
+  border-top: 1px solid #363638;
+}
+.memory-source pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+.memory-source code {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .shell-memory .topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .shell-memory .topbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: space-between;
+  }
+  .shell-memory .memory-panel {
+    inset: 110px 8px 8px auto;
+    width: calc(100% - 16px);
+  }
+}
+
+.memory-panel textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  color: inherit;
+  background: var(--surface, #181b20);
+  border: 1px solid #50545c;
+  border-radius: 8px;
+  padding: 12px;
+  font: inherit;
+}
+.memory-panel form {
+  display: grid;
+  gap: 12px;
+}
+.memory-panel input[type='checkbox'] {
+  width: auto;
+  margin-right: 8px;
+}
+.assistant-notices {
+  display: grid;
+  gap: 16px;
+  margin-block: 24px;
+}
+.assistant-notice {
+  border: 1px solid #52506b;
+  border-radius: 14px;
+  padding: 18px;
+  background: #242330;
+}
+.assistant-notice p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -59,10 +59,6 @@ impl PreparedService for BoundWeb {
         context: RuntimeContext,
     ) -> BoxFuture<'static, ChatResult<Box<dyn RunningService>>> {
         Box::pin(async move {
-            #[cfg(target_os = "linux")]
-            if context.assistant.memory().is_some() {
-                return Err(ChatError::Configuration("memory requires an authenticated owner adapter; the v1 web adapter cannot expose personal state".into()));
-            }
             let address = self
                 .listener
                 .local_addr()
@@ -73,7 +69,26 @@ impl PreparedService for BoundWeb {
             let quiesce = Cancellation::default();
             let stop = Cancellation::default();
             let force = Cancellation::default();
-            let router = http::router(context.assistant, quiesce.clone(), stop.clone());
+            #[cfg(target_os = "linux")]
+            let owner = if context.assistant.memory().is_some() {
+                if !address.ip().is_loopback() {
+                    return Err(ChatError::Configuration(
+                        "personal memory web access requires loopback".into(),
+                    ));
+                }
+                Some(context.assistant.owner_access("web").map_err(|_| {
+                    ChatError::Configuration("local memory owner unavailable".into())
+                })?)
+            } else {
+                None
+            };
+            let router = http::router(
+                context.assistant,
+                quiesce.clone(),
+                stop.clone(),
+                #[cfg(target_os = "linux")]
+                owner.clone(),
+            );
             let listener = BoundedListener {
                 listener: self.listener,
                 quiesce: quiesce.clone(),
@@ -104,6 +119,8 @@ impl PreparedService for BoundWeb {
             });
             eprintln!("WebUI ready at http://{address}");
             Ok(Box::new(WebService {
+                #[cfg(target_os = "linux")]
+                owner,
                 quiesce,
                 stop,
                 finished,
@@ -115,6 +132,8 @@ impl PreparedService for BoundWeb {
 
 #[derive(Debug)]
 struct WebService {
+    #[cfg(target_os = "linux")]
+    owner: Option<assistant::application::OwnerHandle>,
     quiesce: Cancellation,
     stop: Cancellation,
     finished: watch::Receiver<Option<Result<(), String>>>,
@@ -129,22 +148,29 @@ impl RunningService for WebService {
     }
     fn terminated(&self) -> BoxFuture<'_, ChatResult<()>> {
         Box::pin(async {
-            let mut finished = self.finished.clone();
-            loop {
-                if let Some(result) = finished.borrow_and_update().clone() {
-                    return result.map_err(|message| ChatError::Extension {
-                        name: "web".into(),
-                        message,
-                    });
+            let web = async {
+                let mut finished = self.finished.clone();
+                loop {
+                    if let Some(result) = finished.borrow_and_update().clone() {
+                        return result.map_err(|message| ChatError::Extension {
+                            name: "web".into(),
+                            message,
+                        });
+                    }
+                    finished.changed().await.map_err(|_| ChatError::Closed)?;
                 }
-                finished.changed().await.map_err(|_| ChatError::Closed)?;
-            }
+            };
+            web.await
         })
     }
     fn shutdown(&mut self) -> BoxFuture<'_, ChatResult<()>> {
         Box::pin(async {
             self.quiesce.cancel();
             self.stop.cancel();
+            #[cfg(target_os = "linux")]
+            if let Some(owner) = &self.owner {
+                owner.revoke();
+            }
             if let Some(task) = self.task.take() {
                 task.await
                     .map_err(|_| ChatError::Configuration("web task terminated".into()))?;

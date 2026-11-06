@@ -555,6 +555,12 @@ async fn required_memory_acceptance_terminal_commit_and_restart_retry_are_durabl
         .await
         .expect("durable before acceptance");
     assert_eq!(accepted.id, record.id.to_string());
+    backend
+        .started
+        .acquire()
+        .await
+        .expect("initial model call")
+        .forget();
     let terminal = finished(&app.handle, &accepted.id).await;
     assert_eq!(terminal.status, Status::Completed);
     let record = memory
@@ -582,6 +588,35 @@ async fn required_memory_acceptance_terminal_commit_and_restart_retry_are_durabl
     );
     let mut app = Application::start_with_memory(chat, RequestOptions::default(), Some(memory))
         .expect("restart app");
+    let owner = app.handle.owner_access("test").expect("owner grant");
+    let recovered = owner
+        .lookup("client", "durable")
+        .await
+        .expect("lookup without resubmission");
+    assert_eq!(recovered.id, accepted.id);
+    assert_eq!(recovered.status, Status::Completed);
+    let history = owner.history(None, 1).await.expect("durable history");
+    assert_eq!(history.exchanges.len(), 1);
+    assert_eq!(history.exchanges[0].input.source.text.as_str(), "Hi");
+    assert_eq!(
+        history.exchanges[0]
+            .assistant
+            .as_ref()
+            .expect("visible output")
+            .source
+            .text
+            .as_str(),
+        "Hello"
+    );
+    assert!(
+        owner
+            .snapshot()
+            .await
+            .expect("recovered snapshot")
+            .messages
+            .iter()
+            .any(|m| m.text == "Hello")
+    );
     let replay = app
         .handle
         .submit("test", input("durable"))
@@ -603,8 +638,206 @@ async fn required_memory_acceptance_terminal_commit_and_restart_retry_are_durabl
             .iter()
             .any(|message| message.text == "Hello")
     );
+    let another_grant = app.handle.owner_access("test").expect("independent grant");
+    let clone = owner.clone();
+    owner.revoke();
+    assert_eq!(
+        clone
+            .snapshot()
+            .await
+            .expect_err("revocation shared by clones"),
+        ApplicationError::Unauthorized
+    );
+    assert!(
+        another_grant.lookup("client", "durable").await.is_ok(),
+        "revocation does not erase operations or revoke other sessions"
+    );
+    let active = another_grant
+        .submit(input("new-active"))
+        .await
+        .expect("new accepted input");
+    backend
+        .started
+        .acquire()
+        .await
+        .expect("second model call")
+        .forget();
+    let replay = another_grant
+        .submit(input("durable"))
+        .await
+        .expect("historical retry while busy");
+    assert_eq!(replay.id, accepted.id);
+    assert_eq!(replay.status, Status::Completed);
+    assert_eq!(
+        app.handle
+            .snapshot()
+            .await
+            .expect("snapshot")
+            .active_run
+            .expect("new run stays active")
+            .id,
+        active.id
+    );
+    assert_eq!(
+        backend.calls.load(Ordering::Relaxed),
+        2,
+        "only genuinely new input executes"
+    );
     app.shutdown().await.expect("join app");
     store.shutdown().await.expect("join store");
+    std::fs::remove_dir_all(directory).expect("cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn durable_history_keeps_visible_text_before_and_after_a_tool() {
+    use crate::memory::{MemoryConfig, MemoryId, MemoryStore, service::MemoryAccess};
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = std::env::temp_dir().join(format!(
+        "assistant-visible-turns-{}",
+        MemoryId::new().expect("identity")
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .expect("private directory");
+    let store = MemoryStore::open(MemoryConfig::new(&directory))
+        .await
+        .expect("store");
+    let memory = MemoryAccess::for_test(&store);
+    let backend = Arc::new(Continuation {
+        calls: AtomicUsize::new(0),
+        partial_started: Semaphore::new(0),
+    });
+    let mut registrar = PluginRegistrar::default();
+    registrar
+        .add_tool(crate::tools::builtin::Calculator)
+        .expect("calculator");
+    let chat = Chat::new(
+        1,
+        String::new(),
+        backend.clone(),
+        Arc::new(registrar.build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut app =
+        Application::start_with_memory(chat, RequestOptions::default(), Some(memory)).expect("app");
+    let owner = app.handle.owner_access("test").expect("owner");
+    let run = owner.submit(input("tool-history")).await.expect("admit");
+    backend
+        .partial_started
+        .acquire()
+        .await
+        .expect("continuation started")
+        .forget();
+    owner.cancel(&run.id).await.expect("cancel");
+    finished(&app.handle, &run.id).await;
+    let history = owner
+        .history(None, 1)
+        .await
+        .expect("read committed history");
+    assert_eq!(
+        history.exchanges[0]
+            .assistant
+            .as_ref()
+            .expect("visible source")
+            .source
+            .text
+            .as_str(),
+        "A longer explanation before the tool.\n\nA"
+    );
+    app.shutdown().await.expect("join application");
+    store.shutdown().await.expect("join storage");
+    std::fs::remove_dir_all(directory).expect("cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn pending_storage_admission_keeps_snapshots_responsive_and_survives_lost_waiter() {
+    use crate::memory::{MemoryConfig, MemoryId, MemoryStore, service::MemoryAccess};
+    use std::os::unix::fs::DirBuilderExt;
+    let directory = std::env::temp_dir().join(format!(
+        "assistant-pending-{}",
+        MemoryId::new().expect("identity")
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .expect("private directory");
+    let store = MemoryStore::open(MemoryConfig::new(&directory))
+        .await
+        .expect("store");
+    let memory = MemoryAccess::for_test(&store);
+    let backend = Controlled::new(0);
+    let chat = Chat::new(
+        1,
+        String::new(),
+        backend.clone(),
+        Arc::new(PluginRegistrar::default().build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut app =
+        Application::start_with_memory(chat, RequestOptions::default(), Some(memory.clone()))
+            .expect("application");
+    let mut subscription = app.handle.subscribe().await.expect("startup snapshot");
+    let (started, ready) = oneshot::channel();
+    let (release, gate) = std::sync::mpsc::channel();
+    let writer = memory.store.clone();
+    let blocker = tokio::spawn(async move { writer.test_writer_barrier(started, gate).await });
+    ready.await.expect("writer held");
+    let handle = app.handle.clone();
+    let waiter = tokio::spawn(async move { handle.submit("test", input("lost-waiter")).await });
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while memory.store.test_writer_pending() <= 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("admission queued");
+    let snapshot = tokio::time::timeout(Duration::from_millis(200), app.handle.snapshot())
+        .await
+        .expect("actor is responsive during SQLite wait")
+        .expect("snapshot");
+    assert!(
+        snapshot.active_run.is_none(),
+        "uncommitted input is not accepted"
+    );
+    waiter.abort();
+    release.send(()).expect("release writer");
+    blocker
+        .await
+        .expect("join blocker")
+        .expect("barrier completed");
+    let accepted = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let event = subscription.events.recv().await.expect("event");
+            if let Update::Run { run } = &event.update {
+                break run.clone();
+            }
+        }
+    })
+    .await
+    .expect("application owns admission despite lost waiter");
+    let owner = app.handle.owner_access("test").expect("grant");
+    assert_eq!(
+        owner
+            .lookup("client", "lost-waiter")
+            .await
+            .expect("reconcile key")
+            .id,
+        accepted.id
+    );
+    backend
+        .started
+        .acquire()
+        .await
+        .expect("model started once")
+        .forget();
+    assert_eq!(backend.calls.load(Ordering::Relaxed), 1);
+    app.shutdown().await.expect("settle and join");
+    store.shutdown().await.expect("store shutdown");
     std::fs::remove_dir_all(directory).expect("cleanup");
 }
 
@@ -663,10 +896,14 @@ async fn dropped_tool_waiter_settles_unknown_before_terminal_commit() {
         .await
         .expect("admit");
     let operation = MemoryOperation::new(record, memory.clone());
-    operation
+    let recalled = operation
         .prepare("Perform the authorized test effect.")
         .await
         .expect("begin");
+    assert!(
+        !recalled.contains("Perform the authorized test effect"),
+        "a question is not its own historical evidence"
+    );
     let started = Arc::new(Semaphore::new(0));
     let effects = Arc::new(AtomicUsize::new(0));
     let mut tools = crate::tools::ToolRegistry::new();
@@ -690,6 +927,8 @@ async fn dropped_tool_waiter_settles_unknown_before_terminal_commit() {
                 },
                 vec!["uncertain_effect".into()],
                 crate::tools::ToolContext {
+                    #[cfg(target_os = "linux")]
+                    memory: None,
                     invocation_id: "call1".into(),
                     cancellation: tool_cancellation,
                 },
@@ -740,5 +979,212 @@ async fn dropped_tool_waiter_settles_unknown_before_terminal_commit() {
     );
     assert_eq!(effects.load(Ordering::Relaxed), 1, "never replay effects");
     store.shutdown().await.expect("join store");
+    std::fs::remove_dir_all(directory).expect("cleanup");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn memory_tools_and_personality_use_the_shared_product_loop() {
+    use crate::{
+        chat::{Message, ToolCall},
+        memory::{
+            MemoryConfig, MemoryId, MemoryStore, MemoryText, OperationKey, service::MemoryAccess,
+        },
+    };
+    use std::os::unix::fs::DirBuilderExt;
+    #[derive(Debug)]
+    struct Journey {
+        step: AtomicUsize,
+        source: MemoryId,
+    }
+    impl ModelBackend for Journey {
+        fn default_max_tokens(&self) -> usize {
+            128
+        }
+        fn default_thinking(&self) -> Thinking {
+            Thinking::Disabled
+        }
+        fn evaluate(
+            &self,
+            request: ModelRequest,
+            _: TurnContext,
+            _: EventSink,
+        ) -> BoxFuture<'_, Result<ModelTurn, ModelFailure>> {
+            Box::pin(async move {
+                let step = self.step.fetch_add(1, Ordering::SeqCst);
+                assert!(
+                    request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "memory.search")
+                );
+                let call = match step {
+                    0 => Some((
+                        "assistant.configure",
+                        serde_json::json!({"instructions":"Be a warm anime companion. Speak plainly about Rust."}),
+                    )),
+                    1 => Some((
+                        "memory.search",
+                        serde_json::json!({"query":"garden bench project"}),
+                    )),
+                    2 => Some((
+                        "memory.follow",
+                        serde_json::json!({"source_id":self.source.to_string()}),
+                    )),
+                    3 => Some((
+                        "memory.remember",
+                        serde_json::json!({"note":"The owner wants a warm companion voice and enjoys practical garden projects.","related_source_ids":[self.source.to_string()]}),
+                    )),
+                    _ => None,
+                };
+                if step > 0 && step < 5 {
+                    assert!(request.messages.iter().any(|message|matches!(message,Message::Tool{result,..} if result.get("ok").and_then(serde_json::Value::as_bool)==Some(true))),"tool receipts reach continuation");
+                }
+                if step == 5 {
+                    assert!(
+                        request.system.contains("warm anime companion"),
+                        "updated personality is pinned on the next user run"
+                    );
+                }
+                let message = call.map_or_else(
+                    || AssistantMessage::text("I'll keep that in mind."),
+                    |(name, arguments)| AssistantMessage {
+                        tool_calls: vec![ToolCall {
+                            id: format!("journey-{step}"),
+                            name: name.into(),
+                            arguments,
+                        }],
+                        ..AssistantMessage::default()
+                    },
+                );
+                Ok(ModelTurn {
+                    message,
+                    usage: Usage {
+                        generated_tokens: 1,
+                        ..Usage::default()
+                    },
+                    finish_reason: FinishReason::EndOfGeneration,
+                    metrics: None,
+                    limit_reason: None,
+                })
+            })
+        }
+    }
+    let directory = std::env::temp_dir().join(format!(
+        "assistant-tool-journey-{}",
+        MemoryId::new().expect("id")
+    ));
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .expect("private dir");
+    let store = MemoryStore::open(MemoryConfig::new(&directory))
+        .await
+        .expect("store");
+    let memory = MemoryAccess::for_test(&store);
+    let source = memory
+        .remember(
+            OperationKey::new("test", "project").expect("key"),
+            MemoryText::new("I'm making a garden bench from cedar.").expect("experience"),
+        )
+        .await
+        .expect("saved project")
+        .value;
+    let backend = Arc::new(Journey {
+        step: AtomicUsize::new(0),
+        source: source.id,
+    });
+    let mut registrar = PluginRegistrar::default();
+    crate::memory::tools::register(&mut registrar).expect("typed tools");
+    let chat = Chat::new(
+        1,
+        String::new(),
+        backend.clone(),
+        Arc::new(registrar.build().expect("pipeline")),
+        crate::chat::RunLimits::default(),
+        RuntimeControl::new(4),
+    );
+    let mut app =
+        Application::start_with_memory(chat, RequestOptions::default(), Some(memory.clone()))
+            .expect("app");
+    app.ready().await.expect("hydrate");
+    let owner = app
+        .handle
+        .owner_access("socket-adapter")
+        .expect("host-issued transport-independent owner");
+    let note = owner
+        .remember(
+            "explicit-note",
+            MemoryText::new("For my garden bench I want a satin finish.").expect("note"),
+        )
+        .await
+        .expect("save without chat inference");
+    assert_eq!(
+        owner
+            .remember("explicit-note", note.value.text.clone())
+            .await
+            .expect("retry same note")
+            .value
+            .id,
+        note.value.id
+    );
+    assert!(
+        owner
+            .history(None, 4)
+            .await
+            .expect("independent note")
+            .exchanges
+            .is_empty()
+    );
+    assert_eq!(
+        owner
+            .evidence(note.value.id)
+            .await
+            .expect("owner attribution")
+            .role,
+        crate::memory::SourceRole::User
+    );
+    assert!(
+        owner
+            .evidence(note.value.id)
+            .await
+            .expect("live note")
+            .observed_at
+            .is_some(),
+        "live capture has a host observation date; historical imports remain unknown"
+    );
+    let run=owner.submit(Submission{client_id:"client".into(),request_id:"persona-project".into(),text:"Please use a warm anime companion voice, remember our garden project, and connect it with this conversation.".into()}).await.expect("durable admission");
+    assert_eq!(
+        finished(&app.handle, &run.id).await.status,
+        Status::Completed
+    );
+    assert_eq!(backend.step.load(Ordering::SeqCst), 5);
+    let graph = owner
+        .follow_sources(source.id, 2)
+        .await
+        .expect("same graph for any transport");
+    assert!(
+        graph
+            .sources
+            .iter()
+            .any(|record| record.role == crate::memory::SourceRole::Assistant
+                && record.source.text.as_str().contains("garden projects"))
+    );
+    let next = owner
+        .submit(Submission {
+            client_id: "client".into(),
+            request_id: "next-topic".into(),
+            text: "Let's talk about Rust now.".into(),
+        })
+        .await
+        .expect("next topic");
+    assert_eq!(
+        finished(&app.handle, &next.id).await.status,
+        Status::Completed
+    );
+    owner.revoke();
+    assert!(owner.assistant_profile().await.is_err());
+    app.shutdown().await.expect("join application");
+    store.shutdown().await.expect("close storage");
     std::fs::remove_dir_all(directory).expect("cleanup");
 }

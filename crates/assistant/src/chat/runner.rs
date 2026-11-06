@@ -230,7 +230,7 @@ impl RunContext {
         self.evaluated_tools = names;
         self.model_calls += 1;
         self.events.reset().await;
-        let turn = self.turn_context();
+        let turn = self.turn_context()?;
         let result = self
             .backend
             .evaluate(request, turn, self.events.clone())
@@ -267,8 +267,17 @@ impl RunContext {
         }
     }
     /// Capture the immutable execution boundary after admission has been checked.
-    fn turn_context(&self) -> TurnContext {
-        TurnContext {
+    fn turn_context(&self) -> ChatResult<TurnContext> {
+        Ok(TurnContext {
+            #[cfg(target_os = "linux")]
+            recalled: self
+                .memory
+                .as_ref()
+                .map(|memory| memory.recalled())
+                .transpose()?
+                .flatten(),
+            execution: super::ExecutionClass::Foreground,
+            input_token_limit: None,
             chat_id: self.chat_id,
             run_id: self.run_id,
             turn: self.model_calls,
@@ -276,7 +285,7 @@ impl RunContext {
             limits: self.limits.clone(),
             cancellation: self.cancellation.clone(),
             deadline: self.deadline,
-        }
+        })
     }
     /// Retain terminal owner-thread measurements before any fallible observer.
     fn record_model_turn(
@@ -344,6 +353,8 @@ impl RunContext {
         let context = ToolContext {
             invocation_id: call.id.clone(),
             cancellation: self.cancellation.clone(),
+            #[cfg(target_os = "linux")]
+            memory: self.memory.clone().map(crate::memory::tools::MemorySession),
         };
         let tools = self.pipeline.tools.clone();
         #[cfg(target_os = "linux")]

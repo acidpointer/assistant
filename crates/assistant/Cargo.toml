@@ -21,6 +21,8 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "macros", "signal", "process", "io-util", "io-std"] }
 
 [features]
+# Historical domain-extraction experiment; never enabled by the product runtime.
+experimental-extraction = []
 default = ["vulkan"]
 cuda = ["llama_cpp/cuda"]
 metal = ["llama_cpp/metal"]

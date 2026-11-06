@@ -4,6 +4,69 @@ Status: implemented, 2026-11-04. The machine-readable HTTP contract is
 [`web-api.yaml`](web-api.yaml); the architectural decision is
 [`0003`](decisions/0003-runtime-services-and-web.md).
 
+Memory implementation update, 2026-11-06: required-memory startup now activates
+a local v2 WebUI. It supports durable chat/retry/lookup, recovered
+history, source search/inspection/preservation, indexing status and logout. The
+memory-disabled v1 API remains available in its original mode. `web-api.yaml`
+still describes **v1 only**; the implemented v2 mapping is summarized below.
+Conversation/note source graphs, freeform personality and the optional initiative
+mailbox are implemented. Whole-memory restore and end-to-end forgetting controls
+remain unfinished in WebUI. See [the user guide](assistant-memory.md). See the
+[delivery plan](memory-integration-plan.md) and
+[verification record](memory-native-integration.md).
+
+## Required-memory WebUI
+
+Supply the private memory directory and selected local E5 Q8 artifact directly:
+
+```sh
+assistant --model /path/to/chat.gguf \
+  --memory-dir "$HOME/.local/share/assistant/memory" \
+  --embedding-model /path/to/multilingual-e5-small-q8_0.gguf \
+  --port 3333
+```
+
+Both memory flags are required together. Paths resolve from the working
+directory; there is no memory configuration file. WebUI is enabled by default.
+
+Open the local URL to connect directly. Pairing, login, bearer tokens and browser
+session expiry are not part of the service. Reloading reconnects automatically;
+session storage retains only opaque request identities for retry reconciliation.
+
+Required-memory HTTP binds only to loopback. The local adapter creates one core
+owner handle for the service lifetime. Shutdown closes its streams and revokes
+the handle; disconnecting a browser does not cancel admitted inference.
+
+`/api/discovery` reports API version and `authentication: "none"`. In memory mode
+v1 routes are disabled. V2 mutations use same-origin JSON with
+`X-Assistant-Client`; they do not require credentials.
+Personal responses and streams use `no-store`; request timeouts do not abandon
+already-owned admission or settlement.
+
+| Implemented v2 route | Core behavior |
+| --- | --- |
+| `GET /api/v2/snapshot`, `/events` | Bounded presentation; direct fetch SSE with bounded subscriptions |
+| `GET /api/v2/history?before=&limit=` | Newest-first durable exchange pages; exclusive stable cursor, max 32 exchanges/1 MiB |
+| `POST /api/v2/runs` | Commit input before acceptance; same key/input reconciles without execution |
+| `POST /api/v2/operations/lookup` | Reconcile original client/request key without resubmitting text |
+| `GET /api/v2/operations/{id}` | Durable/live status; legacy metadata availability is explicit |
+| `POST /api/v2/runs/{id}/cancel` | Explicit cancellation; disconnect never means cancel |
+| `POST /api/v2/memory/search` | Lexical/E5 reciprocal-rank fusion; literal attributed sources and channel availability |
+| `GET /api/v2/memory/evidence/{id}` | Eligible literal evidence with source role/time/revision |
+| `POST /api/v2/memory/remember` | Preserve an existing source by revision without creating duplicate evidence |
+| `POST /api/v2/memory/notes` | Commit a live, user-attributed note without chat inference; namespaced retry key and host observation time |
+| `GET /api/v2/memory/health` | Storage, generation coverage/failures and source-graph mode |
+| `POST /api/v2/memory/connections` | Universal source/note graph neighborhood; original direction/labels and attribution |
+| `POST /api/v2/memory/follow` | Earlier typed-claim graph navigation |
+| `GET/PUT /api/v2/assistant` | Freeform personality and optional initiative settings, with revision checks |
+| `GET /api/v2/assistant/notices` | Durable assistant-only mailbox; also announced by SSE `notices` frames |
+| `POST /api/v2/assistant/notices/{id}/dismiss` | Hide a mailbox item without erasing memory |
+
+`application::OwnerHandle` owns these operations independently of HTTP. Host
+adapters choose their access policy and issue core handles; namespaces
+come from host policy. Neither model output nor a wire DTO can create a grant.
+Future D-Bus/socket adapters can reuse the facade directly.
+
 ## Product and command contract
 
 One `assistant` binary owns the resident runtime and its compiled plugins.
@@ -115,8 +178,9 @@ binding changes who can connect; all native clients reaching it are unauthentica
 Host validation accepts the actual destination IP/port, or `localhost` when that
 destination is loopback. Forwarded headers are not trusted. Browser mutation
 requests require JSON, `X-Assistant-Client: webui`, and an exact origin match when
-Origin is present. Missing Origin is supported through the non-simple header
-requirement. Cross-origin access is not enabled.
+Origin is present. Memory-enabled mutations require Origin; temporary-chat mode
+also supports native clients without it through the non-simple header requirement.
+Cross-origin access is not enabled.
 
 The HTML loads embedded assets under a same-origin CSP, with no remote assets,
 interpreted message HTML or persistent browser storage. HTML revalidates and

@@ -19,17 +19,24 @@ pub(crate) struct Args {
     /// Local model weights.
     #[arg(long)]
     pub(crate) model: PathBuf,
-    /// Explicit JSON configuration for required durable memory. Paths are local;
-    /// the embedding artifact is checksum-verified and never downloaded.
-    #[arg(long, conflicts_with = "raw")]
-    pub(crate) memory_config: Option<PathBuf>,
+    /// Enable durable memory in this private directory; requires --embedding-model.
+    #[arg(
+        long,
+        value_name = "DIR",
+        requires = "embedding_model",
+        conflicts_with = "raw"
+    )]
+    pub(crate) memory_dir: Option<PathBuf>,
+    /// Local E5 Q8 embedding weights; checksum-verified and never downloaded.
+    #[arg(long, value_name = "GGUF", requires = "memory_dir")]
+    pub(crate) embedding_model: Option<PathBuf>,
     /// Stable caller identity for durable headless requests.
     #[arg(long, default_value = "local-cli")]
     pub(crate) client_id: String,
-    /// Caller key for one-shot retry/reconciliation with --memory-config.
-    #[arg(long,requires_all=["memory_config","prompt"])]
+    /// Caller key for one-shot retry/reconciliation with --memory-dir.
+    #[arg(long,requires_all=["memory_dir","prompt"])]
     pub(crate) request_id: Option<String>,
-    /// Diagnostic/testing one-shot, or durable interaction with --memory-config; requires --no-web.
+    /// Diagnostic/testing one-shot, or durable interaction with --memory-dir; requires --no-web.
     #[arg(short, long, requires = "no_web", conflicts_with_all = ["interactive", "daemon"])]
     pub(crate) prompt: Option<String>,
     /// Compatibility alias for the default resident mode.
@@ -89,7 +96,7 @@ pub(crate) struct Args {
     pub(crate) thinking: bool,
     #[arg(long)]
     pub(crate) no_tools: bool,
-    #[arg(long, conflicts_with_all = ["no_tools","memory_config"], requires = "no_web")]
+    #[arg(long, conflicts_with_all = ["no_tools","memory_dir"], requires = "no_web")]
     pub(crate) require_tool: bool,
     /// Wall-clock allowance per interaction, excluding model startup.
     #[arg(long, default_value_t = 600)]
@@ -175,4 +182,37 @@ pub(crate) fn model_config(args: &Args) -> assistant::engine::EngineResult<LLMCo
     };
     config.validate()?;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Args;
+    use clap::Parser;
+    use std::path::Path;
+
+    #[test]
+    fn memory_web_command_keeps_cli_paths_and_requested_port() {
+        let args = Args::try_parse_from([
+            "assistant",
+            "--model",
+            "chat.gguf",
+            "--memory-dir",
+            "private-memory",
+            "--embedding-model",
+            "e5.gguf",
+            "--port",
+            "3333",
+        ])
+        .expect("memory and WebUI command");
+        assert_eq!(
+            args.memory_dir.as_deref(),
+            Some(Path::new("private-memory"))
+        );
+        assert_eq!(args.embedding_model.as_deref(), Some(Path::new("e5.gguf")));
+        assert_eq!(args.port, 3333);
+        assert!(!args.no_web);
+        let temporary = Args::try_parse_from(["assistant", "--model", "chat.gguf"])
+            .expect("memory remains opt-in");
+        assert!(temporary.memory_dir.is_none() && temporary.embedding_model.is_none());
+    }
 }

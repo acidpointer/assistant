@@ -247,3 +247,22 @@ callers must use `Box::new(...)` for those fields; JSON shapes are unchanged.
 need not reject the configuration. Worker operations cap it to actual input space.
 Direct `LLMContext::begin/generate` calls remain strict: supplied prompt plus the
 resolved allowance must fit, or a typed budget error is returned before decode.
+
+
+## Durable memory tool context
+
+With required memory, the runtime installs `memory.search`, `memory.follow`,
+`memory.remember` and `assistant.configure` through the existing typed tool
+registry. `ToolContext::memory()` exposes a host-issued `MemorySession` only for
+admitted product runs; diagnostic/internal evaluations have no such authority.
+Construct ordinary contexts with `ToolContext::new(id, cancellation)`. Adding
+this private capability means external struct literals must migrate to that
+constructor. No binding API changed.
+
+Freeform personality is read from the durable profile for each product run and
+kept in the system prompt through working-context rotation. The optional
+initiative loop uses the same resident backend through `InternalInference::run`
+with a bounded `InternalTask`. It proposes a message without product submission,
+chat hooks, unrelated tools or fabricated user input. Owner settings, source
+navigation and mailbox commands live in `application::OwnerHandle`; transport
+adapters choose access policy and frame them. The local WebUI connects directly. See [using memory](assistant-memory.md).

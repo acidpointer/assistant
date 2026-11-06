@@ -1,6 +1,9 @@
 //! Qualified graph mutations and bounded adjacency reads. Evidence spans are
 //! resolved in immutable UTF-8 sources. Type checks do not prove entailment;
 //! callers must validate model semantics before using the host mutation API.
+//! Navigation checks both adjacency directions while retaining original claims,
+//! qualification and literal provenance. It creates no inverse factual assertion
+//! or causal/transitive conclusion. Hydration stays inside one read snapshot.
 
 use super::super::{
     Claim, ClaimInput, ClaimModality, ClaimObject, Entity, EntityKind, GraphBundle, MemoryError,
@@ -289,21 +292,23 @@ impl Database {
         if !exists {
             return Err(MemoryError::NotFound);
         }
-        let mut pending = VecDeque::from([(start, 0)]);
+        let mut pending = VecDeque::from([(start, 0, Vec::<crate::memory::GraphStep>::new())]);
         let mut visited = BTreeSet::new();
         let mut result = Vec::new();
+        let mut paths = Vec::new();
+        let mut nodes = BTreeSet::from([start]);
         let mut emitted = BTreeSet::new();
         let mut examined = 0;
         let mut truncated = false;
-        while let Some((node, step)) = pending.pop_front() {
-            if step >= depth || !visited.insert((node, step)) {
+        while let Some((node, step, path)) = pending.pop_front() {
+            if step >= depth || !visited.insert(node) {
                 continue;
             }
             if visited.len() > 2048 || examined >= 8192 || result.len() >= 256 {
                 truncated = true;
                 break;
             }
-            let mut stmt=tx.prepare("SELECT c.id,c.revision,c.payload,c.recorded_from FROM claim_versions c WHERE c.principal=?1 AND c.subject=?2 AND c.recorded_to IS NULL AND NOT EXISTS(SELECT 1 FROM evidence e JOIN sources s ON s.principal=e.principal AND s.id=e.source_id AND s.revision=e.source_revision WHERE e.principal=c.principal AND e.claim_id=c.id AND e.claim_revision=c.revision AND s.suppressed=1) ORDER BY c.id LIMIT 257")?;
+            let mut stmt=tx.prepare("SELECT c.id,c.revision,c.payload,c.recorded_from FROM claim_versions c WHERE c.principal=?1 AND (c.subject=?2 OR c.object_node=?2) AND c.recorded_to IS NULL AND NOT EXISTS(SELECT 1 FROM evidence e JOIN sources s ON s.principal=e.principal AND s.id=e.source_id AND s.revision=e.source_revision WHERE e.principal=c.principal AND e.claim_id=c.id AND e.claim_revision=c.revision AND s.suppressed=1) ORDER BY c.id LIMIT 257")?;
             let rows = stmt.query_map(params![principal, node.to_string()], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -332,13 +337,34 @@ impl Database {
                 {
                     continue;
                 }
+                let target = match input.object {
+                    ClaimObject::Reference(target) if input.subject == node => Some(target),
+                    ClaimObject::Reference(_) => Some(input.subject),
+                    _ => None,
+                };
+                let mut trace = path.clone();
+                trace.push(crate::memory::GraphStep {
+                    claim: id,
+                    revision: revision(rev)?,
+                    from: node,
+                    to: target,
+                });
                 if !input.negative
                     && input.modality == ClaimModality::Asserted
-                    && let ClaimObject::Reference(target) = input.object
+                    && input.conditions.is_empty()
+                    && let Some(target) = target
                 {
-                    pending.push_back((target, step + 1));
+                    pending.push_back((target, step + 1, trace.clone()));
                 }
                 if emitted.insert(id) {
+                    nodes.insert(input.subject);
+                    if let ClaimObject::Reference(target) = input.object {
+                        nodes.insert(target);
+                    }
+                    paths.push(crate::memory::GraphPath {
+                        claim: id,
+                        steps: trace,
+                    });
                     result.push(Claim {
                         id,
                         revision: revision(rev)?,
@@ -349,9 +375,36 @@ impl Database {
                 }
             }
         }
+        let mut entities = Vec::new();
+        for id in nodes {
+            let (kind,label):(String,String)=tx.query_row("SELECT n.kind,CASE WHEN EXISTS(SELECT 1 FROM node_sources d WHERE d.principal=n.principal AND d.node_id=n.id) AND NOT EXISTS(SELECT 1 FROM node_sources d JOIN sources s ON s.principal=d.principal AND s.id=d.source_id AND s.revision=d.source_revision WHERE d.principal=n.principal AND d.node_id=n.id AND s.suppressed=0) THEN '[forgotten]' ELSE n.label END FROM nodes n WHERE n.principal=?1 AND n.id=?2",params![principal,id.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            entities.push(Entity {
+                id,
+                kind: decode(&kind)?,
+                label: MemoryText::new(label).map_err(|_| MemoryError::CorruptStore)?,
+            });
+        }
+        let evidence = result
+            .iter()
+            .flat_map(|claim| claim.input.evidence.iter())
+            .map(|evidence| (evidence.source_id, evidence.source_revision))
+            .collect::<BTreeSet<_>>();
+        let mut sources = Vec::new();
+        for (id, revision) in evidence {
+            let (role,observed):(String,Option<i64>)=tx.query_row("SELECT m.role,m.observed_at FROM source_metadata m JOIN sources s ON s.principal=m.principal AND s.id=m.source_id AND s.revision=m.source_revision WHERE s.principal=?1 AND s.id=?2 AND s.revision=?3 AND s.suppressed=0",params![principal,id.to_string(),revision.get()],|r|Ok((r.get(0)?,r.get(1)?)))?;
+            sources.push(crate::memory::SourceAttribution {
+                source: crate::memory::SourceRef { id, revision },
+                role: super::operations::read_tag(&role)?,
+                observed_at: observed,
+            });
+        }
+        tx.commit()?;
         Ok(GraphBundle {
             sequence: if seq == 0 { None } else { Some(revision(seq)?) },
             claims: result,
+            entities,
+            paths,
+            sources,
             truncated,
         })
     }

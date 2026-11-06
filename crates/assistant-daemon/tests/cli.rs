@@ -44,9 +44,52 @@ fn help_describes_normal_server_and_testing_modes() {
         "--no-web",
         "--host",
         "--port",
+        "--memory-dir",
+        "--embedding-model",
         "--interactive",
         "Diagnostic/testing",
     ] {
         assert!(help.contains(flag), "{help}");
     }
+    assert!(!help.contains("--memory-config"), "{help}");
+}
+
+#[test]
+fn memory_flags_require_each_other_and_reject_incompatible_modes_before_loading() {
+    rejects(&["--memory-dir", "private-memory"], "--embedding-model");
+    rejects(&["--embedding-model", "e5.gguf"], "--memory-dir");
+    rejects(&["--memory-config", "obsolete.json"], "unexpected argument");
+    rejects(
+        &[
+            "--memory-dir",
+            "private-memory",
+            "--embedding-model",
+            "e5.gguf",
+            "--no-web",
+            "--raw",
+            "--prompt",
+            "Hello",
+        ],
+        "cannot be used",
+    );
+    rejects(
+        &[
+            "--memory-dir",
+            "private-memory",
+            "--embedding-model",
+            "e5.gguf",
+            "--no-web",
+            "--require-tool",
+        ],
+        "cannot be used",
+    );
+    rejects(
+        &["--no-web", "--prompt", "Hello", "--request-id", "retry"],
+        "--memory-dir",
+    );
+}
+
+#[test]
+fn pairing_command_is_removed() {
+    rejects(&["pair"], "unexpected argument");
 }

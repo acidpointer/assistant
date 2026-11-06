@@ -27,6 +27,9 @@ include = [
 
     # Crate sources
     "build.rs",
+    "native_build.rs",
+    "native_cache.rs",
+    "source_staging.rs",
     "patch_verification.rs",
     "patch_staging.rs",
     "prebuilt_download.rs",
@@ -174,6 +177,8 @@ include = [
 bindgen = { workspace = true }
 cc = { workspace = true, features = ["parallel"] }
 cmake = "0.1"
+ring = "0.17"
+serde_json = "1"
 flate2 = "1.0"
 glob = "0.3.3"
 patch-apply = "0.8.3"
@@ -210,4 +215,8 @@ prebuilt = []
 # Enable dynamic-link feature to build shared libraries instead
 
 [dev-dependencies]
+cc = { workspace = true }
+cmake = "0.1"
+ring = "0.17"
+serde_json = "1"
 patch-apply = "0.8.3"

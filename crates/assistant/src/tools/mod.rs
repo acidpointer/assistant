@@ -21,6 +21,26 @@ pub struct ToolContext {
     pub invocation_id: String,
     /// Shared run cancellation.
     pub cancellation: Cancellation,
+    #[cfg(target_os = "linux")]
+    pub(crate) memory: Option<crate::memory::tools::MemorySession>,
+}
+impl ToolContext {
+    /// Host invocation without durable-memory authority.
+    #[must_use]
+    pub fn new(invocation_id: String, cancellation: Cancellation) -> Self {
+        Self {
+            invocation_id,
+            cancellation,
+            #[cfg(target_os = "linux")]
+            memory: None,
+        }
+    }
+    /// Memory authority attached by the admitted product run, if enabled.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn memory(&self) -> Option<&crate::memory::tools::MemorySession> {
+        self.memory.as_ref()
+    }
 }
 /// A typed asynchronous host function. Argument structs should reject unknown
 /// fields and validate domain-specific constraints before performing side effects.

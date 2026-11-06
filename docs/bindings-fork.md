@@ -486,3 +486,17 @@ It supports multiple distinct keys and rejects invalid keys/values and excessive
 lists before mutation. Call sites must handle the result. See the
 [memory native integration record](memory-native-integration.md) for the selected
 artifact's two explicit overrides and qualification limits.
+
+
+## Native build reuse (2026-11-06)
+
+`build.rs` uses `native_build`, `native_cache` and `source_staging`. Mutable CMake
+trees remain private to Cargo outputs. Supported native Linux GNU/static/Ninja
+configurations may import independently copied, SHA-256-verified native library
+bundles with matching source/toolchain/effective definitions. Rust shims and
+bindgen remain configuration-local. Unsupported configurations take the normal
+CMake path. `LLAMA_NATIVE_CACHE=off` disables bundle reuse; compiler launchers are
+optional. Source updates preserve timestamps for unchanged patched files; composed
+patch verification still runs before publication. Patch 0012 bounds nested
+shader jobs and preserves unchanged generated C++ output; it does not change
+shader variants or numerical flags. The upstream submodule pin is unchanged.

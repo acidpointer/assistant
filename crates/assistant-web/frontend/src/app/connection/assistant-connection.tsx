@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import * as v from 'valibot';
-import { request } from '@/shared/api';
+import { request, response, readEvents, apiVersion } from '@/shared/api';
 import {
   chatSnapshotSchema,
   chatUpdateSchema,
   replaceChat,
+  replaceNotices,
   applyChatUpdate,
   connection,
 } from '@/entities/chat';
@@ -75,6 +76,29 @@ function startConnection() {
     const current = epoch;
     controller = new AbortController();
     try {
+      if (apiVersion() === 2) {
+        const stream = await response('/events', { signal: controller.signal });
+        if (disposed || current !== epoch || !stream.body) return;
+        await readEvents(stream.body, controller.signal, (type, data) => {
+          if (disposed || current !== epoch) return;
+          const value: unknown = JSON.parse(data);
+          if (type === 'snapshot') {
+            const snapshot = v.parse(snapshotSchema, value);
+            replaceChat(snapshot);
+            updateTelemetry(snapshot.resources, snapshot.inference);
+            delay = 500;
+          } else if (type === 'notices') {
+            replaceNotices(value);
+          } else if (type === 'update') {
+            const telemetry = v.safeParse(telemetrySchema, value);
+            if (telemetry.success)
+              updateTelemetry(telemetry.output.sample, telemetry.output.inference);
+            else applyChatUpdate(v.parse(chatUpdateSchema, value));
+          }
+        });
+        if (!disposed && current === epoch) recover();
+        return;
+      }
       const bootstrap = v.parse(
         bootstrapSchema,
         await request('/bootstrap', { signal: controller.signal }),
