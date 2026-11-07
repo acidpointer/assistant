@@ -2,171 +2,142 @@
 
 ## Total architecture
 
-This is the **target architecture**, combining existing foundations with proposed
-soul behavior. The soul is the cooperation of durable state, host-controlled
-lifecycle, and bounded model evaluations. It is not an additional model or a
-second daemon. The boxes are logical responsibilities, not a request to create
-a service, thread, or crate for every box.
+**Selected direction: one continuing attention loop, using the existing application
+coordinator and model/tool runner.** Personality, recollection, reflection, and
+initiative are ways that the same loop uses its state. They do not need independent
+decision pipelines. This revises the earlier diagram and its mandatory
+interpretation-before-every-answer proposal.
 
-Blue boxes are host logic, green boxes are durable data or derived indexes, and
-purple boxes are the two existing models. Orange marks the currently unqualified
-conversational interpreter. Solid arrows show control/data paths; dotted arrows
-request an evaluation from the shared chat worker, with results returning to the
-requesting component. Outgoing paths depend on the caller: saving a note does not
-automatically generate a reply. The detailed transaction order is explained below.
+The earlier design made each correctness concern into a separate processing phase,
+then introduced more records and coordination to connect those phases. Calling
+the boxes “logical responsibilities” did not remove that complexity. It also made
+an unqualified classifier a dependency of ordinary conversation. The simpler
+direction follows the repository's accepted
+[small assistant loop decision](decisions/0007-universal-assistant-memory.md).
 
 ```mermaid
-flowchart TB
-    Client["User-facing clients<br/>WebUI now; future local adapters"]
-    API["Owner facade and admission<br/>Request identity, bounds, cancellation"]
-    Client <--> API
+flowchart TD
+    Inputs["Changing inputs<br/>User, enabled observations, time, action results"]
+    Attend["Attend<br/>Update working context and choose current focus"]
+    Model["Evaluate when useful<br/>Resident LFM3: answer, investigate, revise or wait<br/>20-30 tokens/s; about 2 GB VRAM baseline"]
+    Apply["Apply the chosen step<br/>Checked tool or state edit; reply or silence<br/>Retain actual outcome"]
+    Wait["Wait with focus retained<br/>Wake on new input or a scheduled review"]
+    State[("Existing local memory<br/>Character, experiences, notes<br/>Small focus record; accepted commitments")]
+    Recall["Bounded recall helper<br/>Lexical search and CPU multilingual-e5-small"]
+    User["User-facing clients<br/>Conversation, saved outcomes, controls"]
 
-    subgraph Core["One application coordinator: foreground conversation"]
-        Turn["Admit and prepare turn<br/>Retain input; load active state and reply focus"]
-        Interpret["Interpret requested changes<br/>Behavior, corrections, commitments<br/>UNQUALIFIED model proposals"]
-        Validate["Host validation<br/>Kind-specific schema, source and target references<br/>Scope rules, revisions, capacity"]
-        Writer["Serialized transactional writer<br/>Final eligibility and revision checks<br/>Effects plus receipt; retry deduplication"]
-        Compose["Compose bounded response context<br/>Accepted character, current request<br/>Relevant evidence and actual effect receipt"]
-        Answer["Generate conversational response"]
-        Tools["Typed tool dispatcher<br/>Registered Rust handlers<br/>Arguments, authority and execution limits"]
-        Output["Publication and settlement<br/>Privacy and revision checks<br/>Stream, durable outcomes, reconnect"]
-
-        Turn --> Interpret --> Validate
-        Validate -->|"accepted batch or no-change receipt"| Writer
-        Validate -->|"clarification or failure"| Output
-        Writer -->|"committed state and receipt"| Compose
-        Compose --> Answer --> Output
-        Answer -->|"proposed tool call"| Tools
-        Tools -->|"attributed result; refresh changed state"| Compose
-        Output -->|"settle foreground output"| Writer
-    end
-
-    API -->|"conversation"| Turn
-    API -->|"typed edit, cancel, snooze or forget"| Validate
-    Turn -->|"durable admission before interpretation"| Writer
-    Output --> Client
-
-    subgraph Memory["Local persistence and recall"]
-        DB[("SQLite: authoritative state<br/>Original conversation and evidence<br/>Directives, scopes and revisions<br/>Commitments, causes and occurrences<br/>Notes, typed links, jobs, receipts and timeline")]
-        Index[("Rebuildable search indexes<br/>Lexical index and E5 vectors")]
-        Recall["Bounded recall<br/>Direct state lookup; lexical and dense search<br/>Eligibility filtering and source attribution"]
-        E5["multilingual-e5-small<br/>One CPU embedding worker"]
-
-        DB -->|"current state and source records"| Recall
-        DB -->|"lexical indexing"| Index
-        DB -->|"eligible passage indexing"| E5
-        E5 -->|"passage vectors"| Index
-        Recall <-->|"query embedding"| E5
-        Index -->|"ranked candidates"| Recall
-    end
-
-    Writer --> DB
-    Recall -->|"active state, focus and offered references"| Turn
-    Recall -->|"bounded relevant evidence"| Compose
-
-    subgraph Background["Event-driven host services: no continuous model loop"]
-        Clock["Host clock, resume and change events"]
-        Due["Commitment scheduler<br/>Due time, occurrence identity<br/>Claim fence, catch-up and cancellation"]
-        Maintain["Optional memory maintenance<br/>Coalesced source windows<br/>Notes, links and coverage cursor"]
-        Initiative["Optional initiative<br/>Eligible cause; draft or silence<br/>Cooldown, dismissal and reply identity"]
-
-        Clock --> Due
-        DB -->|"durable schedules"| Due
-        DB -->|"eligible original-source changes"| Maintain
-        DB -->|"unresolved causes and review policy"| Initiative
-        Due -->|"basic reminder: no LLM required"| Writer
-        Maintain -->|"restricted note and link proposals"| Validate
-        Initiative -->|"bounded proposed outreach"| Validate
-    end
-
-    Writer -->|"committed initiated message"| Output
-
-    subgraph Inference["Shared local chat inference"]
-        Worker["Worker and resource admission<br/>Foreground first; bounded optional work<br/>One chat context reused sequentially: target design"]
-        LFM["Resident LFM3<br/>Interpret, phrase replies and synthesize<br/>Baseline: 20-30 tokens/s; about 2 GB VRAM"]
-        Worker <--> LFM
-    end
-
-    Interpret -.-> Worker
-    Answer -.-> Worker
-    Maintain -.-> Worker
-    Initiative -.-> Worker
-
-    classDef host fill:#edf5ff,stroke:#517da5,color:#142b41;
-    classDef data fill:#edf8ef,stroke:#4d875c,color:#173e22;
-    classDef model fill:#f1ebff,stroke:#8462aa,color:#35244b;
-    classDef pending fill:#fff1d9,stroke:#b47b22,color:#563807;
-    class API,Turn,Validate,Writer,Compose,Answer,Tools,Output,Recall,Clock,Due,Maintain,Initiative,Worker host;
-    class DB,Index data;
-    class LFM,E5 model;
-    class Interpret pending;
+    Inputs --> Attend
+    Attend -->|"reasoning or conversation needed"| Model
+    Attend -->|"typed edit or due reminder"| Apply
+    Attend -->|"nothing useful now or budget spent"| Wait
+    Model --> Apply
+    Apply -->|"result or bounded useful continuation"| Attend
+    Wait -->|"change or review becomes due"| Attend
+    State -->|"character and current focus"| Attend
+    State --> Recall
+    Recall -->|"relevant attributed evidence"| Model
+    Apply -->|"accepted changes and experiences"| State
+    Apply -->|"visible reply or durable notice"| User
+    User -->|"message, correction or control"| Inputs
 ```
 
-### How the paths work
+The cycle runs in the host; it is not one endless LLM generation. Native inference,
+embedding, and database I/O keep their existing execution owners so the coordinator
+can still receive input and cancellation while they work. There is one owner of
+attention and semantic action selection, one active evaluation at a time, and one
+shared path for applying effects. The arrows do not imply a service for each box.
 
-1. **Conversation and immediate adaptation.** Admission persists the original
-   input and reserves capacity through the writer before interpretation starts.
-   Preparation loads active directives, reply focus, and bounded offered records.
-   LFM3 proposes changes privately. The host validates them; the writer atomically
-   applies accepted effects and records the outcome. The response composer then
-   reads the accepted revision and receipt. LFM3 generates the visible answer from
-   that context. A no-change outcome still has a processing receipt. A failure or
-   ambiguity produces an honest host outcome, with no speculative mutation.
-2. **Memory and recall.** Original sources remain available independently of
-   generated notes. Lexical and E5 indexes identify candidates; current eligibility
-   and provenance determine what can enter context. E5 encodes both queries and
-   passages using their respective preprocessing. It does not decide truth,
-   behavioral scope, ownership, or permissions. Search indexes can be rebuilt;
-   they are not the authoritative conversation or personality.
-3. **Tools.** Response generation may propose a registered tool call. Typed Rust
-   handlers validate and execute it within the operation's authority and limits.
-   Tool results return as attributed data. If a tool changes accepted behavior,
-   the composer refreshes it before the next evaluation. A tool name, argument,
-   or remembered instruction cannot select arbitrary executable code.
-4. **Reminders and initiative.** An accepted commitment is stored before it is
-   acknowledged. When due, the host scheduler commits a basic reminder and its
-   occurrence receipt, then exposes it through the output path. This works without
-   chat inference or an open browser, provided the daemon and storage are running.
-   Optional initiative and stylistic drafting may call LFM3, but cannot delay the
-   basic reminder. A desktop alert requires a delivery adapter; a durable timeline
-   message does not prove that the user saw it.
-5. **Background organization.** Changed sources enqueue bounded maintenance.
-   Optional work shares the same LFM3 weights, yields to foreground work, and may
-   be deferred under pressure. Maintenance has a separate restricted note/link
-   validator: sharing the validation box does not grant permission to change
-   personality, schedule commitments, or execute tools. Deferred synthesis leaves
-   original-source recall available and reports coverage lag.
-6. **Control, recovery, and privacy.** Explicit typed edits bypass interpretation
-   but retain validation and transactional checks. Stop cancels generation; it
-   does not undo already committed effects. Retries reconcile durable receipts.
-   Forgetting changes eligibility and invalidates affected work before subsequent
-   publication. Foreground token deltas remain provisional until settlement;
-   initiated messages are durable before exposure. Private proposals and internal-
-   task reasoning never enter the visible-output path.
+### What persists between steps
 
-### What exists and what the diagram still requires
+| State | Purpose and smallest representation |
+| --- | --- |
+| Character | Existing editable freeform profile, with a revision. Apply it in every evaluation; do not rediscover it from history. Local instructions can overlay it without rewriting the base. |
+| Experience | Existing attributed user/assistant/tool sources, notes, links and search. Original inputs remain available even if no note is generated. |
+| Focus | A short current question or intention, source references, next useful step or waiting condition, and revision. Keep one active focus and a small bounded parked list; start with at most eight total. No ontology of human interests or emotions. |
+| Commitments | Accepted obligations with due time and occurrence identity when scheduling is implemented. These are enforceable host work, distinct from an assistant's tentative question. |
 
-| Boundary | Existing foundation | Extension represented in the diagram |
-| --- | --- | --- |
-| Clients and owner facade | WebUI, HTTP/SSE, application coordinator and owner operations. | Unified soul inspection, clarification/reply identities and additional typed controls; other transports are future adapters. |
-| Durable state | SQLite writer, retained sources, command receipts, graph, profile and notices. | Granular directives, scoped replacements, reliable commitments/occurrences and integrated timeline state. |
-| Recall | Lexical search, resident CPU E5 and bounded source recall. | Matching-span improvements, explicit coverage and consistent correction/deletion projection. |
-| Foreground processing | Chat runner, restricted internal inference and native worker. | Required interpretation, same-turn projection refresh and one-context foreground lease reuse. The unchanged background-only internal API cannot provide that path. |
-| Background behavior | Existing discretionary consideration and indexing. | Durable due scheduler, restricted automatic note formation and cause-based initiative. |
-| Lifecycle and limits | Bounded requests, cancellation, existing storage/native limits. | Core readiness independent of model startup, shared soul accounting and the proposed pressure/degradation behavior. |
+A focus is a working summary, not a transcript of private reasoning and not a new
+instruction from the user. It can survive a context reset or restart. Changing
+wording alone is not progress. Completing an investigation, obtaining a result,
+resolving a question, or identifying a concrete next observation can be progress.
+The host bounds continuation even when the model claims to have made progress.
 
-The diagram preserves two important limits. Host validation can enforce references,
-allowed operations and resource boundaries; it cannot prove that a well-formed
-proposal understood the user correctly. Automatic interpretation and generated
-maintenance remain subject to the behavioral gates in section 30. Also, the
-observed 2-GB VRAM footprint is a planning baseline, not proof of total RAM use or
-space for another context. Single-context reuse and independent core startup are
-required implementation changes, not capabilities implied by drawing the boxes.
+### How the continuing loop behaves
 
-Implementation ownership remains the existing application coordinator and memory
-store. The exact code locations and hazards are mapped in section 21; this diagram
-introduces no additional model, vector server, permanent chat-model copy, or
-parallel product actor.
+1. **Notice changes.** Retain admitted conversation and read bounded changes from
+   enabled sources. Coalesce replaceable observations by source/key; preserve
+   commands and action results with their identities. Keep attribution. An external
+   observation supplies data, not new permissions or personality instructions.
+2. **Attend to one thing.** Handle controls and due host work promptly. User input
+   takes model priority; otherwise resume a relevant focus, review changed sources,
+   or consider a due question. Initially use FIFO among eligible parked items,
+   with user-directed focus first. No LLM router or embedding-based importance
+   system is required to select the next item.
+3. **Take a useful step.** Compose character, focus, recent changes and bounded
+   evidence. Use the normal model/tool loop for a response, lookup, note, question,
+   or state-edit proposal. A typed edit or basic due reminder needs no generation.
+   Routine conversation has no separate compulsory classification pass.
+4. **Apply and observe the result.** The host checks the selected operation's
+   authority, arguments, revisions and limits. Persist an accepted effect and its
+   receipt together. Refresh changed state before the next evaluation. Actual tool
+   results and changed focus return to the same loop; they do not start another
+   agent with a fresh allowance.
+5. **Continue or wait.** A useful internal next step may run without new external
+   input, within the current activation's limits. Otherwise retain the question
+   and wait for an observation, user response or appropriate review time. Silence
+   is a valid decision. An unchanged focus cannot repeatedly wake itself merely
+   because the last generation finished.
+
+This captures the useful part of the human analogy: continuity comes from what
+remains relevant while inputs change. The assistant may reconsider an unresolved
+question as time passes, or connect new information to it. It need not simulate
+a person's entire internal monologue. This is a functional design, not a claim
+about consciousness or a scientific model of human personality.
+
+### What is removed, and what still costs work
+
+| Earlier proposal | Revised direction |
+| --- | --- |
+| Required interpreter, then reply on every user turn | Normal response/tool loop; extra evaluations only for actual actions or useful continuation. No mandatory no-change classifier or repair pass. |
+| Separate reflection, maintenance and initiative decision paths | Different causes for selecting work in the same loop, using one context composer and action boundary. |
+| A table and lifecycle for every conceptual concern | Reuse profile, sources, notes, commands and notices. Add a bounded focus record first; add scheduling records only with scheduling. Section 24 replaces the previous mandatory table inventory. |
+| Personality reconstruction and semantic routing | Pin accepted character; use simple host attention order and bounded recall. |
+| A large isolated classification corpus as the entry gate | Shared host-boundary tests and a few complete user journeys. Preserve failed model experiments as evidence, not as a reason to build more pipelines. |
+
+One loop does not mean one model call can safely do every task. An action may need
+a tool result before the assistant can describe its success. Conversely, making
+tool use optional leaves a real omission risk: LFM3 may answer without saving a
+requested change. The previous mandatory classifier also made semantic errors.
+Neither architecture proves understanding. Qualification must check natural
+adoption and persistent effects through the chosen loop; authoritative saved
+status comes from the host receipt, never from fluent prose alone.
+
+Private focus updates and optional deliberation must stay out of the ordinary
+visible event sink. The current runner can publish text before dispatching tools;
+the implementation must not treat pre-tool text as proof of a saved effect.
+These are small but necessary integration changes, not capabilities already
+established by this drawing. Section 21 identifies the actual code boundaries.
+
+### Debugging and minimum evidence
+
+Explain every step with one bounded diagnostic record: activation/cycle identity,
+cause, input and state revisions, selected focus, action/result identity, and
+continue/wait reason. Content is private by default. Reproduce host behavior with
+a fake clock and recorded boundary results; do not expect rerunning a nondeterministic
+model to reproduce identical text. This needs no production event-sourcing engine.
+
+The first vertical slice is: a user introduces a topic, the assistant retains a
+question, a later permitted input changes its understanding, it updates or answers
+through the same loop, and it then waits. Include interruption and restart. Add
+one receipt/retry test, one stale-or-forgotten-result test, and one exhausted-budget
+test at shared boundaries. Add calendar tests when scheduling is implemented.
+Section 30 separates these host checks from actual-model behavioral evidence.
+
+The remaining sections preserve research findings and feature-specific details.
+Sections 8, 10, 20, 23, 24 and 29 define the revised implementation direction.
+Detailed recurrence, granular directive history and bulk-control contracts are
+references for those capabilities, not prerequisites for the first working loop.
+No application code is changed by this research revision.
 
 ## Purpose and status
 
@@ -195,8 +166,7 @@ baseline for design estimates rather than treating current throughput as unknown
 Section 27 derives its consequences; semantic qualification and added workflow
 latency remain separate questions.
 
-Sections 20–31 make the proposal concrete enough to divide into implementation
-changes: selected contracts, code integration, user journeys, processing and
+Sections 20–31 retain implementation guidance and feature references: selected contracts, code integration, user journeys, processing and
 storage protocols, retrieval, scheduling, budgets, privacy, migration, and
 acceptance. A selected design is not a measured capability. The readiness ledger
 distinguishes questions answered by source inspection from experiments that must
@@ -350,10 +320,11 @@ quality claim.
 
 ### Must-fix gaps
 
-The required changes are automatic state interpretation, immediate application of
-accepted personality changes, automatic useful memory maintenance, durable
-commitments, and coherent initiated dialogue. These are necessary product
-behaviors, not optional polish.
+The gaps are reliable conversational state changes, immediate activation of
+accepted edits, useful recall, retained focus and coherent initiated dialogue.
+Durable commitments add a scheduling capability. These are behavioral outcomes;
+they do not prescribe a separate interpreter or maintenance service. Optional
+note formation should earn its cost through better downstream recall.
 
 More elaborate simulated emotions, broad autonomous planning, additional models,
 external integrations, and advanced graph visualization can follow independently.
@@ -452,15 +423,15 @@ None demonstrates that arbitrary conversation can be interpreted without error.
 
 ## 4. A small conceptual model
 
-Use three durable concepts: active state, memory, and commitments. A single
-coordinator connects them to the existing runtime. These are conceptual ownership
-boundaries, not a requirement for separate services or databases.
+Use character, retained focus and experience in one continuing loop. Accepted
+commitments extend it with enforceable future work. The existing coordinator owns
+attention; these state distinctions do not require separate services or databases.
 
 | Concept | Purpose | Representation |
 | --- | --- | --- |
-| Active state | Determine how the assistant behaves and what is currently salient. | Small revisioned projection of active directives and selected context, referencing durable sources. |
+| Character and focus | Determine how the assistant behaves and what it is considering. | Existing profile plus a bounded revisioned focus record and applicable local instructions. |
 | Memory | Preserve experiences and interpretations beyond working context. | Existing attributed sources, freeform notes, search index, and graph links. |
-| Commitment | Preserve an intention that requires future execution or reconsideration. | Freeform purpose plus typed trigger, lifecycle, provenance, and occurrence identity. |
+| Commitment | Preserve an accepted obligation requiring future execution. | Freeform purpose plus typed trigger, lifecycle, provenance, and occurrence identity. |
 
 An item can participate in more than one view. A standing behavioral request is
 remembered as an experience and referenced by active state. A commitment is
@@ -490,59 +461,41 @@ or become evidence of real-world events.
 
 ### What counts as learning
 
-In the initial design, learning means updating durable notes, active directives,
-and commitments. It does not imply modifying model weights. A learned workflow is
+In the initial design, learning means revising focus, notes and accepted behavior
+from experience, and maintaining accepted commitments. It does not imply modifying model weights. A learned workflow is
 declarative knowledge about using existing capabilities; it cannot install code
 or turn retrieved text into an executable program.
 
 ## 5. Active state and personality
 
-### Store directives individually
+### Preserve a small freeform character
 
-A directive contains freeform text, scope, lifecycle, source attribution, and a
-revision. A directive may explicitly supersede another directive. The host owns
-identities and lifecycle metadata; the model proposes the semantic relationship.
-
-This avoids replacing the entire personality description whenever one aspect
-changes. A small adjustment should not erase unrelated voice, relationship, or
-interaction preferences. The prompt renderer composes active directives into a
-bounded behavioral view.
+Start with the existing revisioned profile. A focused edit must preserve unrelated
+instructions; a temporary turn/segment overlay must leave the base intact. Use
+expected revisions and explicit edit intent. Do not split legacy prose into
+invented individual user commands merely to fit a proposed schema.
 
 Freeform content is essential. Numerical personality traits, emotional axes,
 character classes, and supported-interest lists are not required. Operational
-enums for scope or status do not constrain the content of a personality.
+scope and expiry metadata can constrain lifecycle without constraining personality.
+Individually editable directives become useful if inspection/undo needs them;
+they are a representation option, not a prerequisite for the continuing loop.
 
 ### Scope and precedence
 
-Distinguish persistent assistant-wide directives, conversation-scoped directives,
-and transient directives with a defined ending condition. A temporary role
-overlays the persistent character and can be removed independently.
+Host authority and resource limits remain outside model prose. A current direct
+request can change the relevant behavior; explicit user direction outranks an
+assistant inference. Narrower temporary instructions apply only for their lifetime.
+Unrelated instructions survive local edits. Detecting conflicts in freeform text
+is still a semantic task; a deterministic renderer is not a semantic conflict solver.
 
-Resolution follows these proposed rules:
-
-1. Host authority and resource limits remain enforced outside model prose.
-2. Within the relevant owner scope, a current explicit instruction can replace an
-   earlier instruction about the same behavior.
-3. A narrower active scope takes precedence for its duration.
-4. Explicit user direction takes precedence over an inferred preference.
-5. Assistant-generated appraisals do not override explicit user direction.
-6. Unrelated directives coexist; recency alone does not erase them.
-
-Detecting whether two freeform directives conflict remains a semantic task.
-An uncertain interpretation should retain uncertainty or seek clarification when
-the ambiguity materially affects behavior. It must not masquerade as a perfectly
-deterministic conflict solver.
-
-The host stores accepted replacement relationships and composes their result
-deterministically. It does not repeatedly ask the model to rediscover the entire
-personality from history.
-
-An overlay must not permanently deactivate the instruction it temporarily
-replaces. Scope the replacement edge to the overlay: when it expires, the base
-becomes eligible again. An explicit persistent replacement retires the specified
-base revision. A persistent edit made while an overlay is active updates the base
-that will be revealed later; it does not extend the overlay's lifetime. Undo is a
-new conditional edit, not a rewind of every subsequent revision.
+Render the accepted base plus applicable overlays in a stable order. A turn
+overlay lasts through its tool continuations; a segment overlay ends with that
+segment. Expiry reveals the currently accepted base, including any intervening
+persistent edit. Undo is a conditional compensating edit, not a rewind of all
+later changes. Arbitrary scoped replacement graphs and granular revision history
+are deferred until an actual editing need justifies them. Section 24 preserves
+their conditional contract for that later extension.
 
 ### Language and presentation
 
@@ -572,22 +525,17 @@ be persisted as a global personality change unless the user requests that scope.
 
 ### Immediate activation
 
-The invariant is commit before **publication of a dependent reply**. The selected
-two-phase implementation makes this simple: commit the change, then prepare and
-generate the reply from the resulting revision. A future combined protocol may
-generate a private draft earlier, but must withhold it until validation and commit
-succeed and its behavior agrees with the accepted projection. Generating an
-acknowledgment is never evidence that a change was saved.
+The current user request can affect conversational behavior directly in context.
+To claim a persistent change was saved, require an accepted host effect. After
+a state-changing tool succeeds, refresh the run's profile/focus before the next
+evaluation and describe the actual receipt. No separate interpreter is required
+on turns without an action. The existing cached profile needs this refresh change.
 
-A model-selected state mutation during tool use must trigger context refresh
-before another model evaluation. A run must not retain an obsolete personality
-snapshot after acknowledging a successful change.
-
-Concurrent edits need an explicit activation boundary. A reply can use one
-committed revision consistently; a later edit invalidates an unpublished draft.
-Already displayed text cannot be retroactively changed. The runtime should
-cancel or finish at a documented boundary and apply the new revision to the next
-evaluation, rather than silently mixing incompatible state snapshots.
+A reply uses one accepted revision consistently. A concurrent edit invalidates
+dependent unpublished work; already displayed text cannot be changed retroactively.
+Cancel or finish at a documented boundary, then use the new revision. Generated
+agreement is not evidence of persistence, and an absent tool call is a possible
+missed request. Section 8 states that limitation explicitly.
 
 ### Evolution, disposition, and drift
 
@@ -621,19 +569,18 @@ input and visible assistant output. An additional note is not necessary to prove
 that the original conversation was stored. A failed interpretation must not
 erase or prevent later retrieval of an already accepted original source.
 
-The soul system adds a required opportunity to interpret each accepted user
-event. It does not require a new synthesized fact for every utterance. Empty
-updates are valid; routine language should not inflate the graph with redundant
-summaries.
+The normal loop considers the current user input together with its focus and
+character. It need not produce a separate interpretation record or a synthesized
+fact for every utterance. Routine conversation should not inflate the graph with
+redundant summaries.
 
 ### Form useful notes automatically
 
-Required foreground interpretation proposes only changes that must affect the
-current response: explicit directives, applicable corrections, commitment edits,
-and resolution of an outstanding clarification. General notes and navigation
-links belong to a separately budgeted automatic maintenance phase. The user
-should not have to explicitly request either internal operation. Raw sources and
-recent discourse remain available while maintenance is pending.
+An actual behavior, correction or commitment action settles before a dependent
+success acknowledgment. General notes and navigation links can be selected during
+idle attention over changed sources, using the same action loop and an optional
+work allowance. The user need not request internal organization. Raw sources and
+recent discourse remain available when no note step is selected or it fails.
 
 Use the current message, a bounded recent conversational window, active state,
 and a small set of relevant existing records. Isolated sentence extraction loses
@@ -668,11 +615,11 @@ ontology of every possible condition is unnecessary.
 
 ### Consolidation and reflection
 
-Optional background consolidation can merge redundant interpretations, improve
+An optional loop step can merge redundant interpretations, improve
 navigation links, and keep active context concise. It must preserve the original
 sources and the distinction between observation and synthesis.
 
-Run consolidation only for eligible changed material, within a bounded budget,
+Select consolidation only for eligible changed material, within a bounded budget,
 and at lower priority than interaction. Persist progress so restart neither
 discards work nor repeatedly reprocesses the same material. Output from a
 consolidation job must not unconditionally schedule another consolidation job.
@@ -744,119 +691,58 @@ memories. No new embedding model is required by this proposal.
 
 ## 8. Conversation processing and model protocol
 
-### Recommended foreground lifecycle
+### Selected foreground lifecycle
 
-```mermaid
-flowchart TD
-    A[Admit and retain user event] --> B[Load bounded active state and relevant memory]
-    B --> C[Interpret immediate behavior and commitment changes]
-    C --> D[Validate and commit state and commitments]
-    D --> E[Compose current behavior and evidence]
-    E --> F[Generate and stream response]
-    F --> G[Retain visible output and settle operation]
-    D --> H[Wake scheduler]
-    G --> I[Queue bounded automatic memory maintenance]
-```
+Admit and retain input, compose the current character/focus/evidence, and enter
+the existing response/tool loop. If the model selects an action, validate and
+apply it through its typed handler, append the actual receipt, refresh changed
+state, and continue within the same root limits. If it answers directly, settle
+the response. Ordinary conversation needs no preliminary no-change decision.
 
-Admission identity remains stable across retries and client reconnects. The
-interpretation phase returns bounded proposed changes or no changes. The host
-validates and commits accepted mutations against the revisions that were read.
-Only then does response generation use the resulting active state.
+Personality changes, corrections and commitments use the same action mechanism
+as other tools. Direct typed owner edits bypass interpretation. A current user's
+temporary wording request is already in the current prompt; following it does
+not require first synthesizing a new persistent profile. Durable changes do
+require a successful host effect before claiming they were saved.
 
-The reply receives a compact receipt describing what actually changed. It can
-acknowledge a saved directive or commitment without inventing success. Private
-state-processing instructions and intermediate reasoning do not become visible
-conversation messages or independent user evidence.
+### The deliberate tradeoff
 
-### Alternatives
+This replaces the mandatory structured interpreter proposed earlier. Its tested
+variants did not establish reliable intent or scope recognition (section 30),
+and every pass adds decode and potentially full prefill cost. Forcing a native
+tool call with a no-op option would recreate the same classifier under another
+name. No such universal gate is selected.
 
-| Approach | Benefit | Cost or failure mode | Position |
-| --- | --- | --- | --- |
-| Optional tools in ordinary conversation | Uses the current interface and supports streaming. | Essential memory and state changes can be omitted; persistence alone does not guarantee immediate adoption. | Retain as a capability, not the only implementation of the product contract. |
-| Periodically reread freeform state and task notes | Flexible and initially small. | Clock reasoning, repeated work, large rereads, and missed commitments become model responsibilities. | Useful for bounded discretionary review, insufficient for scheduled execution. |
-| Required state interpretation before response | Explicit activation boundary, narrow task, state committed before speaking. | Additional inference and possible prompt prefill; semantic interpretation can still fail. | Recommended initial correctness-oriented design. |
-| Single structured output containing updates and response | Fewer evaluations and potentially lower latency. | Validation and streaming are coupled; rejected mutations can make the already generated response inconsistent. | Alternative if measured latency requires it and publication rules remain correct. |
-| Asynchronous updates after response | Keeps response generation responsive. | Same-turn personality adoption and truthful acknowledgments cannot depend on eventual updates. | Appropriate for optional consolidation, not required behavioral effects. |
+The ordinary action path must still demonstrate that LFM3 actually chooses the
+needed action and preserves unrelated state. Optional tool omission is a known
+failure category, not solved by this simplification. Test the complete interaction
+before promising automatic persistence. A narrow task-specific prompt or tool
+description may be improved if a journey fails; do not immediately add another
+permanent preprocessor. A model that merely agrees with the user has not saved
+anything. Receipt-derived status makes actual outcomes inspectable, but cannot
+prove that all omitted requests were detected.
 
-The architecture must not depend on a particular serialization trick. Keep the
-state transition and its commit boundary stable while allowing the model protocol
-to evolve. A combined protocol must buffer dependent output until validation and
-commit succeed; it cannot publish a promise first and attempt persistence later.
+### Publication and continuation
 
-### Which latency optimization is actually available
+The host owns truthful effect receipts. An effectful tool call may require a
+second evaluation to phrase a reply using its result. Do not generate a private
+all-purpose JSON bundle containing mutations, reasoning and the entire answer.
+Keep the existing native tool protocol and bounded typed handlers.
 
-Use the two-phase path first, with the foreground lease correction in section 21.
-It needs no speculative state, incremental mutation parser, or native generation
-checkpoint. Its cost includes two prompt evaluations, not just the proposal's
-output tokens. The following alternatives have distinct implementation costs:
+The current runner publishes model text before tool dispatch, and streamed
+worker deltas can arrive earlier still. Any private focus proposal must use a
+private sink from the start. Text accompanying an effectful call cannot serve as
+its success receipt. If dependent prose must be held until that call settles,
+buffer the bounded action turn before the event sink; merely filtering the final
+UI is insufficient. Ordinary text with no parsed action can still make a false
+claim: semantic evaluation remains necessary. Do not promise a generic host
+validator that detects every unsupported sentence.
 
-| Protocol | First visible response | Required implementation and limitation |
-| --- | --- | --- |
-| Separate proposal, then streamed answer | After interpretation, commit, and answer prefill. | Selected initial path; reuse one native allocation but expect cache reset/re-prefill. |
-| One complete JSON object containing changes and reply | After the entire object finishes and commits. | Can use completed restricted inference, but must validate both parts and discard an inconsistent draft. Saves an evaluation while withholding the entire answer. |
-| Private proposal header, followed by a streamed body | After a complete header is admitted and the body becomes eligible. | Requires new framing and publication control before ordinary text events. It is not implemented by attaching a JSON schema to today's chat stream. |
-| Private no-change header, then body; real changes use the separate answer path | Common no-change turns may avoid a second prefill. | A candidate optimization only. Requires reliable interpretation, bounded header detection, and an explicitly supported continuation parser. Changed-state turns still recompose from committed state. |
-| Required native tool call with a no-op alternative | After tool selection/settlement and continuation. | Existing `RequireFirst` can force a call, not the correct call or scope. No-op is still a semantic classification. Cache savings need actual token-prefix evidence. |
-
-A fully buffered 256-token reply alone withholds about 8.5–12.8 seconds of decoding
-at the accepted baseline, before proposal and prefill costs. Thus fewer model
-evaluations do not automatically improve time to first useful text. Compare first
-visible response, total completion, correct effects, and peak memory together.
-
-For a future header protocol, require a complete bounded frame, strict duplicate-
-key/schema/evidence checks, and transaction admission before releasing any dependent
-body. An arbitrary closing brace is not a frame boundary: strings, escaping,
-nested objects, UTF-8 splits, and additional fields matter. A private byte limit
-and root deadline bound waiting. A rejected, stale, cancelled, or truncated header
-cannot release its already-generated body. Pending body bytes count against the
-same output/memory allowance. If the proposal needs normalized host facts such as
-a resolved deadline, a returned identity, or a changed scope, discard the dependent
-draft and recompose with the actual receipt. Never interpolate a guessed receipt.
-
-The current worker already parses incremental model content and emits text deltas;
-`EventSink::emit` then records visible text before invoking the client handler.
-Implement any private framing **before** that route, including suppression of
-reasoning deltas. Filtering JSON in the WebUI would be too late and would not
-protect other transports or memory. See `step`/`finish_turn` in
-[`runtime/worker.rs`](../crates/assistant/src/runtime/worker.rs) and `EventSink` in
-[`chat/mod.rs`](../crates/assistant/src/chat/mod.rs). The existing restricted
-internal path uses a private sink; preserve that separation when sharing a
-foreground lease. No combined protocol is selected without measured semantic and
-latency improvement over the simple path.
-
-### Keep interpretation small
-
-The required phase should answer which explicit behavioral items changed,
-whether currently applicable evidence was corrected, and whether a commitment
-must be created, amended, or cancelled. General note formation is independent.
-It should not reconstruct the user's entire knowledge graph or generate a new
-personality biography on every turn.
-
-Use a small typed mutation vocabulary with freeform content. Return only changed
-items. References supplied to the model should resolve through a host-owned
-allowed reference set. Model-generated identifiers cannot grant ownership or
-authorize access to an arbitrary stored record.
-
-The mutation vocabulary should be derived using the existing serialization and
-schema machinery. A new language, parser framework, or procedural macro is not
-justified by the first implementation.
-
-### Failure semantics
-
-Malformed or truncated proposals are not mutations. A bounded retry can be
-appropriate for a recoverable formatting error; retries must share the original
-operation identity and allowance. Repeated attempts cannot create fresh budgets.
-
-An unprocessed event stays identifiable as such. A saved message is not proof
-that its requested behavioral change was applied. When a required change fails,
-the assistant must not acknowledge completion. The application can return a
-brief failure or qualified response while retaining the original event for a
-controlled retry.
-
-The reply phase may fail after a state update commits. The committed update is
-still real; retrying the response must not duplicate directives or commitments.
-Conversely, a visible response must never imply that an uncommitted update
-succeeded. These boundaries belong in operation state, not in generated prose.
+After an accepted profile edit, refresh the current run's instructions before
+continuation. On cancellation, retain already committed effects; on retry, load
+their existing receipts. Malformed/truncated calls perform no mutation. Unknown
+external outcomes stay unknown; a new loop iteration is not permission to replay
+an effect. These are shared action-boundary rules for every cause of work.
 
 ## 9. Context composition and natural expression
 
@@ -915,48 +801,102 @@ for durable behavior.
 
 ## 10. The always-online loop
 
-An online daemon waits for relevant work. It does not need to run inference
-continuously to remain an active assistant.
+### Continuity is state plus feedback
 
-The logical cycle is:
+“Always online” means that the assistant remains receptive and retains what it is
+working on. User messages, allowed observations, tool outcomes, elapsed time and
+its own bounded next steps all change the input to the same cycle. An external
+event is not required for every useful thought, and every external event does not
+require a thought. Separate event ingestion from model-evaluation frequency.
 
-1. Read eligible durable work and the nearest deadline.
-2. Claim a bounded item using its identity and current revision.
-3. Load the relevant state and evidence, then release storage ownership.
-4. Perform necessary model work or a direct host action.
-5. Revalidate the claim, source eligibility, cancellation, and state revisions.
-6. Commit the outcome and any resulting message.
-7. Wait for a new event, a deadline, a retry, or shutdown.
+Use the existing coordinator as the semantic owner. It receives commands and
+completion notifications while the native worker runs. Extend its event selection
+with the nearest review/deadline and memory changes. Keep one in-flight model
+step. The embedding worker and serialized store remain mechanical resources;
+they do not compete to choose what the assistant should do next.
 
-Use the existing application and runtime lifecycle. An in-memory notification is
-a wakeup hint; durable work is the authority. Register interest before the final
-eligibility check to avoid lost wakeups.
+Focus records hold a question/intention, its source references, current short
+conclusion or next step, and a waiting condition. A waiting condition is initially
+new relevant input, a user reply, an action completion, or an explicit review time.
+Represent a small typed set of these conditions; do not implement a general rule
+language. Model-authored focus text has no authority to change character or grant
+an action. Accepted commitments cannot be evicted when the focus list is full.
 
-The minimum event set covers user input, accepted state changes, relevant
-knowledge changes, due commitments, explicit review deadlines, and client reply
-context. Additional sensors or integrations can later supply typed events through
-the same boundary.
+### Input handling and selection
 
-External observations must be attributable to an actual capability. Browser
-connection status alone does not establish user attention, activity, or consent
-to an unrelated action. The assistant cannot claim to monitor an unavailable
-source.
+Persist user operations and effect receipts with their existing identities.
+Replaceable observations may be coalesced into the latest value plus a change
+sequence; ordered commands and action results cannot be silently overwritten.
+An adapter reports overflow/coverage when it cannot keep up. Read-only sources
+must already be enabled and attributable; this design does not imply default
+microphone, screen or filesystem monitoring.
 
-### Priorities and stopping rules
+Controls, cancellation and due deterministic actions are serviced without waiting
+for LFM3. For model attention, select the active user request first, then a relevant
+resumable focus, then the oldest eligible parked item. Use bounded FIFO as the
+starting policy. The model can revise what matters while evaluating the selected
+context; a separate model router or scoring subsystem is unnecessary. A change
+notification wakes the host to reconsider eligibility; it does not require inference.
 
-Required foreground interpretation and response generation receive interactive
-priority. Due commitments remain durable while waiting for model capacity.
-Discretionary initiative and consolidation can defer or cancel their drafts.
+Host matching initially uses explicit reply/source references, action completion
+and review times. When no focus matches, an eligible bounded window of new inputs
+can itself be selected, allowing a new question to form. Semantic relevance is
+assessed while reading that context; the host is not assumed to understand every
+observation in advance. The same optional-work limits cover these windows.
 
-Each root event has bounded inference, traversal, tool, and retry allowances.
-Internally generated descendants retain the same root cause. An assistant
-message does not unconditionally create another decision event. This prevents
-self-stimulating conversation or reflection loops.
+Register for notifications before the final work check, then await notifications
+or the nearest deadline. Durable sources/focus/commitments determine pending work;
+notifications only hint that this view may have changed. No polling inference is
+needed to keep an unresolved question available.
 
-Silence is a valid completed discretionary decision. It is not completion of a
-specific outstanding reminder. A deferred commitment remains pending.
+### Progress, interruption and stopping
+
+An idle evaluation starts with a private output sink and an explicit host cause.
+Offer only the allowed read, note/focus and notice-publication actions. A checked
+notice action can publish a message; arbitrary idle model text remains private.
+A focus update is a concise working result, not stored reasoning. A terminal
+no-action result is silence. Reuse the runner's action receipts and limits rather
+than adding a classifier to decide whether this output deserves another pass.
+
+An activation carries one root token/tool/time allowance. Tool continuations and
+self-scheduled steps inherit it. An optional idle activation initially permits
+one evaluation and at most one result-dependent continuation. Completion, silence,
+unchanged focus or exhaustion parks the item. Updating a focus revision alone
+does not mint a fresh activation or reset its budget. A due review can later
+reconsider it within the owner's configured cadence and optional-work allowance.
+
+New user input cancels optional model work at the existing cooperative native
+boundary and leaves the focus parked. Late results cannot apply against a changed
+focus/profile or forgotten source. During a foreground run, preserve the existing
+single-operation admission behavior; extra events wait or receive the existing
+explicit busy/capacity result. Do not introduce an invisible unlimited inbox.
+
+An important limitation is that the host cannot prove whether a generated idea
+is useful. It can bound repeats and effects, and expose why an item is waiting.
+Human review must assess the resulting continuity and initiative. No-progress
+guards prevent a runaway loop; they are not a mathematical proof of good thought.
+
+### Compute consequence of real-world input
+
+Let a model step generate G tokens at rate r. Its decode cost is G/r seconds;
+prefill, retrieval and tool work add to that. If eligible input arrives at rate
+lambda and every event triggers a step, sustained processing needs headroom:
+lambda × mean(native time per step) < available model duty fraction. Native time
+includes prefill and decoding; retrieval and tool waiting add latency and need
+their own bounds. This is a workload condition, not a behavioral guarantee.
+
+For example, 64 generated tokens cost 2.13–3.20 seconds at the accepted 30–20
+tokens/s. One such step every five seconds consumes about 43–64% decode duty
+before prefill; once per minute consumes about 3.6–5.3%. Consequently raw world
+events must be coalesced and attention must be selective on weak hardware.
+Keeping a question in memory while waiting costs no generation. Reusing the same
+loop removes compulsory work, but does not make unlimited contemplation free.
 
 ## 11. Commitments and time semantics
+
+This is the scheduling extension to the loop. A tentative focus is not a promise.
+Implement one-shot reminders first; the recurrence contracts below apply when
+those trigger types are added, not before the first useful continuing loop.
 
 ### Minimal record
 
@@ -1094,10 +1034,11 @@ assistant interpretation linked to evidence. Those origins remain distinct.
 Explicit requests to increase initiative should change the operational review
 behavior as well as the language of the personality prompt.
 
-Use a small candidate view containing purpose, supporting sources, related
-conversation, novelty, and prior disposition. A model can decide whether a
-candidate warrants a message. The host enforces the allowed cadence, suppression,
-scope, and resource budget.
+Select a relevant retained focus using the common attention order. Its context
+contains the question, supporting sources, new input and previous outcome. The
+model may investigate, update the focus, ask the user or remain silent. The host
+enforces cadence, suppression, scope and resource limits. There is no separate
+initiative planner, novelty scorer or mandatory decision pass before this step.
 
 Do not repeatedly search only from the latest user message. Relevant candidates
 can come from active commitments, unresolved questions, user-approved goals, and
@@ -1167,9 +1108,9 @@ reading state, managing commitments, and subscribing to changes. HTTP, D-Bus, an
 Unix sockets adapt framing and presentation. They do not implement personality
 resolution, inference policy, or timer execution.
 
-An internal soul coordinator can compose the existing memory service and
-runtime. Avoid creating another independent product actor with its own accepted
-requests, transcript, and competing lifecycle.
+Extend the existing application coordinator to own attention. Compose the memory
+service and runtime through small helpers; do not add an internal soul coordinator
+alongside it with a competing accepted-request or attention lifecycle.
 
 The public surface should stay centered on high-level operations:
 
@@ -1189,8 +1130,9 @@ Use validated identifiers, revisions, bounded text wrappers, typed scope,
 commitment triggers, and lifecycle enums. A state proposal is separate from an
 accepted committed change. A draft message is separate from a published message.
 
-The meaningful internal boundaries are interpretation, validation/application,
-context composition, and scheduling. They do not each require a trait or plugin.
+The useful helpers are attention selection, context composition and checked
+action application. Time eligibility is a host helper. They do not each require
+a trait, plugin or independently running service.
 Use a narrow clock abstraction and the existing model boundary where substitution
 is valuable. Derive schemas and serialization through the existing stack.
 
@@ -1201,30 +1143,29 @@ preserve before adding it.
 
 ### Persistence and concurrency
 
-Use the current database writer and operation identity. The smallest schema
-extension stores directives or their projection, commitments, and occurrence
-identity, with source references and revisions. Reuse existing source and mailbox
-records where their semantics match.
+Use the current database writer, profile, sources, mailbox and operation identity.
+Add a bounded revisioned focus record for the first loop slice. Commitment and
+occurrence records belong to the later scheduling slice. Section 24 distinguishes
+this minimal storage from optional granular state machinery.
 
 Serialize mutations through the writer. Perform inference and bounded evidence
 loading without holding a write transaction. Commit a proposed state update
 against the revisions it consumed. Concurrent edits cause a conflict, followed
 by a bounded reload or explicit result, rather than a silent overwrite.
 
-Commit the required interpretation batch and its processed-event receipt in the
-same transaction. A retry loads that receipt rather than applying the same event
-again. Optional later consolidation has a separate operation identity. Accepted
-state changes must not become an undocumented partial batch that the reply
-mistakenly describes as complete.
+Commit an actual state action and its receipt in the same transaction. A retry
+loads the receipt rather than reapplying the action. Independent tool actions may
+have separate outcomes; the reply describes those outcomes instead of claiming
+all-or-nothing completion for a whole natural-language message.
 
 Define dependencies precisely. A change to an unrelated note should not invalidate
 every draft. Cancellation, source suppression, ownership changes, and relevant
 directive replacement must invalidate dependent unpublished work.
 
-The required processing phase belongs inside the durable product operation, not
-solely in an optional hook that middleware can skip. Diagnostic model access
-must not silently mutate the persistent assistant through a partial execution
-path.
+Effect guards belong at the shared action boundary, where middleware cannot
+bypass them. Diagnostic model access must not silently mutate the assistant.
+Read-only contemplation and visible dialogue use explicit host-created causes;
+they do not manufacture a new user operation.
 
 ### Lifecycle
 
@@ -1242,8 +1183,8 @@ This design adds no reason to change binding lifetime or thread-safety rules.
 | Failure boundary | Required outcome |
 | --- | --- |
 | Before admission commits | No accepted durable operation is reported. |
-| After input admission, before interpretation | The original input remains; unapplied state work is identifiable. |
-| During interpretation | No partial proposal becomes authoritative. |
+| After input admission, before evaluation | The original input remains and the interrupted run is identifiable; absence of an action receipt does not prove no change was requested. |
+| During evaluation/action parsing | No partial proposal becomes authoritative. |
 | After a state update, before response completion | The update remains committed; recovery does not duplicate it or invent a completed reply. |
 | During commitment drafting | The occurrence is uncompleted and can be retried within policy. |
 | After publication, before client delivery | Snapshot recovery returns the same message identity. |
@@ -1256,9 +1197,9 @@ Optional work should defer before it exhausts resources needed to settle accepte
 operations.
 
 If semantic search is unavailable, expose reduced recall and use available
-eligible sources without claiming full memory coverage. If the state interpreter
-is unavailable, retain the distinction between stored conversation and applied
-behavioral changes.
+eligible sources without claiming full memory coverage. If inference or an action
+fails, retain the distinction between stored conversation and applied behavioral
+changes. There is no separate state-interpreter availability mode.
 
 Backups must capture a consistent database state using the existing backup
 mechanism. SQLite's [backup API](https://www.sqlite.org/backup.html) is the relevant
@@ -1280,7 +1221,7 @@ not a promotion of source text into host instructions.
 
 Accepted user directives can influence active behavior through the state update
 path. An old quoted command does not execute again merely because it is recalled.
-The interpreter must consider whether the current speaker is requesting an action,
+Action selection must consider whether the current speaker is requesting an action,
 describing one, or quoting someone else. Host validation and limited capabilities
 remain necessary because a prompt alone cannot enforce this distinction.
 
@@ -1348,12 +1289,12 @@ deployment contract. Failures require changes to task decomposition, evidence
 selection, host control, or the supported behavior; they are not an automatic
 reason to request a larger model.
 
-The required interpretation phase is the largest new latency risk. Its prompt
-must be small, its output bounded, and its work limited to relevant changes.
-Measure its cost separately from response generation. A low output-token count
-does not imply cheap prompt evaluation.
+The main added latency risks are unnecessary evaluations and context resets.
+Remove the compulsory pre-answer pass, keep focus compact, and evaluate only
+selected useful work. A low output-token count still does not imply cheap prompt
+evaluation; measure each actual continuation and prefill.
 
-Foreground priority must include required state processing. Background drafts
+Foreground priority covers the whole admitted model/tool run. Background drafts
 should yield at the existing native scheduling boundaries, without claiming
 preemption inside a native call. Reserve the capacity needed for an interactive
 operation and avoid optional work that occupies every model context.
@@ -1368,7 +1309,7 @@ may invalidate caches. Enable it for demonstrated useful changed material.
 Continuous speculative inference is unnecessary. Optional draft precomputation
 must have an expiry and must not starve responses or due commitments.
 
-Measure response startup latency, interpretation latency, generated-message
+Measure response startup latency, action/continuation latency, generated-message
 lateness, memory coverage, background work, and duplicate or missed occurrence
 counts. These measurements should not require recording private content.
 
@@ -1437,96 +1378,60 @@ The first complete delivery should demonstrate:
 
 No finite evaluation establishes correct behavior for every possible utterance.
 The product needs measurable acceptance criteria and honest failure states.
-Section 30 defines an evaluation protocol and proposed release gates. Resource
+Section 30 defines focused host checks and behavioral journeys. Resource
 allowances in section 27 are implementation starting points, not measured speed,
 accuracy, or minimum-machine claims.
 
 ## 19. Incremental implementation plan
 
-### Stage 1: state and context activation
+Build a thin complete loop before expanding its feature inventory:
 
-Introduce individually maintained directives and their scopes. Centralize context
-composition. Add the required interpretation boundary and committed-change
-receipt. Ensure the first response after a conversational change uses the new
-state. Extend inspection through the existing owner facade.
+1. Reuse profile, attributed sources and the model/tool runner. Add bounded focus
+   persistence and one context-composition path. Verify local behavior edits and
+   state refresh without a universal classifier.
+2. Move optional consideration under the same attention owner. Add change/review
+   wakeups, one-context idle execution, foreground interruption and no-progress
+   parking. Exercise a complete conversation/idle/new-input/restart journey.
+3. Correct recall or note handling where that journey demonstrates a failure.
+   Raw capture stays automatic. Optional note formation is another selected step,
+   not a second cognitive service or a prerequisite for storing experience.
+4. Add reliable commitments with their actual scheduling/storage requirements.
+   Start with one-shot reminders; recurring calendars follow with their own tests.
+   Connect replies and inspection through the existing owner API and timeline.
 
-Before broadening scope, establish the focused interpreter's quality and cost on
-the selected model. This is a bounded integration decision, not an open-ended
-model search or a return to domain-specific extraction matrices.
+Existing privacy, receipt, quota and cancellation invariants apply at every step;
+they are not postponed until the last feature. Section 29 maps these slices to
+code. Advanced scope history, bulk control and calendar details below are reference
+contracts for later capabilities, not a mandate to build them all before feedback.
 
-### Stage 2: automatic notes and graph maintenance
-
-Connect automatic interpretation to useful notes, relevant links, corrections,
-and source dependencies. Keep original indexing independent. Add optional
-bounded consolidation only after the required foreground behavior works.
-
-### Stage 3: commitments and event-driven execution
-
-Add the minimal commitment and occurrence storage, clock semantics, cancellation,
-and recovery. Replace generic consideration as the execution mechanism for
-explicit promises. Retain discretionary review as a separate mode using shared
-scheduling and message infrastructure.
-
-### Stage 4: initiated dialogue and WebUI
-
-Integrate stable initiated messages into the conversation timeline and reply
-context. Expose active instructions and commitments as inspection and editing
-surfaces. Use existing snapshot and subscription recovery. Verify that client
-disconnect does not stop core behavior.
-
-### Stage 5: refinement from actual use
-
-Improve retrieval selection, topic continuity, review timing, and optional
-consolidation from observed failure categories. Keep source material private.
-Broader character evolution, additional delivery adapters, and external action
-commitments can extend the same contracts when explicitly needed.
-
-### Migration rules
-
-Import the existing accepted freeform profile as a legacy base directive without
-inventing granular instructions it never contained. Preserve its text and mark
-its provenance as legacy configuration where more precise authorship is unknown.
-Do not invent a direct user statement to justify an existing model-authored or
-default profile. Existing source records and graph links retain their identities.
-
-Map the existing optional initiative interval to discretionary review behavior.
-It is not evidence that any particular reminder was accepted. Do not infer and
-execute schedules from arbitrary historical chat during migration.
-
-Existing mailbox messages remain durable history. Pending occurrence identity
-applies to newly accepted commitments; migration must not pretend older notices
-were generated by a scheduling contract they did not have.
-
-Schema changes must be additive or explicitly versioned. Preserve rollback and
-backup compatibility information. No model artifact, native submodule, or
-transport authentication migration is required by this design.
+Keep the existing profile text and source identities through migration. Do not
+invent granular instructions, reinterpret old chat into promises, or rebuild all
+notes at startup. Add only the schema required by the slice being implemented,
+preserving checksums and backup compatibility. No model/native-pin change is
+part of this plan.
 
 ## 20. Selected implementation contracts
 
-These are proposed v1 choices for implementation, rather than a list of competing
-architectures left to the implementer. Changes require evidence against the
-invariant in the last column. They do not authorize application edits by an agent.
+These choices define the first loop and its extension points. They do not
+require every researched feature before a useful end-to-end implementation, and
+they do not authorize application edits by an agent.
 
 | Boundary | Selected direction | Invariant and limitation |
 | --- | --- | --- |
-| Models | Existing LFM3 and multilingual-e5; no additional learned component. | Every quality experiment uses the actual deployment artifacts. |
-| Immediate interpretation | Gated candidate: one narrow structured phase; at most one bounded repair/reload. | Commit accepted changes before composing the dependent reply; qualify the actual protocol before mandatory activation. |
-| General memory formation | Automatic asynchronous jobs over retained conversational windows. | Failed synthesis never prevents original-source recall. |
-| Topic representation | Freeform notes and labels with typed operational metadata. | No fixed taxonomy limits supported people, topics, roles, or interests. |
-| Trust | Host capabilities and current-request attribution. | Retrieved text never grants authority. |
-| Active behavior | Revisioned directives and an explicit scope/supersession projection. | Known stale directives are removed before generation. |
-| Core concurrency | Preserve one active product operation per owner. | Do not introduce multiple concurrent conversations as an incidental schema change. |
-| Native execution | One chat-context mode is required; sequential interpretation and answer. | Extra contexts are an optional speed tradeoff, not a correctness requirement. |
-| Recall | Existing lexical/dense fusion, corrected evidence spans, direct state lookup. | Search rank is neither truth nor authority. |
-| Graph | Separate association, conversational adjacency, support, and replacement. | Navigation never implies entailment or automatic deletion dependency. |
-| Reminders | Host scheduling plus durable occurrence/publication transaction. | A basic reminder does not require a successful model generation when due. |
-| Proactivity | Eligible causes, explicit dispositions, optional bounded inference. | No inference simply because the process is alive. |
-| Temporal library | Jiff 0.2 family as the proposed civil/timezone implementation. | Check selected dependency graph on Rust 1.88; no handwritten timezone engine. |
-| Recurrence | Typed once/interval/daily/weekly/monthly/review triggers. | Reject unsupported calendar syntax instead of approximating it silently. |
-| Streaming | Provisional foreground deltas; durable terminal output and effect receipts. | A crash may lose an unfinished suffix; published reminders are durable before exposure. |
-| Privacy | Eligibility fences and existing deletion journal, extended to soul dependencies. | Forgetting is distinct from cancelling, disabling, and resetting. |
-| Deployment | CPU operation, bounded contexts, optional acceleration and maintenance. | Weak machines retain core correctness while optional throughput decreases. |
-| Rollout | Independently gated components and reversible derived indexes. | A failed semantic component does not invalidate the durable store. |
+| Models | Existing LFM3 and CPU multilingual-e5-small. | No additional learned component; 20–30 tokens/s and about 2 GB VRAM remain the planning baseline. |
+| Attention | Existing coordinator owns one continuing loop and a small durable focus set. | Inputs and useful internal steps can advance it; self-output cannot renew budgets indefinitely. |
+| Conversation and actions | Existing response/tool loop; no universal interpretation prepass. | Real-model action omission and semantic errors remain qualification questions. |
+| Character | Existing revisioned freeform profile plus needed local overlays. | Preserve unrelated instructions; refresh accepted edits before continuation. |
+| Memory | Original capture and recall first; notes as optional loop actions. | Synthesis failure does not erase experience or block basic recall. |
+| Trust and effects | Existing typed handlers, owner authority, writer and receipts. | Evidence is not permission; fluent acknowledgment is not a receipt. |
+| Concurrency | One attention owner and one active model step, using existing I/O workers. | Host input/control handling remains responsive; preserve one active product operation per owner. |
+| Native execution | Reuse one chat context sequentially, including idle work. | This requires adapting the current background context policy; do not assume spare VRAM. |
+| Recall | Bounded lexical/dense search and attributed sources. | Search rank is neither truth nor authority; improve demonstrated span failures before adding synthesis. |
+| Initiative | A due/changed focus can select the normal loop during idle time. | Silence and waiting are valid; source capabilities and contact cadence remain explicit. |
+| Commitments | Later host scheduling with unique durable publication. | Start with one-shot reminders; basic due delivery must not depend on generation. |
+| Later time features | Section 26 preserves civil-time/recurrence design references. | Select only implemented triggers; do not build a general workflow engine up front. |
+| Privacy/recovery | Existing eligibility, deletion, operation and receipt boundaries extended to focus. | No private decision output in visible history; no unknown-effect replay. |
+| Validation | Shared boundary tests plus sustained LFM3 journeys. | Host correctness is testable deterministically; useful personality and automatic persistence are empirical. |
 
 ### Additional evidence and transfer limits
 
@@ -1563,21 +1468,19 @@ retrieval; a prompt reminder is not a security boundary.
 
 ### Existing ownership and extension points
 
-| Existing code | Verified contract | Required extension |
+| Existing code | Verified behavior | Smallest relevant change |
 | --- | --- | --- |
-| [`application/mod.rs`](../crates/assistant/src/application/mod.rs), `Coordinator::run` | Owns product admission, progress, display state, cancellation, and restart history loading. | Add soul outcome projection and unified durable timeline recovery; keep one product actor. |
-| [`application/owner.rs`](../crates/assistant/src/application/owner.rs), `OwnerHandle` | Revocable host grant, settings/notes/notices, reads checked again after await. | Add typed directive, commitment, clarification, and timeline operations. No model receives this capability. |
-| [`application/types.rs`](../crates/assistant/src/application/types.rs), `Submission` | Client key and literal text; no explicit reply reference. | Add optional typed reply/clarification context to durable admission and its conflict digest. |
-| [`memory/session.rs`](../crates/assistant/src/memory/session.rs), `MemoryOperation` | Mandatory preparation/settlement and owned tool settlement; profile instructions cached once. | Own immediate interpretation and receipt lookup; refresh the behavioral projection at defined continuation boundaries. |
-| [`chat/mod.rs`](../crates/assistant/src/chat/mod.rs), request execution | Constructs one run context after `prepare`; appends profile instructions. | Compose from accepted state, separate receipts from evidence, and charge interpretation to the same run. |
-| [`runtime/internal.rs`](../crates/assistant/src/runtime/internal.rs), `InternalInference::run_inner` | One semaphore slot, fresh context identity, tools disabled, background execution class. | Factor restricted structured evaluation from background scheduling. Required work must inherit foreground ownership. |
-| [`runtime/worker.rs`](../crates/assistant/src/runtime/worker.rs), worker loop and `begin` | Background work pauses while foreground exists; context limits reserve foreground capacity. | Permit sequential foreground internal work on the product lease and optional work on an idle reusable lease. |
-| [`runtime/mod.rs`](../crates/assistant/src/runtime/mod.rs), `AssistantRuntime::start`, and [`memory/service.rs`](../crates/assistant/src/memory/service.rs), `MemoryRuntime::start` | Model/embedding startup failures tear down startup, including already-open storage. | Separate durable core readiness from inference/index readiness before promising reminders during model unavailability. |
-| [`memory/store/operations.rs`](../crates/assistant/src/memory/store/operations.rs) | Durable key, settlement reservation, one active operation, interrupted recovery. | Add durable interpretation receipts and distinguish committed effects from response failure. |
-| [`memory/store/assistant.rs`](../crates/assistant/src/memory/store/assistant.rs) | Whole-profile replacement, source links, transitive note dependencies, periodic consideration. | Preserve old data while adding granular state and separate support/association semantics. |
-| [`memory/service.rs`](../crates/assistant/src/memory/service.rs) | Original indexing independent of synthesis; lexical/dense rank fusion. | Passage-aware recall, freshness coverage, direct discourse/state lookup, bounded maintenance dispatch. |
-| [`runtime/initiative.rs`](../crates/assistant/src/runtime/initiative.rs) | Latest-user-input-based consideration; optional generated message or silence. | Use durable causes and commitment occurrences; separate reminder publication from discretionary drafting. |
-| [`http/v2.rs`](../crates/assistant-web/src/http/v2.rs) and frontend notices | Transport mappings and a separate dismissible notice view. | Adapt core timeline/reply/inspection APIs; no client timer or client-owned semantic state. |
+| [`application/mod.rs`](../crates/assistant/src/application/mod.rs), `Coordinator::run` | One active product operation; bounded commands; select loop handles admission, progress, cancellation and telemetry. | Own focus/review eligibility and model-step completion here. Await worker completion without blocking control admission. |
+| [`chat/runner.rs`](../crates/assistant/src/chat/runner.rs), `run_loop` | Evaluates, dispatches typed tools, appends receipts and continues under root limits. Text publication precedes tool dispatch. | Reuse this cycle; refresh changed state and establish private/action-output handling before visible recording. |
+| [`chat/runner.rs`](../crates/assistant/src/chat/runner.rs), `RunContext::new` | Appends `Message::User(input)` unconditionally. | Add an explicit host-created idle/observation cause; reusing this constructor unchanged would invent user input. No fictitious user source may be persisted. |
+| [`memory/session.rs`](../crates/assistant/src/memory/session.rs), `MemoryOperation`, and [`chat/mod.rs`](../crates/assistant/src/chat/mod.rs) | Preparation/settlement and owned tool settlement; profile instructions are initially cached in the run. | Compose current profile/focus/evidence; refresh accepted edits. Keep idle lifecycle separate from literal user admission while sharing evaluation/action helpers. |
+| [`application/owner.rs`](../crates/assistant/src/application/owner.rs), `OwnerHandle` | Host grant and settings/notes/notices access. | Extend inspection/control only for the implemented focus, reply or reminder capability. |
+| [`memory/store/assistant.rs`](../crates/assistant/src/memory/store/assistant.rs) and [`memory/store/operations.rs`](../crates/assistant/src/memory/store/operations.rs) | Profile, graph, notices, durable operations and interrupted recovery. | Add bounded focus persistence; reuse action receipts and preserve actual effect status. Scheduling records come later. |
+| [`runtime/initiative.rs`](../crates/assistant/src/runtime/initiative.rs), `run`/`decide` | Independent select loop over profile, foreground changes and time; recalls from the latest user input or profile; generates message or silence. | Transfer semantic attention selection to the coordinator/common path. Retain useful wakeup/cancellation mechanics without leaving two competing decision owners. |
+| [`runtime/internal.rs`](../crates/assistant/src/runtime/internal.rs) and [`runtime/worker.rs`](../crates/assistant/src/runtime/worker.rs) | Restricted private inference is background-only and reserves another context; foreground suppresses background execution. | Adapt idle single-context use. Normal foreground tool actions already use the runner; do not insert the background-only API as a compulsory foreground dependency. |
+| [`memory/service.rs`](../crates/assistant/src/memory/service.rs) | Original indexing independent of synthesis; lexical/dense recall. | Correct evidence spans and provenance where needed; optional note work is selected by the common loop. |
+| [`runtime/mod.rs`](../crates/assistant/src/runtime/mod.rs) and memory startup | Model/embedding failure tears down startup including storage. | Decouple durable-core readiness when implementing model-independent reminder/history availability. |
+| [`application/types.rs`](../crates/assistant/src/application/types.rs), [`http/v2.rs`](../crates/assistant-web/src/http/v2.rs) and frontend notices | Literal submissions, HTTP/SSE and separate notice view. | Add stable reply/focus context and unified notice continuation with that user-facing slice. |
 
 Existing public Rust types are used by more than HTTP. Adding fields to public
 structs can break downstream struct literals even when the wire field is optional.
@@ -1650,7 +1553,7 @@ also need reconciliation with the durable product path during implementation.
 
 Keep storage commands in `memory/store`, owned data in the memory/application
 types, and adapter translation in `assistant-web`. A private `soul` module under
-the application/core crate may hold interpretation, projection, and scheduling
+the application/core crate may hold attention, context, and time-eligibility
 helpers; it must not become a second actor with separate acceptance or transcript.
 Reuse `MemoryId`, `Revision`, redacted `MemoryText`, `Cancellation`, `SourceRef`,
 the database writer, and typed error conventions. Add narrowly validated wrappers
@@ -1662,20 +1565,24 @@ ownership, model pin, or FFI relaxation is justified by the soul system.
 
 ### Internal API contracts and lock ordering
 
-Keep proposed internal interfaces narrow:
+Keep helpers narrow, inside existing ownership boundaries:
 
-| Interface | Inputs | Output and ownership |
-| --- | --- | --- |
-| `prepare_soul_input` | Admitted operation, current segment/reply references, host capability snapshot, token allowance. | Owned bounded data plus offered-handle/revision set; no borrowed database rows cross await. |
-| `interpret_for_run` | Prepared input and parent run context. | Untrusted typed proposal plus actual usage/finish reason; no storage mutation and no tools. |
-| `apply_soul_proposal` | Operation identity, proposal, exact read dependencies, remaining reservation. | Committed receipt or typed conflict/ambiguity/capacity result. |
-| `compose_soul_context` | Current accepted projection, reply focus, evidence manifest, receipt. | Prepared render inputs and publication dependencies; actual tokenizer establishes fit. |
-| `select_due_work` | Host clock sample, process instance, bounded page allowance. | Claimed occurrence/cause with fence, or nearest deadline. |
-| `publish_occurrence` | Occurrence key/fence, schedule revision, eligible sources, bounded body. | Existing or newly committed message identity; duplicate publication is a reconciliation result. |
+| Helper/boundary | Contract |
+| --- | --- |
+| Select attention | Bounded state plus cause/time in; selected work or wait reason out. No model or database mutation inside selection. |
+| Compose context | Character, focus, new inputs and eligible evidence in; owned tokenizer-bounded render inputs out. Shared by foreground and idle causes. |
+| Existing runner and typed tools | One root allowance; native result and actual tool receipts; no separate `interpret_for_run` subsystem. |
+| Writer commands | Validate and apply an actual state action plus receipt against relevant revisions; no transaction spans inference. |
+| Due-work helper, when scheduling exists | Select the next eligible occurrence/deadline; publish idempotently through existing sources/notices. |
+
+An idle activation needs its own host cause, cancellation and bounded accounting,
+but should reuse these helpers. It must not impersonate a user submission to gain
+memory authority. Foreground-only lifecycle hooks may need explicit branches;
+sharing the loop is not evidence that today's `Chat::request` accepts idle work.
 
 The current chat-state lock spans request execution. Do not recursively call
-`Chat::request` from interpretation while holding it. Use the restricted backend
-evaluation primitive with the same parent lease; the worker still rejects two
+`Chat::request` from a model/tool continuation while holding it. Use the existing
+backend evaluation primitive with the same parent lease; the worker still rejects two
 active evaluations on one chat identity. Release each native evaluation before
 starting the next. Do not hold an application mutex, database transaction, or
 publication gate across model evaluation, tool execution, or network delivery.
@@ -1691,7 +1598,7 @@ At API boundaries distinguish `Ambiguous`, `UnsupportedTrigger`, `Conflict`,
 and `Forbidden` internally. Adapters may map these to established safe error
 categories, but must retain enough structured outcome to offer a useful next step.
 Do not collapse a semantic rejection, exhausted budget, and native crash into a
-successful empty interpretation. Error context remains sanitized and redacted.
+successful empty decision. Error context remains sanitized and redacted.
 
 ## 22. End-user flows and observable outcomes
 
@@ -1704,7 +1611,7 @@ recovery, not prerequisites for conversation. Ask a clarification only when miss
 meaning would materially change the effect. Straightforward reversible behavior
 edits should apply without a second approval.
 
-While a mandatory phase is running, expose host-owned progress rather than an
+While an operation is running, expose host-owned progress rather than an
 invented conversational acknowledgment. If no visible output arrives within one
 second, show a non-blocking working indicator with Stop available; this is a
 proposed UI threshold, not a throughput claim. On commit, a compact outcome can
@@ -1719,7 +1626,9 @@ it does not substitute for meeting the foreground latency target.
 | Journey | Core flow | User-visible result and failure behavior |
 | --- | --- | --- |
 | First durable use | Open storage, restore state, start eligible scheduling and indexing, admit conversation after required readiness. | Show whether conversation storage is enabled. Do not imply an old profile or commitment was inferred from nothing. |
-| Ordinary chat | Persist input; interpret immediate requests; answer using current state; settle; queue eligible maintenance. | Conversation feels ordinary. No note is necessary for every utterance. |
+| Ordinary chat | Persist input; use character/focus/evidence in the normal response/tool loop; settle actual outcomes. | Conversation feels ordinary. No note is necessary for every utterance. |
+| Topic remains open | Retain a bounded question/focus and its wait condition; finish the current activation. | The assistant can pick up the thread after context rotation or restart without repeatedly asking the same question. |
+| New permitted observation | Ingest/coalesce the change; select eligible focus; evaluate within the shared budget. | New evidence can revise understanding, prompt investigation or justify a message; irrelevant input need not produce chatter. |
 | Share personal information | Retain attributed source; index it; optionally form a contextual note. | Later recall can use the original even if synthesis is pending or fails. Do not announce every stored fact. |
 | Change personality | Resolve requested scope and targeted directives; commit patch; rebuild projection; answer. | The immediate response adopts the accepted change. Inspection reports the committed revision. |
 | Temporary role or language | Create an overlay tied to turn, conversation segment, or explicit expiry. | Prior persistent behavior returns at expiry; knowledge and commitments survive. |
@@ -1728,7 +1637,7 @@ it does not substitute for meeting the foreground latency target.
 | Request a reminder | Resolve purpose, trigger, timezone, and destination; reserve publication capacity; commit. | Show an inspectable schedule and truthful saved status. Missing timing produces a focused question. |
 | Reminder becomes due | Host selects occurrence and publishes a durable basic message, optionally using an already-valid draft. | Works with closed browser and busy model. Actual desktop attention requires an installed delivery adapter. |
 | Reply to initiated question | Submit an explicit reply ID; load that question and its cause; record disposition. | A short answer keeps its referent through reconnect/restart. Several possible referents cause clarification. |
-| Increase initiative | Update review policy within host limits; reconsider eligible unresolved causes. | More eligible opportunities, not continuous chatter or a newly inferred permission to act externally. |
+| Increase initiative | Update review policy within host limits; reconsider eligible retained focus. | More eligible opportunities, not continuous chatter or a newly inferred permission to act externally. |
 | Dismiss, snooze, cancel | Apply distinct typed actions against expected revisions. | Dismiss hides a message; snooze changes one pending occurrence; cancel stops the commitment. |
 | Stop generation | Cancel model work and settle the operation. | Already committed settings/reminders remain; the outcome states that distinction. Stopping is not undo. |
 | Undo a behavior edit | Apply a compensating revision against the currently observed directive state. | Restore the relevant prior instruction without overwriting unrelated later changes. Published external effects are not undone. |
@@ -1785,337 +1694,107 @@ new directives.
 
 ## 23. Interpretation and operation protocol
 
-### Authority and input selection
+### One action protocol, no universal interpretation envelope
 
-Interpret the current direct user event against host-supplied context. The input
-contains the current source reference, active segment, reply target, bounded recent
-turns, relevant existing directive/commitment handles, locale/timezone context,
-and capability availability. Broad historical retrieval is evidence and receives
-no mutation authority. Current text can still contain quotations or instructions
-from someone else: a user role alone does not prove every substring is a request.
+Use the existing typed tool protocol for model-selected actions and the owner API
+for explicit controls. Keep ordinary conversational output in its native format.
+The earlier five-status classifier, compulsory interpretation receipt and separate
+clarification workflow are withdrawn as the selected design. Their experiments
+remain in section 30; failure is evidence against mandating that extra phase.
 
-Do not use keyword matching as the sole interpreter gate: it misses indirect
-requests, languages, and corrections. The initial design evaluates every eligible
-conversational event once with the narrow task. Direct typed UI edits bypass
-language interpretation. An optional future router must demonstrate its missed
-request rate before skipping this phase.
+For each actual action, expose only relevant registered capabilities and bounded
+host-supplied record handles. Validate shape, allowed operation, ownership, source
+eligibility, relevant revisions and resource limits. A retrieved quotation or an
+assistant focus is evidence, never a new authorization. Direct user text may itself
+contain quotation or hypothetical speech; schema validation cannot decide that
+semantic distinction perfectly.
 
-Long input must not be silently prefix-truncated for interpretation. If current
-input plus indispensable discourse exceeds the configured interpretation allowance,
-return a capacity/clarification outcome or use a separately bounded windowed path
-that accounts for all input and reports incomplete coverage. V1 selects explicit
-capacity handling; it does not approximate complete interpretation from a prefix.
+Reuse native tool-call IDs within a run, but use the existing durable operation
+and action receipt identity for restart/retry deduplication. Model-generated IDs
+cannot grant access. Dispatch only complete normally parsed calls. For state
+effects, transactionally commit the edit and receipt before continuing from the
+returned result. Separate unrelated tools need not form a universal atomic batch;
+a compound change that truly must be atomic belongs in one typed handler.
 
-### Proposal shape
+### Outcomes and clarification
 
-Use a versioned, small structured response with these logical fields:
+A step can answer, propose an action, ask a question, or remain silent in an idle
+activation. This is a conceptual vocabulary, not a new JSON envelope imposed on
+every generation. Reuse native text/tools and a small private focus update where
+needed. Record committed, failed or unknown action outcomes through existing
+receipts. Absence of an action does not certify that the user requested no change.
 
-| Field | Contract |
-| --- | --- |
-| `status` | `no_change`, `changes`, `clarify`, `control_request`, or `overflow`. These are successful parse outcomes, distinct from runtime failure. |
-| `changes` | At most four mutations; empty except for `changes`. No hidden partial success on overflow. |
-| Mutation kind | Directive edit, correction, commitment edit, or resolution of an offered pending item. No generic SQL/JSON-path mutation. |
-| Operation | Add, replace, deactivate/cancel; only operations meaningful for that kind are accepted. |
-| Target | An offered short handle or explicit new item. Host resolves to ID/revision; no arbitrary identifier lookup. |
-| Content | Bounded freeform text preserving conditional meaning. Host metadata is not embedded in the prose. |
-| Scope | Current turn, current segment, persistent, or a typed supported expiry. Host binds actual IDs. |
-| Evidence | An offered exact-span handle, or an offered source handle plus exact quote; host resolves the immutable source revision and UTF-8 range. Repeated/ambiguous quotes require a narrower span or an explicit unresolved outcome. |
-| Trigger | Optional typed temporal intent, validated and resolved by the host; never executable code or a model-selected clock value. |
-| Clarification | One missing-field/referent category and at most four offered alternatives; no mutation is applied. |
-| Control request | A supported privacy/reset action, explicit scope, and offered targets; dispatched through its dedicated host command. |
+If a necessary field is missing, use the normal conversation and focus to ask for
+it. Retain the original source and offered targets; the user's answer is a new
+admitted operation. Recheck target revisions and preserve which source supplied
+each field. Do not store a speculative reminder or create a new generic
+clarification subsystem. Stable reply references become necessary when several
+questions can be answered; extend the existing submission contract for that need.
 
-This table is the semantic contract; derive the actual JSON schema with the
-existing Serde/schemars stack. Prefer a small envelope and simple operation records
-over deeply nested alternatives. Enforce kind-specific rules in Rust as well as
-grammar. Bound strings, array sizes, numeric ranges, duplicate targets, and total
-output bytes. Reject incomplete output even if a valid JSON prefix can be parsed.
+A response retry reads committed effects rather than repeating them. Cancellation
+after commit stops further generation without undoing the action. After a crash,
+retain the existing interrupted-operation behavior; restart does not implicitly
+replay model decisions or uncertain external effects.
 
-The pinned [grammar documentation](../crates/llama_cpp_sys/llama.cpp/grammars/README.md)
-states that JSON Schema support is a subset and some unsupported features are
-ignored. It also distinguishes grammar constraints from prompt instructions.
-Explicitly explain field meaning in the task prompt; verify the grammar generated
-for the actual schema. Do not assume `oneOf`, conditionals, or uniqueness constraints
-are enforced solely because schemars emitted them. A host parser remains mandatory.
+### Model and publication limits
 
-Forget/reset requests use a dedicated privacy/control outcome and command path,
-not an ordinary correction mutation. The model may identify a bounded set of
-offered candidates; the host resolves the intended scope, applies the publication
-barrier, and returns a privacy receipt. Never encode permanent deletion as a
-freeform note saying the user wanted something forgotten. When a request combines
-forgetting with other mutations, process the privacy boundary first and reload
-remaining eligible context; do not apply a batch using evidence just revoked.
-V1's control envelope is exclusive: its receipt identifies any other requested
-changes as unprocessed and asks for a fresh request where needed. It does not
-silently perform a second semantic pass or reuse the revoked source to finish
-the mixed request. This explicit partial outcome is different from the atomic
-ordinary-mutation batch. Initial controls are reset-behavior, forget up to 16
-offered source roots, and the separately managed forget-all operation; no model
-supplies a database predicate or arbitrary reset field path.
-The final protocol includes an explicit `control_request` status; small prototype
-schemas lacking it do not qualify the full interpreter.
+The selected loop still needs real-model evidence for action selection, scope,
+correction and truthful acknowledgment. Existing native probes found errors even
+with short valid structured output. Do not infer success of the tool path from
+those probes, or infer that adding a second interpretation call fixes omissions.
 
-### Candidate encoding and prompt contract
+Protocol details matter when a specific action uses JSON: actual schema order,
+rendered role boundaries, truncation and host-side validation all affect behavior.
+The measured serializer sorts property names before native grammar construction;
+writing an evidence field first in source code does not establish evidence-first
+decoding. Recheck the actual emitted schema for the chosen tool. Keep scope and
+source metadata explicit where the operation requires them; no custom language
+or parser framework is selected.
 
-The reference encoding uses one top-level object with `version`, `status`,
-`changes`, `clarification`, and `control`. Compact candidates described below
-decode into this logical contract; none is yet a qualified production prompt.
-Reject unknown fields, duplicate JSON keys, trailing data, and non-finite
-numbers. The last two reference fields are nullable; `no_change` and `overflow` carry an
-empty changes array and null auxiliary payloads. `changes` carries one to four
-records and no auxiliary payload. `clarify` and `control_request` carry only their
-respective payload. Keep these cross-field checks in the host even if the grammar
-supports expressing them. The generated schema is a serialization contract, not
-a replacement for this validation.
-
-Deserialize directly into strict typed Serde records with unknown-field rejection;
-do not first normalize through `serde_json::Value`, which can conceal duplicate
-object keys. Derived typed field visitors reject duplicate known fields; avoid
-unrestricted maps in mutation payloads. Require the deserializer to reach the end
-of the input. Apply byte limits before decoding and UTF-8 byte/token checks after
-decoding, since a schema character limit is not a byte limit. A schema compilation
-failure is an explicit protocol failure, not an implicit switch to unrestricted
-tool execution. Cache schema construction by protocol version, and keep dynamic
-target-handle validation in the host rather than compiling a huge per-turn enum.
-
-A change record has kind, operation, target handle, content, scope, evidence, and
-optional trigger. The reference evidence form contains an offered source handle
-and one exact quote; the host stores the resolved byte range and source revision.
-An equivalent compact form may select an already offered exact-span handle.
-Its host table binds source, revision, byte range, and eligibility generation;
-the model cannot invent offsets or use a handle from another request. Offer at
-most eight verbatim spans within the existing rendered-input allowance, preserving
-enough surrounding context to distinguish a
-request from a quotation. A short current event may itself be one offered span.
-Selecting it proves source location, not that all its words form one directive;
-content and intent still require separate validation. If no offered span suffices,
-use the exact-quote form or an unresolved outcome. Do not silently substitute a
-nearby sentence. This encoding can avoid copying errors, not semantic errors.
-Replacement targets carry the offered revision indirectly through the handle
-table. Do not ask the
-model to invent UUIDs, byte offsets, database revisions, or timestamps. The host
-assigns identity and parses typed temporal components. Deactivation has no new
-content; additions have no existing target; unsupported combinations are rejected.
-
-For the first candidate, cap content at 512 UTF-8 bytes, each quote at 512 bytes,
-and the entire decoded response at 8 KiB. These are parser ceilings, not a promise
-that four maximum-size records fit 256 generated tokens. The stricter tokenizer
-allowance always wins. At output exhaustion apply nothing and report unprocessed;
-do not parse a completed prefix of a truncated batch or call it `overflow` unless
-the model actually completed that outcome. Hosts can offer shorter evidence spans
-or a direct edit path without raising model requirements.
-
-The task description must explicitly include temporary instructions, persistent
-instructions, corrections, and reminders in every supported language. Describing
-the task only as durable memory extraction incorrectly excludes turn/segment
-overlays. Explain that quoted or hypothetical behavior is not necessarily an
-instruction, reminder intent is not a style directive, and missing required timing
-requires clarification. State scope rules in words; schema enum names alone do
-not teach them. Use complete examples if examples are used at all: placeholder
-content or evidence can be copied into otherwise valid output.
-
-Present the current message and bounded offered records as escaped data inside
-the model's actual chat template. Keep interpreter instructions independent of
-the requested character; a role request must not alter the rules deciding whether
-to persist that request. Delimiters are aids to interpretation, not an injection
-barrier. Neither self-reported confidence nor a second opinion from the same model
-constitutes a proof of intent. A semantically wrong but well-formed `no_change`
-cannot be repaired by schema validation; capability qualification must measure it.
-
-### Encoding is part of the evaluated behavior
-
-The semantic contract above need not require the model to repeat host-known
-metadata. A compact candidate may omit the protocol version, source identity,
-operation identity, and revisions from generated text when the host binds them
-unambiguously. Decode it into the same strict internal proposal before validation.
-Omit fields irrelevant to the selected outcome instead of asking the model to
-invent a scope or null payload for a no-change decision. Do not omit evidence,
-target disambiguation, or scope where they are actually needed. Avoid a separate
-classification call followed by extraction on every positive turn unless its
-end-to-end benefit is measured; that decomposition adds another prefill and can
-lose requests at its first gate.
-
-Treat label wording, field order, data framing, and examples as versioned candidate
-inputs. [Lost in Space](https://arxiv.org/html/2502.14969v2) reports different
-classification quality for superficially equivalent constrained output formats,
-including sensitivity to leading whitespace. Its tested families are not LFM3;
-it motivates controlled format comparisons, not a promised local improvement.
-[StructureBench](https://ijcai.org/proceedings/2026/267) separately measures syntax
-and semantic correctness on on-device models, finding task-dependent benefits and
-failure modes from constrained decoding. This supports measuring completed correct
-operations rather than accepting JSON validity as the success criterion. Neither
-source qualifies this repository's artifact, task, or native sampler.
-
-Field order needs an implementation check, not just a prompt instruction. In the
-inspected build, `serde_json::Value` uses the map configuration without
-`preserve_order`; round-tripping a schema through it sorts property names. The
-pinned native `common_json` preserves insertion order, `build_object` retains
-property iteration order, and the grammar builder traverses that sequence when
-building required fields. Thus a document saying "status first" does not ensure
-that the sampler chooses status before payload. Inspect the emitted schema and
-generated root rule. A native grammar-only diagnostic confirmed that a two-field
-schema emitted as status then changes produced that order, while an otherwise
-equivalent `Value` round-trip produced changes then status. This is verified
-compiler behavior, not an inferred model-accuracy benefit. See
-[`json.h`](../crates/llama_cpp_sys/llama.cpp/common/json.h),
-[`json-schema.cpp`](../crates/llama_cpp_sys/llama.cpp/common/json-schema.cpp), and
-[`json-schema-to-grammar.cpp`](../crates/llama_cpp_sys/llama.cpp/common/json-schema-to-grammar.cpp).
-If a measured candidate needs a specific order, serialize its bounded schema
-properties in that order using the existing serializer and retain the emitted
-schema string. Do not reparse it through an unordered/sorted map before dispatch,
-or enable a global dependency feature merely to hide this boundary. Check semantic
-schema equivalence and actual grammar order independently. Host JSON validation
-must continue accepting any legal object-field order; generation order is a model
-protocol choice, not extra meaning assigned to JSON objects.
-
-Use a capability ladder for experiments: constant-schema plumbing, no-change and
-request recognition, correct scope, exact evidence and content, offered-target
-selection, temporal components, then compound changes and controls. A successful
-earlier rung proves only that rung. An enum-only router cannot qualify correction,
-privacy, or commitment mutation. Copying a literal evidence span before deciding
-scope is a bounded candidate worth comparing with classification-first encoding;
-it supplies no independent semantic verification and can still copy the wrong
-speaker's words. Failures must be categorized as missed request, false request,
-wrong scope, wrong target, unsupported evidence, invalid syntax, or resource
-failure, rather than hidden inside one aggregate score.
-
-Tokenization of authored fragments with the selected tokenizer gives a concrete
-size check: the full proposed no-change envelope took 21 tokens, versus 6 for a
-status-only object; a short full directive record took 67, versus 17 for its
-directive-only quote/scope representation. These are four illustrative fragments,
-not generated-output averages or equivalent full protocols. They exclude prompt,
-stop/reasoning tokens, and repair. The smaller directive form cannot represent
-arbitrary corrections or reminders. Host-bound metadata and inactive fields are
-worth removing before inventing a new syntax, but select the final encoding using
-complete semantic coverage and measured generation, not these counts alone.
-
-### Validation and commit algorithm
-
-1. Load an existing interpretation receipt for the operation. If one exists,
-   use it; do not repeat semantic mutations on a response retry.
-2. Capture the exact relevant revision set and eligibility generation. Build a
-   host handle table. Render/count the whole prompt and reserve the output budget.
-3. Run restricted inference using the parent operation's cancellation, execution
-   class, lease, deadline, and remaining token allowance. Tools are disabled.
-4. Require normal completion, decode exactly one proposal, validate its shape,
-   offered references, evidence spans, lifecycle, scope, and capacity. Parse/schema
-   success is not semantic entailment.
-5. Resolve temporal intent and explicit supersession. If a necessary meaning is
-   ambiguous, persist a pending clarification and its outcome instead of effects.
-6. In one writer transaction, recheck affected revisions, source eligibility,
-   cancellation/operation status, quota reservations, and proposed projection
-   capacity. Commit the entire required batch, interpretation receipt, and causal
-   event together. Inference never holds this transaction open.
-7. Recompose behavior from the committed state and a compact host receipt. Queue
-   a response evaluation using the same root allowance. Exclude private reasoning
-   and raw proposal text from conversation history.
-
-One malformed/truncated response may receive a bounded repair if time and tokens
-remain. One relevant revision conflict may receive a reload; both consume the
-same single additional-attempt allowance. Do not retry an ambiguous semantic
-decision merely to obtain a more convenient answer. Conflicting explicit edits
-return a conflict instead of silently applying a model-generated merge.
-
-Atomicity means all validated **proposed** changes commit together. It does not
-prove the model noticed every change requested in a compound message. Report the
-actual affected items in the receipt and measure omission separately from invalid
-mutation. Neither an empty array nor a completed grammar proves exhaustive intent
-coverage. Do not repair an unnoticed omission by background replay that can later
-contradict an intervening explicit edit.
-
-### State and recovery
-
-Keep product operation terminal status separate from interpretation outcome:
-
-```text
-accepted -> interpreting -> effects_committed -> responding -> terminal
-                       \-> no_change --------> responding -> terminal
-                       \-> clarification -----------------> terminal
-                       \-> control_request -> control receipt -> terminal
-                       \-> failed/unprocessed ------------> terminal
-```
-
-`effects_committed` is permanent even if responding is cancelled or crashes.
-An interpretation receipt records no-change as deliberately processed; absence
-of a receipt means unprocessed. A model failure must not create a no-change receipt.
-Unexpected shutdown leaves the product operation interrupted under the existing
-recovery contract. A new explicit resume command can generate an answer using the
-old receipt under a separately charged continuation, but never replay effects.
-Ordinary request-key retry only reconciles the existing operation.
-
-A setting changed by a tool during response generation invalidates the behavioral
-projection before the next evaluation. A concurrent owner edit invalidates an
-unpublished draft; once streaming began, cancel at the next cooperative boundary
-and expose the interruption rather than mixing revisions. Revalidation must happen
-before host effects regardless of how fluent the generated acknowledgment sounds.
-
-### Clarification is a separate admitted operation
-
-A pending clarification stores the originating request/source, bounded proposed
-intent, missing fields, offered target revisions, and original clock context.
-Its original operation terminates with no speculative effects. The answer is a
-new admitted operation linked by clarification ID or an unambiguous active focus.
-Resolution checks that both sources remain eligible and the pending revision is
-still current. Commit the resulting effects and resolved disposition together.
-Repeated answers with the same key return the same receipt; a different answer
-to an already-resolved item conflicts instead of creating another reminder.
-
-The original direct request plus its explicit continuation can support the edit.
-This does not promote arbitrary retrieved dialogue to instruction authority.
-Preserve the provenance of each resolved field. A duration newly supplied in the
-clarification answer is anchored to that answer's admission time; an already
-specified date/duration retains its original interpretation anchor when only a
-different missing field is resolved. Do not turn a late answer into an unintended
-new full countdown. If time context has become materially ambiguous, clarify it
-again rather than silently changing the intended date.
-
-Allow one active semantic clarification focus per segment initially. A new explicit
-request may supersede it; starting a new segment expires it. Other initiated
-questions remain individually replyable timeline messages, rather than silently
-competing for this one focus. Basic host-rendered clarification text identifies
-the missing field if model wording fails. No reminder has been accepted until its
-validated record and publication reservation commit.
-
-### Truthful outcomes and natural speech
-
-The UI and API expose authoritative committed-effect status independently of
-generated text. A short localized host acknowledgment can state applied changes
-or the missing field when interpretation fails; a natural reply may follow after
-success. This is a recovery path, not a fixed robotic voice for every conversation.
-Free generated prose can still make an unsupported promise. Neither receipts,
-grammars, nor a second self-check by the same model prove that it never will.
-Measure this failure directly and keep the inspectable commitment state authoritative.
+Private focus/decision output must be routed privately before ordinary event
+recording. Saved-state status comes from receipts. Free text can still make an
+unsupported promise, including when no action was selected at all. The UI must
+not promote that promise to an accepted obligation, and behavioral journeys must
+report this failure rather than calling a well-formed response successful.
 
 ## 24. Storage and concurrency contracts
 
-### Proposed additive records
+### Minimal records before additional features
 
-Reuse sources, commands, operation reservations, deletion generations, and change
-events. Add the following logical tables through new checksummed migrations; do
-not modify the existing eight migration files. Names are implementation proposals.
+The previous thirteen-table `soul_*` inventory is withdrawn as a prerequisite.
+Reuse the store already present. A conceptual distinction does not automatically
+need its own table, queue, service, protocol or state machine.
 
-| Record | Required fields and constraints |
-| --- | --- |
-| `soul_directives` | Principal, ID, positive revision, text, origin, scope/segment, status, optional expiry, created/changed sequence. One current row per ID; immutable revisions retained separately if needed for undo. |
-| `soul_replacements` | Principal, old/new item and revisions, scope, causing operation/source. Reject self-replacement and cycles; serialize against both versions. |
-| `soul_corrections` | Principal, ID/revision, target source/revision/span or note revision, replacement support, correction-vs-change relation, optional stated validity interval. Index target identity and active eligibility. |
-| `soul_support` | Principal, dependent kind/ID/revision, source ID/revision/span. Composite foreign keys prevent foreign or nonexistent support. Association links live elsewhere. |
-| `soul_interpretations` | Principal and operation ID unique, protocol version, outcome, source revision, affected revisions, receipt, charged usage. No raw chain-of-thought. |
-| `soul_clarifications` | ID/revision, originating operation, segment, offered target revisions, missing-field category, state, expiry. Pending/resolved/superseded/expired are distinct. |
-| `soul_commitments` | ID/revision, purpose, origin, trigger JSON/version, timezone policy, schedule generation, lifecycle, next due, position, destination, delivery reservation. Index eligible state plus due time. |
-| `soul_occurrences` | Commitment ID, schedule generation, position key, due time, state, claim fence/instance, retry time/count, message ID. Unique occurrence key; one stored message per published occurrence. |
-| `soul_messages` | Stable ID, source reference, segment, cause, optional occurrence, publication sequence, reply state. Index sequence and unresolved cause. |
-| `soul_message_dispositions` | Principal/message ID plus revision, displayed/seen/dismissed/snoozed as applicable. These are user/adapter reports, not proof of task completion. |
-| `soul_maintenance` | Stable job key, window/source revisions, kind, state, fence, cursor, retry time, root allowance. Unique job key per generation and source/window. |
-| `soul_control_operations` | Request key, bounded typed control scope, state, captured source-sequence boundary, progress cursor, deletion generation, sanitized receipt. Supports restart of deterministic bulk forgetting without replaying interpretation. |
-| `soul_state` | Per-owner projection revision, active segment, policy revision, selected limits/profile. Rebuildable projection content references durable directives. |
+| Need | Initial representation | Add complexity only when needed |
+| --- | --- | --- |
+| Character | Existing revisioned freeform profile; preserve unrelated text during focused edits. | Add scoped overlays when their persistence/expiry is implemented; granular revision history is optional. |
+| Experience and recall | Existing sources, notes, links, indexes and eligibility. | Separate support from association before creating automated association links. |
+| Focus | One bounded owner-scoped record containing active/parked items, source references, revision and review/wait metadata. | Normalize items only if bounded-record updates or indexed selection become a measured problem. |
+| Actions and outcomes | Existing operations, typed tool results and command receipts. | Add missing durable action identity where needed; no per-message no-change receipts. |
+| Visible initiative | Existing attributed assistant sources/notices with stable identity. | Extend timeline/reply mapping when the client needs unified continuation. |
+| Reliable reminders | Commitment record plus unique occurrence/publication identity. | Add recurrence and disposition fields with those capabilities; focus alone is not a reliable schedule. |
+| Optional note progress | Existing job machinery if compatible, otherwise one bounded source cursor. | A new job dispatcher is not required for every kind of thought. |
 
-Put frequently filtered lifecycle, due-time, owner, revision, and sequence fields
-in typed SQL columns. Versioned JSON is suitable for trigger payloads and small
-receipts, not for an unindexed queue. CHECK constraints enforce legal states and
-lease-nullability; Rust validates conditional payloads and text/token bounds.
-Composite owner-scoped keys are required even with a single owner today.
+The focus record can be one additive owner-scoped row with a bounded versioned
+payload, rather than unbounded arbitrary metadata. As an initial ceiling, allow
+eight items and 8 KiB for the serialized record, with at most 256 rendered tokens
+of selected focus in one prompt. Retain full supporting meaning in original
+sources. Reject an oversized update rather than silently truncate it; a full list
+can defer new tentative questions but cannot discard accepted commitments. Keep the next review indexed
+if the coordinator queries it. Update against an expected revision, persist before
+depending on it after restart, and suppress references made ineligible by forgetting.
+No full private reasoning transcript is stored. The exact migration should follow
+the selected slice, not preallocate records for every later feature.
+
+The following projection and scheduling contracts describe capabilities beyond
+this minimal representation. Use them when implementing granular overlays,
+corrections or reliable commitments; they do not require all the earlier tables.
 
 ### Behavioral projection and correction projection
+
+The replacement-graph rules below are conditional on adding granular directive
+editing. The first profile/overlay implementation can render its small bounded
+state directly. Correction attribution remains necessary in either representation.
 
 Build the active behavior projection from eligible committed records: discard
 cancelled/expired records, select persistent and matching segment/operation scopes,
@@ -2164,8 +1843,8 @@ or silently present old information as current just to avoid that distinction.
 | Transaction | Must commit together |
 | --- | --- |
 | Admission | Existing source/operation/reservation plus reply context and root budget. |
-| Immediate interpretation | All required mutations, their dependencies, processed receipt, projection revision, change event. |
-| Clarification | Pending item and its interpretation outcome; no speculative effect. |
+| Actual state action | The handler's accepted mutation, relevant dependencies, receipt, revision and change event. |
+| Focus/question update | Bounded focus revision, source references and wait condition; no speculative external effect. |
 | Note maintenance | New note/index job/support set, prior-note invalidation if any, maintenance completion/fence. |
 | Occurrence claim | Claim fence, process instance, leased state, allocated draft allowance if used. |
 | Publication | Message source and timeline row, occurrence completion, schedule position advancement, event, reservation adjustment. |
@@ -2180,8 +1859,8 @@ generation/revision check. No database transaction spans model or adapter I/O.
 
 ### Reservations and bounded dependencies
 
-Extend `OperationLimits` accounting for the maximum accepted interpretation batch
-and receipt, in addition to current response/tool settlement. A reminder also
+Extend `OperationLimits` accounting only for actual new action/focus payloads and
+receipts, in addition to current response/tool settlement. A reminder also
 reserves enough space for one basic publication and state transition. Each next
 recurring occurrence needs a renewable reservation: inability to reserve marks
 the commitment attention-required without erasing its schedule. Cancellation and
@@ -2374,6 +2053,11 @@ continues; do not describe that state as completed semantic organization.
 
 ## 26. Time scheduling and initiative contracts
 
+This section is a feature reference for reliable scheduling. Implement only the
+trigger types actually exposed; one-shot delivery does not depend on completing
+the whole recurrence catalog. Eligibility and publication remain host helpers
+called by the common coordinator. They are not another model decision loop.
+
 ### Civil-time implementation
 
 Select Jiff's civil/timezone APIs behind a small application clock/calendar adapter.
@@ -2522,10 +2206,10 @@ durable timeline; out-of-browser alerts follow their configured quiet-hours poli
 When an adapter supports alerts, show whether they are muted, unavailable, or
 reported delivered. A stored message is never evidence of human attention.
 
-Discretionary candidates contain a cause ID/revision, purpose, sources, segment,
-last consideration, next eligible time, and disposition. Select from unresolved
-causes and changed evidence, not just the latest utterance. At most one candidate
-is drafted per maintenance allowance initially. Silence closes that consideration;
+For discretionary work, the selected focus supplies purpose, source references,
+revision, previous outcome and next review condition. Reuse that record rather
+than creating a second candidate queue. At most one focus is evaluated per idle
+activation initially. Silence closes that consideration;
 new evidence or an explicit review time can make it eligible again. Dismissed
 causes stay suppressed until relevant change or owner action. Novel wording alone
 is not a new cause. Generated outreach cannot create a chain of self-triggered
@@ -2560,8 +2244,8 @@ turn time ≈ queueing + retrieval + all prefill time
 ```
 
 Count every internal proposal, repair, private reasoning token, tool continuation,
-and visible answer. Before the first visible answer, a separate interpretation
-phase adds its input preparation, prefill, generated output, validation/commit,
+and visible answer. The withdrawn separate interpretation
+phase would add input preparation, prefill, generated output, validation/commit,
 and any additional answer prefill caused by losing the reusable context. The
 one-context reset behavior described below makes that last term material. A
 generation-rate observation does not supply a prefill rate.
@@ -2577,13 +2261,13 @@ generation-rate observation does not supply a prefill rate.
 
 These are arithmetic generation-time estimates under the supplied rate, excluding
 prefill and other overhead; they are not measured response latencies or guarantees.
-The existing proposed 256/512-token interpretation allowances are maximum safety
-ceilings. Consuming them routinely before answering would add substantial delay.
-Target at most 64 total generated tokens for common interpretation outcomes and
-make no-change outcomes as short as the validated protocol permits. Count the
-actual schema/envelope tokens before selecting an encoding. This is a design
-target, not evidence that the present candidate achieves it. A longer necessary
-change must use an explicit slower/capacity path, never silently omit meaning.
+There is no compulsory interpretation token allowance in the revised loop.
+Charge actual action arguments, focus updates and continuations to the root budget.
+For optional idle experiments, start with at most 64 generated tokens per step and
+one result-dependent continuation under a 128-token activation ceiling. These are
+initial resource bounds, not evidence of adequate semantic capacity. If a useful
+action cannot fit, defer it or explicitly increase the configured allowance within
+the measured device budget; do not silently truncate meaningful content.
 
 Keep the approximately 2-GB GPU footprint as the reference resource envelope;
 do not assume spare VRAM for another context or move E5 onto the GPU implicitly.
@@ -2627,15 +2311,15 @@ label a build-host-native binary as a portable optimized package.
 
 ### Context reuse and scheduler ownership
 
-Give immediate interpretation and response one product lease and execute them
-sequentially on the existing worker. Interpretation has its own prepared render,
-grammar, and parser but uses the same root cancellation and accounting. It does
-not append its JSON to conversational history. A changed prompt causes the normal
+Use one product lease for a foreground model/tool run and its continuations.
+Optional idle work borrows the same native allocation when available and uses
+private output for focus deliberation. There is no required interpreter render.
+Keep one stable context layout where possible. A changed prompt still causes
 validated reset/replay; cached tokens are reused only for an exact valid prefix.
 Specifically, [`LLMContext::begin`](../crates/assistant/src/engine/context.rs) requires
 the new input to start with the **entire evaluated cached token sequence**. It
 does not reuse an arbitrary shared prefix after diverging instructions or roll
-back to a shared checkpoint. Interpretation followed by a differently instructed
+back to a shared checkpoint. A private idle task followed by a differently instructed
 answer will normally require another full prefill. Alternating tasks can also
 discard the conversational cache for the next turn. Include this cost before
 claiming that one-context execution is both memory-efficient and fast; this
@@ -2697,16 +2381,16 @@ fit. Available capacity is checked using the loaded tokenizer and actual templat
 | --- | --- | --- |
 | Chat context capacity | 4,096 tokens | 8,192 tokens |
 | Live chat-model contexts | 1, sequential | 1 by default; 2 only within measured budget |
-| Immediate interpretation input/output | 1,536 / 256 tokens | 3,072 / 512 tokens |
-| Common interpretation output target | At most 64 tokens including protocol/private output; actual fit must qualify | Same; larger ceilings are exceptional paths |
-| Required interpretation attempts | 1 plus at most 1 shared repair/reload | Same |
-| Mutations per event | At most 4; overflow applies none | Same |
+| Compulsory pre-answer inference | None | None |
+| Optional idle activation | At most 64 generated tokens per step, 128 total; one result-dependent continuation | Same initially; actual usefulness must qualify |
+| Focus set | At most eight active/parked items; one active | Same initially |
+| Action attempts | Existing root model/tool/time limits; no automatic fresh budget on retry | Same |
 | Pinned behavioral projection | At most 512 tokens | At most 1,024 tokens |
 | Initial optional recall | At most 768 tokens | At most 1,536 tokens |
 | Initial answer allowance | Up to 768 tokens, adaptive to input | Up to 1,536 tokens, adaptive to input |
 | Per-turn graph expansion | 16 additional nodes / 32 edges | Same initially |
 | Optional model work | At most 1 active job; disabled under pressure | Same; larger duty allowance only after measurement |
-| Active directives / commitments | Hard administrative ceilings, initially 64 / 128 | Same; token/storage limits may reject earlier |
+| Active overlays / commitments, when implemented | Explicit configured ceilings; token/storage limits may reject earlier | Same |
 | Notes per maintenance window | At most 4, each at most 512 UTF-8 bytes | Same initially |
 | Original support references per derived note | At most 16, with bounded spans | Same initially |
 
@@ -2720,22 +2404,26 @@ Do not accept a durable behavior edit whose immediate required projection cannot
 fit the configured mode. A legacy profile that exceeds it requires an explicit
 edit or a larger supported context, not an unapproved lossy summary.
 
-The same process/root deadline covers queueing, retrieval, interpretation, repairs,
+The same process/root deadline covers queueing, retrieval, private steps, retries,
 tools, and response. A per-phase ceiling is subordinate to it. Keep internal
 work's model-turn/token charges visible in run metrics. Output-token savings do
 not establish a cheap prefill, and a short JSON response may still take too long
 on a slow CPU.
 
 Apply the context inequality separately to each sequential evaluation; do not
-sum disjoint interpreter/answer prompts as though both occupy the same context
+sum disjoint idle/answer prompts as though both occupy the same context
 simultaneously. Sum their actual work for the root budget, including repeated
 prefill after resets. Report logical prompt tokens, actually evaluated prefill,
 reused tokens, private reasoning, and visible output separately. Reuse may save
 compute without reducing the semantic prompt capacity required by an evaluation.
 
-For initial optional-work admission, use a native-time token bucket capped at
-60 seconds per rolling hour in the constrained profile and 180 seconds in the
-standard profile, reserving an attempt's maximum allowance before starting it.
+For initial optional-work experiments, a configurable native-time allowance can
+start at 60 seconds per hour in the constrained profile and 180 in the standard
+profile. For a simple token bucket, choose capacity B equal to that allowance and
+refill rate B/3600 seconds of native time per wall second. Such a bucket permits
+a burst plus refill, up to 2B over a one-hour interval starting full; it is not a
+hard rolling-hour cap. If a strict rolling cap is required, retain a bounded usage
+window instead. Reserve each attempt's maximum allowance before starting it.
 Charge cancelled and failed attempts too. These are deliberately conservative
 candidate defaults, not measured adequate maintenance throughput. Persist charged
 allowances so restart does not replenish an exhausted daily/root budget. Enforce
@@ -2802,7 +2490,7 @@ Do not describe the current settlement-only path as crash-proof streaming.
 
 Keep direct user commands, imported documents, quoted conversation, tool results,
 assistant utterances, and fictional character material separately attributed.
-The interpreter may propose a direct-user edit; retrieved instructions alone
+The model may propose a direct-user edit; retrieved instructions alone
 cannot create one. Source-handle validation limits what can be targeted but does
 not prove that a quoted instruction was intended. Semantic prompt-injection
 resistance remains a measured property; host effect limits remain unconditional.
@@ -2811,7 +2499,7 @@ Preserve the native template's distinction between control tokens and literal
 source text. `LLMContext::prepare_chat` calls `ChatParams::tokenize_prompt`; the
 binding tokenizes template spans with special-token parsing and spans marked
 `is_input` as plaintext. Do not replace that call with tokenization of the flattened
-rendered string while optimizing caches or adding a combined protocol. Literal
+rendered string while sharing the context composer or optimizing caches. Literal
 role delimiters in a document must not become actual role-boundary tokens. See
 [`engine/context.rs`](../crates/assistant/src/engine/context.rs),
 [`llama_cpp/src/chat.rs`](../crates/llama_cpp/src/chat.rs), and the corresponding
@@ -2828,8 +2516,9 @@ tokenizer property is separate from semantic prompt-injection resistance.
 
 Tools remain registered typed capabilities. Neither a directive nor a remembered
 procedure can choose executable shell text, install a handler, escalate permissions,
-or redefine validation. Background maintenance has no tool execution authority.
-Discretionary investigation is read-only and still obeys source-specific access,
+or redefine validation. Optional organization exposes only bounded note/focus
+actions; it cannot alter personality or authorize external effects. Discretionary
+investigation exposes read-only capabilities and still obeys source-specific access,
 timeouts, and argument bounds. External-action commitments are outside v1; do not
 silently interpret reminder acceptance as authorization for a future side effect.
 
@@ -2956,33 +2645,32 @@ imported evidence and cannot silently activate instructions or old schedules.
 
 ### Small reviewable implementation units
 
-| Order | Change boundary | Required evidence before continuing |
+| Order | Concrete slice in the existing code | Evidence |
 | --- | --- | --- |
-| 1 | Pure types, bounded protocol parser, scope/replacement projection, calendar adapter. | Invalid-state rejection, full required-context accounting, no native dependency in state tests. |
-| 2 | Additive SQL tables, receipts, support separation, reservations, and recovery. | Atomic rollback/retry, cancellation races, dependency deletion, stale-fence and quota rejection. |
-| 3 | Independent durable-core/model readiness, restricted foreground inference, and sequential native lease reuse. | Host controls survive recoverable model startup failure; no foreground/background dependency stall; one-context cancellation, grammar replacement, cache invalidation, and accounting. |
-| 4 | Gated immediate interpretation in `MemoryOperation`, receipt-conditioned response composition. | Qualify actual rendering/grammar/sampling and real-model behavior/scope/correction/clarification journeys before mandatory activation. |
-| 5 | Correct passage spans, reply context, known-correction lookup, coverage reporting. | Evidence recall and answer quality compared with the current retrieval path at multiple history sizes. |
-| 6 | Host reminder scheduling, occurrences, basic publication, and timeline/reply APIs. | Fake-clock calendar/restart tests plus a real adapter journey with no model available at due time. |
-| 7 | Bounded automatic note maintenance and cause-based optional initiative. | Measured benefit over raw sources, no unsupported promotion or self-trigger loops, foreground latency within its budget. |
-| 8 | Forgetting barrier, whole-store activation, migration/compatibility UI, and distribution checks. | Cross-layer revocation and crash/restore coverage; target-machine capability report. |
+| 1 | `MemoryOperation`/context composition: current profile, relevant sources, bounded durable focus; refresh instructions after a successful edit. Reuse `chat::runner::run_loop` and typed tools. | One natural conversation changes behavior, preserves unrelated instructions, survives restart and records actual effects. Test omission as a failure. |
+| 2 | `Coordinator::run`: own focus selection and review/change wakeups; move optional semantic decisions out of the independent initiative loop. Keep worker/store tasks. Adapt idle single-context execution and explicit non-user causes/private output. | New input interrupts optional work; no fictitious user source; no-progress and limits park work; late results cannot overwrite changed state. |
+| 3 | Memory helpers: fix demonstrated evidence-span and support/association failures; add note formation as a bounded selected loop step only where useful. | Later input changes the same focus using attributed evidence; raw recall works without synthesis; forgetting invalidates dependent work. |
+| 4 | Store and coordinator: one-shot commitments, unique due publication and existing notice/reply API. Decouple durable-core readiness from model startup for model-independent reminders. | Fake-clock retry/restart/cancellation checks; one disconnected-client journey with inference unavailable at due time. |
 
-Dependency and publication fences must be present before enabling automatic
-derived writes, even if broader UI polish comes later. Steps may be reviewed in
-smaller patches, but partial feature exposure must not claim the complete contract.
-Reorder pure host reminder work earlier if semantic interpretation is not yet
-qualified; direct typed edits can exercise it without pretending natural language
-acceptance is solved.
+Each slice preserves existing admission, authority, privacy, receipts and quotas.
+The first two establish the proposed continuing loop; the others add reliable
+capabilities through it. Do not first build a general interpreter, a cognition
+framework, all recurrence rules or thirteen tables. Add later features against an
+observed need and their specific contract. This is a research plan, not authority
+for an agent to implement human-owned application code.
 
 ### Migration mechanics
+
+Apply only the steps relevant to the slice being introduced. A focus-only change
+does not require timeline backfills, granular directives or schedule migration.
 
 1. Verify existing migration checksums and create a consistent backup using the
    existing mechanism. Do not mutate any applied migration text.
 2. Add new tables/columns/indexes transactionally in subsequent migrations. Keep
    long derived-index backfills outside schema transactions and resumable by cursor.
-3. Import the legacy profile unchanged as one base directive with legacy provenance.
-   Do not split it into invented granular user instructions. If it exceeds the
-   chosen prompt allowance, surface explicit capacity rather than dropping text.
+3. Preserve the existing profile unchanged. If granular directives are later added,
+   import it as one base item with legacy provenance, without inventing instructions.
+   If it exceeds the chosen prompt allowance, surface capacity rather than dropping text.
 4. Preserve existing source/message IDs. Mark old note dependencies conservative;
    only newly authored or safely recomputed notes use separated association/support.
 5. Migrate the initiative interval to an optional review policy, never to inferred
@@ -3195,23 +2883,26 @@ diagnostic wall times do not replace the accepted 20–30-token/s GPU baseline;
 use observed token lengths plus separately measured prefill/integration overhead
 for deployment estimates.
 
-### Deterministic matrix
+### Shared-boundary checks instead of pipeline combinations
 
-| Area | Required checks |
+Test the transition/selection helpers with a fake clock and scripted boundary
+results, the store with transactions, and one adapter path for continuity. The
+same effect, cancellation and publication code serves conversation and idle work;
+do not multiply a full test suite by every semantic label or prompt variant.
+
+| Shared boundary | Initial checks |
 | --- | --- |
-| Interpretation application | No-change vs unprocessed; malformed/truncated output; duplicate JSON fields/targets; stale handles; atomic multi-edit rollback; privacy-first mixed requests; response failure after effect commit. |
-| Scope | Persistent base plus segment/turn overlay; independent edits; expiry; replacement cycles; undo after intervening edits; projection token overflow. |
-| Identity | Same request key/referent is idempotent; different text or reply target conflicts; suppressed key cannot replay; two tabs share one owner operation. |
-| Scheduling | Clock forward/backward, DST gap/fold, missing month day, timezone change, reboot, suspend, missed intervals, catch-up bound, cancel/publish race, stale lease. |
-| Publication | One occurrence/message identity, duplicate notifications, missing client events, no fabricated user turn, provisional stream interruption. |
-| Deletion | Suppression during retrieval, inference, tool continuation, queued delivery, consolidation, index rebuild, and restore activation. |
-| Resources | Full queues, no second context, model/embedding startup failure, embedding contention, storage full, reserved settlement, graph cycles/high degree, interrupted checkpoint/backfill. |
-| Recovery | Crash before/after each durable boundary; unknown tool outcome retained; old schedule generation cannot publish; rollback does not resurrect forgotten state. |
+| Attention | Relevant change wakes parked focus; silence/no progress/exhaustion waits; self-produced output cannot renew its budget; input cancels optional work. |
+| Action | Malformed/truncated calls have no effect; stale or forgotten references reject; duplicate request reconciles; reply failure preserves committed receipt. |
+| Context | Accepted profile/focus refreshes; current input and mandatory state fit or return capacity; unrelated character text survives a local edit. |
+| Recovery/publication | Restart retains focus and real sources without fabricated user turns or effect replay; private updates never reach visible recording. |
+| Scheduling, when added | Unique publication across retry/restart; cancellation ordering; fake-clock due behavior. Add DST/recurrence cases only with those trigger types. |
 
-Use the existing fake model boundary, injected clock, storage tests, and application
-tests for these checks. Native generation is unnecessary for most failure ordering.
-Run actual process interruption only for a small integration set; do not multiply
-native rebuilds across every SQL/calendar case.
+Retain existing store/runtime coverage. Extend a shared test at the boundary whose
+contract changes; a new thought topic does not need a new host integration suite.
+This reduces duplicated paths, not the need to test genuinely different effects.
+Native generation is reserved for the small behavioral journeys below and targeted
+worker integration. A full Cartesian product of all states is not the test plan.
 
 ### Fixed-model behavioral study
 
@@ -3243,15 +2934,19 @@ Report at least these denominators separately:
 - Unsupported acknowledgment of effects, with authoritative receipt state checked.
 - Reminder duplication/loss/lateness and unwanted repeated discretionary causes.
 
-Initial proposed release gates are zero known host-contract violations, zero
-observed false durable mutations in at least 300 independent negative opportunities,
-and at least 95% supported interpretation success on unambiguous requested-change
-opportunities, reported by capability/language rather than only pooled. These are
-targets to assess, not observed success rates. Zero failures in 300 independent
-trials still permits roughly a 1% upper failure probability at a one-sided 95%
-binomial bound; correlated turns reduce the effective evidence. Do not claim
-universal safety from a few journeys. A missed gate blocks that semantic capability
-from automatic activation; revise its protocol or expose an honest unresolved path.
+Do not reinstate the earlier arbitrary 300-negative/95%-success classifier gates
+as the entry cost for this architecture. They neither prove universal understanding
+nor match the accepted journey-based evaluation direction. Begin with a small
+held-out set of complete interactions covering adoption, context rotation, changed
+input, initiative, correction and interruption. Report successes, omissions and
+false effects with actual denominators. Add regression journeys for observed
+failures, not every possible fact or personality topic.
+
+Known host-contract violations block the affected feature. Known semantic failures
+must change the prompt/action contract or be disclosed as a supported-behavior
+limit; a few successful journeys do not establish a population-wide failure rate.
+Larger sampling can measure that rate later if a concrete product decision needs
+it. It is not a substitute for making the loop simple enough to inspect.
 
 A fallback consisting entirely of clarifications does not pass. Report coverage,
 usefulness, and clarification burden together. Temporal/native/storage failures
@@ -3264,7 +2959,7 @@ sample passes is not an evaluation protocol; all attempts and costs count.
 | --- | --- |
 | Current retrieval vs matching-span/context-aware retrieval | Improve evidence delivered to the reader before adding synthesis. |
 | Raw sources vs sources plus derived notes | Enable notes only if they improve downstream use without increasing unsupported claims or losing corrections. |
-| One narrow interpretation phase vs combined updates/answer | Compare actual adoption/error rates and end-to-end startup cost; retain commit-before-publication semantics. |
+| Normal tool loop vs an extra task-specific pass, only if a demonstrated failure motivates it | Count missed actions, false effects, first response delay and total work. An extra pass must earn its cost; it is not the default. |
 | One sequential context vs a second context | Compare peak resident memory and foreground delay, including resets/re-prefill and background cancellation. |
 | Known conflicts resolved by host vs conflicting excerpts | Measure stale-memory use and historical-query correctness separately. |
 | Fixed retrieval vs bounded follow-up | Enable extra search only where its recall benefit justifies added latency. |
@@ -3289,7 +2984,7 @@ workstation restricted to two threads is a useful stress condition but does not
 emulate an old CPU's bandwidth, cache, instruction set, thermals, or storage.
 
 Measure cold load separately from resident operation. Record p50/p95 input-to-first
-visible-response time, interpretation time, total response time, prompt/decode
+visible-response time, private-step time, total response time, prompt/decode
 rates, queueing, cancellation delay, peak/retained memory, storage/WAL growth,
 index coverage lag, and due-message lateness. Include near-full contexts, large
 histories, simultaneous passage indexing, repeated corrections, long idle periods,
@@ -3309,17 +3004,19 @@ deployment, not a reason to raise model requirements.
 
 | Question | Resolved design or evidence | What establishes implementation readiness |
 | --- | --- | --- |
-| Does the design require more models? | No; selected fixed-model decomposition in sections 20/23/25. | Run every behavioral gate using the actual LFM3/E5 pair. |
+| Does the design require more models? | No; one continuing loop with LFM3 and E5, sections 10/20/23. | Exercise actual journeys with the fixed model pair. |
 | What performance baseline should design use? | Owner-observed 20–30 generated tokens/s and approximately 2 GB VRAM; use 25 tokens/s nominally and 20 conservatively. | Baseline accepted for planning. Validate added prefill, actual phase lengths, contention, and peak allocations when integrating soul work. |
 | Is the inference probe using the real application path? | Yes for the internal-task development probes: worker, template/tokenizer, disabled-thinking prefix, grammar, greedy sampling, and parser were exercised. | This closes the CLI-equivalence gap, not foreground integration or full mutation validation. |
-| Is a production interpreter prompt/schema established? | No. Short valid outputs are feasible; tested classifiers and evidence-first candidates still miss requests, confuse scope, or propose unsupported changes. | Outcome-specific encoding, exact grammar order, frozen semantic coverage tests, and latency gates must pass before automatic activation. |
-| Can fewer evaluations preserve truthful immediate effects? | Commit-before-publication is the invariant; section 8 compares separate, buffered, framed, and native-tool paths. | Start with two phases; a faster variant must beat its latency and semantic results without leaking private output or guessed receipts. |
+| Is reliable conversational action selection established? | No. Earlier classifier probes made semantic errors; the normal tool loop has not thereby been qualified. | Demonstrate actual adoption, tool effects, omissions and scope through the chosen loop, without adding a compulsory classifier. |
+| Can the design use fewer evaluations? | Yes as a design change: remove the per-turn prepass and reuse native action/receipt continuations only when needed. | Measure complete journeys and publication behavior; fewer paths do not prove correct understanding or zero unsupported prose. |
+| What keeps an idle assistant continuous? | A bounded durable focus, changed input, review wakeups and useful continuations under one attention owner. | Conversation/idle/new-evidence/restart journey plus no-progress, stale-result and budget checks. |
+| What reduces debugging and testing cost? | One attention trace, shared context/action boundaries and existing store/runtime helpers. | Verify these boundaries with deterministic results; do not duplicate suites for reflection, initiative and every memory topic. |
 | Are literal chat control markers protected? | Selected native user, retrieved-quotation, and tool render cases preserved plaintext source spans; flattening would change tokenization. | Preserve span-aware tokenization and reject unsafe missing-metadata paths; semantic injection still needs separate testing. |
 | Where does each component belong? | Existing actor, memory operation, store writer, worker, owner facade, adapter map in section 21. | Small patches preserve those ownership boundaries. |
 | What does the user experience? | Normal, ambiguous, interrupted, degraded, and proactive journeys in section 22. | Adapter journeys verify durable status/reply continuity. |
-| Which effects are synchronous? | Explicit behavior, applicable corrections, commitments, clarification resolution. | Atomic receipts and immediate projection tests. |
+| Which effects must settle before claiming success? | Actual profile, memory/correction and commitment actions. A clarification alone commits no promised effect. | Action receipts, same-run context refresh and truthful outcome journeys. |
 | How is memory general? | Freeform content with typed provenance/lifecycle, independent raw capture. | Cross-topic/language journeys; no domain extractor dependency. |
-| How do retries and concurrency work? | Root keys, relevant revision sets, one owner operation, bounded retry, atomic writer transactions. | Crash/race matrix in section 30. |
+| How do retries and concurrency work? | Root keys, relevant revision sets, one owner operation, bounded retry, atomic writer transactions. | Shared-boundary checks in section 30. |
 | How does a weak machine operate? | Independent core readiness, sequential context reuse, fixed weights, optional maintenance, explicit capacity/degraded paths. | Native one-context/startup-failure integration and actual low-resource measurements, including repeated prefill. |
 | How are reminders reliable? | Host triggers, occurrence fences, basic durable publication, explicit catch-up and clock policies. | Deterministic clock/restart tests and disconnected-client journey. |
 | How are forgotten facts excluded? | Dependency-aware eligibility, publication generation, journal-reconciled restore. | Cross-layer deletion/restore tests. |
@@ -3329,8 +3026,8 @@ deployment, not a reason to raise model requirements.
 | How is rollout reversible? | Additive migrations, preserved originals, independently gated derived features, explicit rollback semantics. | Migration and restore rehearsals. |
 | Can all natural language be understood correctly? | No deterministic guarantee; the protocol has explicit ambiguity/failure outcomes. | Measured supported envelope and honest unresolved behavior. |
 
-The host-side design questions above have concrete contracts and implementation
-entry points. The supplied throughput/VRAM baseline now anchors resource planning;
+The revised loop has concrete ownership boundaries and a first vertical slice.
+Feature references remain conditional on the capability being implemented. The supplied throughput/VRAM baseline now anchors resource planning;
 it does not close semantic quality, added workflow latency, or broader hardware
 coverage through prose alone. Until the fixed-model and target-machine gates
 pass, the research remains a detailed proposed design with explicit qualification
